@@ -1,154 +1,187 @@
 """
 excel_writer.py
-将 cut_result.json 导出为 cut_result.xlsx，包含四个 Sheet：
-  1. Cut List      — 每张板 × 每个零件的明细行
-  2. Board Summary — 每张板汇总（含损耗审计字段）
-  3. Utilization   — 全局汇总
-  4. 异常报告      — 跳过行 + 无匹配板型零件（来自 issues 区块）
+将 cut_result.json 导出为 cut_result.xlsx，包含两个 Sheet：
+  1. Cut List — 按 T1 板型分组，每组内列出所有板 × 零件明细
+  2. Summary  — 合并汇总（全局总览 + 板型汇总 + 异常报告），方便打印
+
+术语统一（橱柜行业）:
+  - Height: 板件高度/长度方向尺寸 (mm)
+  - Depth:  板件深度方向尺寸 (mm)
 """
 
 import json
+from collections import defaultdict
+
 import pandas as pd
 
 
 # ─────────────────────────────────────────────
-# Sheet 1: 零件明细（每行 = 一个零件）
+# Sheet 1: 零件明细 — 按 T1 板型分组
 # ─────────────────────────────────────────────
 
 def build_cut_list(data):
-    rows = []
-
+    """
+    按 board_type (T1板型) 分组输出。
+    每组以板型标题行开头，然后列出该板型下每张板的零件。
+    """
+    groups = defaultdict(list)
     for board in data["boards"]:
-        for part in board["parts"]:
-            rows.append({
-                "board_id":           board["board_id"],
-                "board_type":         board["board"],
-                "board_size":         board.get("board_size", ""),
-                "part_id":            part["part_id"],
-                "part_width":         part["width"],
-                "part_height":        part["height"],
-                "trim_loss":          board.get("trim_loss", ""),
-                "saw_kerf":           board.get("saw_kerf", ""),
-                "cuts":               board.get("cuts", ""),
-                "kerf_total":         board.get("kerf_total", ""),
-                "usable_length":      board.get("usable_length", ""),
-                "parts_total_length": board.get("parts_total_length", ""),
-                "waste":              board["waste"],
-                "utilization":        board["utilization"],
-            })
+        groups[board["board"]].append(board)
 
-    return pd.DataFrame(rows)
-
-
-# ─────────────────────────────────────────────
-# Sheet 2: 板汇总（每行 = 一张板）
-# ─────────────────────────────────────────────
-
-def build_board_summary(data):
     rows = []
+    for board_type in sorted(groups.keys()):
+        boards = groups[board_type]
+        board_size = boards[0].get("board_size", "")
+        total_boards_in_type = len(boards)
 
-    for board in data["boards"]:
-        parts_str = ", ".join(
-            f'{p["part_id"]}({p["width"]}×{p["height"]})'
-            for p in board["parts"]
-        )
-
+        # ── 板型标题行 ──
         rows.append({
-            "board_id":           board["board_id"],
-            "board_type":         board["board"],
-            "board_size":         board.get("board_size", ""),
-            "parts":              parts_str,
-            "trim_loss":          board.get("trim_loss", ""),
-            "saw_kerf":           board.get("saw_kerf", ""),
-            "cuts":               board.get("cuts", ""),
-            "parts_total_length": board.get("parts_total_length", ""),
-            "kerf_total":         board.get("kerf_total", ""),
-            "usable_length":      board.get("usable_length", ""),
-            "waste":              board["waste"],
-            "utilization":        board["utilization"],
+            "board_type":   board_type,
+            "board_size":   board_size,
+            "board_id":     f"共 {total_boards_in_type} 张",
+            "序号":          "",
+            "part_id":      "",
+            "Height(mm)":   "",
+            "Depth(mm)":    "",
+            "cut_length":   "",
+            "board_utilization": "",
+            "board_waste":  "",
         })
 
+        # ── 每张板的零件 ──
+        for board in boards:
+            for idx, part in enumerate(board["parts"]):
+                rows.append({
+                    "board_type":   "",
+                    "board_size":   "",
+                    "board_id":     board["board_id"] if idx == 0 else "",
+                    "序号":          idx + 1,
+                    "part_id":      part["part_id"],
+                    "Height(mm)":   part["Height"],
+                    "Depth(mm)":    part["Depth"],
+                    "cut_length":   part["cut_length"],
+                    "board_utilization": f"{board['utilization']*100:.1f}%" if idx == 0 else "",
+                    "board_waste":  f"{board['waste']}mm" if idx == 0 else "",
+                })
+
     return pd.DataFrame(rows)
 
 
 # ─────────────────────────────────────────────
-# Sheet 3: 全局汇总
+# Sheet 2: Summary — 合并汇总表
+#   区块A: 全局总览 (Utilization)
+#   区块B: 板型汇总 (Board Summary)
+#   区块C: 异常报告
 # ─────────────────────────────────────────────
 
-def build_utilization(data):
+def build_combined_summary(data):
+    """
+    将全局汇总、板型汇总、异常报告合并为一张表。
+    用空行和标题行区分三个区块，方便打印。
+    """
     summary = data["summary"]
-
-    row = {
-        "boards_used":         summary["boards_used"],
-        "total_parts_length":  summary.get("total_parts_length", ""),
-        "total_trim_loss":     summary.get("total_trim_loss", ""),
-        "total_kerf_loss":     summary.get("total_kerf_loss", ""),
-        "total_waste":         summary.get("total_waste", ""),
-        "overall_utilization": summary.get("overall_utilization", ""),
-        "config_trim_loss_mm": summary.get("config_trim_loss_mm", ""),
-        "config_saw_kerf_mm":  summary.get("config_saw_kerf_mm", ""),
-        "warning":             summary.get("warning", ""),
-    }
-
-    return pd.DataFrame([row])
-
-
-# ─────────────────────────────────────────────
-# Sheet 4: 异常报告（来自 issues 区块）
-# ─────────────────────────────────────────────
-
-def build_issues_sheet(data):
-    """
-    读取 cut_result.json 中的 issues 区块，
-    生成合并的异常报告，包含两类问题：
-      A. 跳过行（数据缺失 / NaN）
-      B. 无匹配板型（尺寸不兼容 / 超出可用长度）
-    若无任何异常，输出一行"✅ 无异常"。
-    """
     issues = data.get("issues", {})
-    rows   = []
 
-    # ── A. 跳过行 ──────────────────────────────────────
+    # ── 最大列数（决定合并表的宽度）──
+    max_cols = 9
+    col_names = [f"col_{i}" for i in range(max_cols)]
+
+    rows = []
+
+    def add_row(values):
+        """添加一行，不足 max_cols 的用空字符串补齐"""
+        padded = list(values) + [""] * (max_cols - len(values))
+        rows.append(dict(zip(col_names, padded[:max_cols])))
+
+    def add_empty():
+        add_row([""] * max_cols)
+
+    # ══════════════════════════════════════════
+    # 区块 A: 全局总览
+    # ══════════════════════════════════════════
+    add_row(["═══ 全局总览 ═══", "", "", "", "", "", "", "", ""])
+
+    add_row(["零件需求(个)", summary.get("total_parts_required", ""),
+             "成功切出(个)", summary.get("total_parts_placed", ""),
+             "未切出(个)", summary.get("total_parts_unmatched", ""),
+             "全部完成", "✅ 是" if summary.get("all_parts_cut", False) else "❌ 否", ""])
+
+    add_row(["用板数", summary.get("boards_used", ""),
+             "整体利用率", summary.get("overall_utilization", ""),
+             "总零件长度(mm)", summary.get("total_parts_length", ""),
+             "总废料(mm)", summary.get("total_waste", ""), ""])
+
+    add_row(["总扫边损耗(mm)", summary.get("total_trim_loss", ""),
+             "总锯缝损耗(mm)", summary.get("total_kerf_loss", ""),
+             "扫边设置(mm)", summary.get("config_trim_loss_mm", ""),
+             "锯缝设置(mm)", summary.get("config_saw_kerf_mm", ""), ""])
+
+    if summary.get("warning"):
+        add_row(["⚠️ 警告", summary["warning"], "", "", "", "", "", "", ""])
+
+    add_empty()
+
+    # ══════════════════════════════════════════
+    # 区块 B: 板型汇总
+    # ══════════════════════════════════════════
+    add_row(["═══ 板型汇总 ═══", "", "", "", "", "", "", "", ""])
+
+    # 表头
+    add_row(["board_type", "board_size(Depth×Height)", "用板数", "总零件数",
+             "总切割刀数", "总零件长度(mm)", "总锯缝损耗(mm)", "总废料(mm)", "平均利用率"])
+
+    # 数据
+    groups = defaultdict(list)
+    for board in data["boards"]:
+        groups[board["board"]].append(board)
+
+    for board_type in sorted(groups.keys()):
+        boards = groups[board_type]
+        board_size = boards[0].get("board_size", "")
+        n_boards = len(boards)
+        total_parts = sum(len(b["parts"]) for b in boards)
+        total_parts_len = sum(b["parts_total_length"] for b in boards)
+        total_cuts = sum(b["cuts"] for b in boards)
+        total_kerf = sum(b["kerf_total"] for b in boards)
+        total_waste = sum(b["waste"] for b in boards)
+        total_board_area = sum(b["usable_length"] + b["trim_loss"] for b in boards)
+        avg_util = total_parts_len / total_board_area if total_board_area > 0 else 0
+
+        add_row([board_type, board_size, n_boards, total_parts,
+                 total_cuts, round(total_parts_len, 2), round(total_kerf, 2),
+                 round(total_waste, 2), f"{avg_util*100:.1f}%"])
+
+    add_empty()
+
+    # ══════════════════════════════════════════
+    # 区块 C: 异常报告
+    # ══════════════════════════════════════════
+    add_row(["═══ 异常报告 ═══", "", "", "", "", "", "", "", ""])
+
+    has_issues = False
+
+    # 跳过行
     for item in issues.get("skipped_rows", []):
-        rows.append({
-            "问题类型":  "数据缺失（行被跳过）",
-            "来源文件":  item.get("file", "parts.xlsx"),
-            "part_id":   "",
-            "width_mm":  "",
-            "height_mm": "",
-            "qty":       "",
-            "原因":      item.get("source", ""),
-            "建议":      "请在 parts.xlsx 中补全该行的 width / height / qty 值",
-        })
+        if not has_issues:
+            add_row(["问题类型", "来源文件", "part_id", "Height_mm", "Depth_mm", "qty", "原因", "建议", ""])
+            has_issues = True
+        add_row(["数据缺失（行被跳过）", item.get("file", "parts.xlsx"), "", "", "", "",
+                 item.get("source", ""), "请补全 Height/Depth/qty", ""])
 
-    # ── B. 无匹配板型 ──────────────────────────────────
+    # 无匹配板型
     for item in issues.get("unmatched_parts", []):
+        if not has_issues:
+            add_row(["问题类型", "来源文件", "part_id", "Height_mm", "Depth_mm", "qty", "原因", "建议", ""])
+            has_issues = True
         reasons_str = "；".join(item.get("reasons", []))
-        rows.append({
-            "问题类型":  "无匹配板型（零件无法裁切）",
-            "来源文件":  "parts.xlsx",
-            "part_id":   item.get("part_id", ""),
-            "width_mm":  item.get("width_mm", ""),
-            "height_mm": item.get("height_mm", ""),
-            "qty":       item.get("qty", ""),
-            "原因":      reasons_str,
-            "建议":      item.get("suggestion", ""),
-        })
+        add_row(["无匹配板型", "parts.xlsx", item.get("part_id", ""),
+                 item.get("Height_mm", ""), item.get("Depth_mm", ""),
+                 item.get("qty", ""), reasons_str, item.get("suggestion", ""), ""])
 
-    # ── 无异常占位行 ────────────────────────────────────
-    if not rows:
-        rows.append({
-            "问题类型":  "✅ 无异常",
-            "来源文件":  "",
-            "part_id":   "",
-            "width_mm":  "",
-            "height_mm": "",
-            "qty":       "",
-            "原因":      "所有零件数据完整且均可匹配到 T1 库存板型",
-            "建议":      "",
-        })
+    if not has_issues:
+        add_row(["✅ 无异常", "", "", "", "", "", "所有零件数据完整且均可匹配到 T1 库存板型", "", ""])
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=col_names)
 
 
 # ─────────────────────────────────────────────
@@ -159,22 +192,18 @@ def export_excel(json_file, output_file):
     with open(json_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    cut_list      = build_cut_list(data)
-    board_summary = build_board_summary(data)
-    utilization   = build_utilization(data)
-    issues_df     = build_issues_sheet(data)
+    cut_list = build_cut_list(data)
+    summary  = build_combined_summary(data)
 
     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
-        cut_list.to_excel(writer,      sheet_name="Cut List",      index=False)
-        board_summary.to_excel(writer, sheet_name="Board Summary", index=False)
-        utilization.to_excel(writer,   sheet_name="Utilization",   index=False)
-        issues_df.to_excel(writer,     sheet_name="异常报告",       index=False)
+        cut_list.to_excel(writer, sheet_name="Cut List", index=False)
+        summary.to_excel(writer,  sheet_name="Summary",  index=False, header=False)
 
-    print(f"✅ {output_file} 生成完成")
+    print(f"✅ {output_file} 生成完成（2 个 Sheet: Cut List + Summary）")
 
 
 if __name__ == "__main__":
     export_excel(
-        "cut_result.json",
-        "cut_result.xlsx"
+        "output/cut_result.json",
+        "output/cut_result.xlsx"
     )

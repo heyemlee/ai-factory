@@ -1,0 +1,523 @@
+{
+  "summary": {
+    "total_parts_required": 41,
+    "total_parts_placed": 41,
+    "total_parts_unmatched": 0,
+    "all_parts_cut": true,
+    "boards_used": 17,
+    "total_parts_length": 35405.1,
+    "total_trim_loss": 85,
+    "total_kerf_loss": 205,
+    "total_waste": 5784.9,
+    "overall_utilization": 0.8535,
+    "config_trim_loss_mm": 5,
+    "config_saw_kerf_mm": 5
+  },
+  "issues": {
+    "skipped_rows": [],
+    "unmatched_parts": []
+  },
+  "boards": [
+    {
+      "board_id": "T1-1220*2440-001",
+      "board": "T1-1220*2440",
+      "board_size": "590.6 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-PANT-609W-SL",
+          "Height": 2133.6,
+          "Depth": 590.6,
+          "cut_length": 2133.6
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 1,
+      "parts_total_length": 2133.6,
+      "kerf_total": 5,
+      "usable_length": 2435.0,
+      "waste": 296.4,
+      "utilization": 0.8744
+    },
+    {
+      "board_id": "T1-1220*2440-002",
+      "board": "T1-1220*2440",
+      "board_size": "590.6 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-PANT-609W-SR",
+          "Height": 2133.6,
+          "Depth": 590.6,
+          "cut_length": 2133.6
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 1,
+      "parts_total_length": 2133.6,
+      "kerf_total": 5,
+      "usable_length": 2435.0,
+      "waste": 296.4,
+      "utilization": 0.8744
+    },
+    {
+      "board_id": "T1-1220*2440-003",
+      "board": "T1-1220*2440",
+      "board_size": "590.6 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-PANT-609W-BK",
+          "Height": 2133.6,
+          "Depth": 590.6,
+          "cut_length": 2133.6
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 1,
+      "parts_total_length": 2133.6,
+      "kerf_total": 5,
+      "usable_length": 2435.0,
+      "waste": 296.4,
+      "utilization": 0.8744
+    },
+    {
+      "board_id": "T1-1220*2440-004",
+      "board": "T1-1220*2440",
+      "board_size": "590.6 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-BASE-914W-TP",
+          "Height": 878.4,
+          "Depth": 590.6,
+          "cut_length": 878.4
+        },
+        {
+          "part_id": "1001-KIT-BASE-914W-KK",
+          "Height": 878.4,
+          "Depth": 590.6,
+          "cut_length": 878.4
+        },
+        {
+          "part_id": "1001-KIT-PANT-609W-BT",
+          "Height": 573.6,
+          "Depth": 590.6,
+          "cut_length": 573.6
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 3,
+      "parts_total_length": 2330.4,
+      "kerf_total": 15,
+      "usable_length": 2435.0,
+      "waste": 89.6,
+      "utilization": 0.9551
+    },
+    {
+      "board_id": "T1-1220*2440-005",
+      "board": "T1-1220*2440",
+      "board_size": "590.6 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-BASE-914W-BT",
+          "Height": 878.4,
+          "Depth": 590.6,
+          "cut_length": 878.4
+        },
+        {
+          "part_id": "1001-KIT-BASE-762W-SR",
+          "Height": 876.3,
+          "Depth": 590.6,
+          "cut_length": 876.3
+        },
+        {
+          "part_id": "1001-KIT-PANT-609W-TP",
+          "Height": 573.6,
+          "Depth": 590.6,
+          "cut_length": 573.6
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 3,
+      "parts_total_length": 2328.3,
+      "kerf_total": 15,
+      "usable_length": 2435.0,
+      "waste": 91.7,
+      "utilization": 0.9542
+    },
+    {
+      "board_id": "T1-1220*2440-006",
+      "board": "T1-1220*2440",
+      "board_size": "590.6 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-BASE-762W-SR",
+          "Height": 876.3,
+          "Depth": 590.6,
+          "cut_length": 876.3
+        },
+        {
+          "part_id": "1001-KIT-BASE-762W-BK",
+          "Height": 876.3,
+          "Depth": 590.6,
+          "cut_length": 876.3
+        },
+        {
+          "part_id": "1001-KIT-PANT-609W-SH",
+          "Height": 573.6,
+          "Depth": 590.6,
+          "cut_length": 573.6
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 3,
+      "parts_total_length": 2326.2,
+      "kerf_total": 15,
+      "usable_length": 2435.0,
+      "waste": 93.8,
+      "utilization": 0.9534
+    },
+    {
+      "board_id": "T1-1220*2440-007",
+      "board": "T1-1220*2440",
+      "board_size": "590.6 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-BASE-762W-BK",
+          "Height": 876.3,
+          "Depth": 590.6,
+          "cut_length": 876.3
+        },
+        {
+          "part_id": "1001-KIT-BASE-762W-SL",
+          "Height": 876.3,
+          "Depth": 590.6,
+          "cut_length": 876.3
+        },
+        {
+          "part_id": "1001-KIT-PANT-609W-SH",
+          "Height": 573.6,
+          "Depth": 590.6,
+          "cut_length": 573.6
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 3,
+      "parts_total_length": 2326.2,
+      "kerf_total": 15,
+      "usable_length": 2435.0,
+      "waste": 93.8,
+      "utilization": 0.9534
+    },
+    {
+      "board_id": "T1-1220*2440-008",
+      "board": "T1-1220*2440",
+      "board_size": "590.6 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-BASE-762W-SL",
+          "Height": 876.3,
+          "Depth": 590.6,
+          "cut_length": 876.3
+        },
+        {
+          "part_id": "1001-KIT-BASE-914W-SL",
+          "Height": 876.3,
+          "Depth": 590.6,
+          "cut_length": 876.3
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 2,
+      "parts_total_length": 1752.6,
+      "kerf_total": 10,
+      "usable_length": 2435.0,
+      "waste": 672.4,
+      "utilization": 0.7183
+    },
+    {
+      "board_id": "T1-1220*2440-009",
+      "board": "T1-1220*2440",
+      "board_size": "590.6 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-BASE-914W-SR",
+          "Height": 876.3,
+          "Depth": 590.6,
+          "cut_length": 876.3
+        },
+        {
+          "part_id": "1001-KIT-BASE-914W-BK",
+          "Height": 876.3,
+          "Depth": 590.6,
+          "cut_length": 876.3
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 2,
+      "parts_total_length": 1752.6,
+      "kerf_total": 10,
+      "usable_length": 2435.0,
+      "waste": 672.4,
+      "utilization": 0.7183
+    },
+    {
+      "board_id": "T1-1220*2440-010",
+      "board": "T1-1220*2440",
+      "board_size": "590.6 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-BASE-762W-DF",
+          "Height": 726.0,
+          "Depth": 590.6,
+          "cut_length": 726.0
+        },
+        {
+          "part_id": "1001-KIT-BASE-762W-DF",
+          "Height": 726.0,
+          "Depth": 590.6,
+          "cut_length": 726.0
+        },
+        {
+          "part_id": "1001-KIT-BASE-762W-DF",
+          "Height": 726.0,
+          "Depth": 590.6,
+          "cut_length": 726.0
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 3,
+      "parts_total_length": 2178.0,
+      "kerf_total": 15,
+      "usable_length": 2435.0,
+      "waste": 242.0,
+      "utilization": 0.8926
+    },
+    {
+      "board_id": "T1-1220*2440-011",
+      "board": "T1-1220*2440",
+      "board_size": "590.6 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-BASE-762W-DF",
+          "Height": 726.0,
+          "Depth": 590.6,
+          "cut_length": 726.0
+        },
+        {
+          "part_id": "1001-KIT-BASE-762W-DF",
+          "Height": 726.0,
+          "Depth": 590.6,
+          "cut_length": 726.0
+        },
+        {
+          "part_id": "1001-KIT-BASE-762W-DF",
+          "Height": 726.0,
+          "Depth": 590.6,
+          "cut_length": 726.0
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 3,
+      "parts_total_length": 2178.0,
+      "kerf_total": 15,
+      "usable_length": 2435.0,
+      "waste": 242.0,
+      "utilization": 0.8926
+    },
+    {
+      "board_id": "T1-1220*2440-012",
+      "board": "T1-1220*2440",
+      "board_size": "590.6 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-BASE-762W-KK",
+          "Height": 726.0,
+          "Depth": 590.6,
+          "cut_length": 726.0
+        },
+        {
+          "part_id": "1001-KIT-BASE-762W-KK",
+          "Height": 726.0,
+          "Depth": 590.6,
+          "cut_length": 726.0
+        },
+        {
+          "part_id": "1001-KIT-BASE-762W-BT",
+          "Height": 726.0,
+          "Depth": 590.6,
+          "cut_length": 726.0
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 3,
+      "parts_total_length": 2178.0,
+      "kerf_total": 15,
+      "usable_length": 2435.0,
+      "waste": 242.0,
+      "utilization": 0.8926
+    },
+    {
+      "board_id": "T1-1220*2440-013",
+      "board": "T1-1220*2440",
+      "board_size": "590.6 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-BASE-762W-BT",
+          "Height": 726.0,
+          "Depth": 590.6,
+          "cut_length": 726.0
+        },
+        {
+          "part_id": "1001-KIT-BASE-762W-TP",
+          "Height": 726.0,
+          "Depth": 590.6,
+          "cut_length": 726.0
+        },
+        {
+          "part_id": "1001-KIT-BASE-762W-TP",
+          "Height": 726.0,
+          "Depth": 590.6,
+          "cut_length": 726.0
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 3,
+      "parts_total_length": 2178.0,
+      "kerf_total": 15,
+      "usable_length": 2435.0,
+      "waste": 242.0,
+      "utilization": 0.8926
+    },
+    {
+      "board_id": "T1-610*2440-001",
+      "board": "T1-610*2440",
+      "board_size": "285.8 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-WALL-762W-SL",
+          "Height": 762.0,
+          "Depth": 285.8,
+          "cut_length": 762.0
+        },
+        {
+          "part_id": "1001-KIT-WALL-762W-SL",
+          "Height": 762.0,
+          "Depth": 285.8,
+          "cut_length": 762.0
+        },
+        {
+          "part_id": "1001-KIT-WALL-762W-SR",
+          "Height": 762.0,
+          "Depth": 285.8,
+          "cut_length": 762.0
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 3,
+      "parts_total_length": 2286.0,
+      "kerf_total": 15,
+      "usable_length": 2435.0,
+      "waste": 134.0,
+      "utilization": 0.9369
+    },
+    {
+      "board_id": "T1-610*2440-002",
+      "board": "T1-610*2440",
+      "board_size": "285.8 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-WALL-762W-SR",
+          "Height": 762.0,
+          "Depth": 285.8,
+          "cut_length": 762.0
+        },
+        {
+          "part_id": "1001-KIT-WALL-762W-BK",
+          "Height": 762.0,
+          "Depth": 285.8,
+          "cut_length": 762.0
+        },
+        {
+          "part_id": "1001-KIT-WALL-762W-BK",
+          "Height": 762.0,
+          "Depth": 285.8,
+          "cut_length": 762.0
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 3,
+      "parts_total_length": 2286.0,
+      "kerf_total": 15,
+      "usable_length": 2435.0,
+      "waste": 134.0,
+      "utilization": 0.9369
+    },
+    {
+      "board_id": "T1-610*2440-003",
+      "board": "T1-610*2440",
+      "board_size": "285.8 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-WALL-762W-BT",
+          "Height": 726.0,
+          "Depth": 285.8,
+          "cut_length": 726.0
+        },
+        {
+          "part_id": "1001-KIT-WALL-762W-BT",
+          "Height": 726.0,
+          "Depth": 285.8,
+          "cut_length": 726.0
+        },
+        {
+          "part_id": "1001-KIT-WALL-762W-TP",
+          "Height": 726.0,
+          "Depth": 285.8,
+          "cut_length": 726.0
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 3,
+      "parts_total_length": 2178.0,
+      "kerf_total": 15,
+      "usable_length": 2435.0,
+      "waste": 242.0,
+      "utilization": 0.8926
+    },
+    {
+      "board_id": "T1-610*2440-004",
+      "board": "T1-610*2440",
+      "board_size": "285.8 × 2440.0",
+      "parts": [
+        {
+          "part_id": "1001-KIT-WALL-762W-TP",
+          "Height": 726.0,
+          "Depth": 285.8,
+          "cut_length": 726.0
+        }
+      ],
+      "trim_loss": 5,
+      "saw_kerf": 5,
+      "cuts": 1,
+      "parts_total_length": 726.0,
+      "kerf_total": 5,
+      "usable_length": 2435.0,
+      "waste": 1704.0,
+      "utilization": 0.2975
+    }
+  ]
+}
