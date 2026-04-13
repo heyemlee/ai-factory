@@ -23,3 +23,14 @@ venv/
 
 # Logs
 logs/
+
+# Data
+input/
+output/
+data/
+archive/
+failed_orders/
+incoming_orders/
+
+# Virtual environments
+pipeline_venv/

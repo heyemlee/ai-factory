@@ -58,11 +58,30 @@ def ensure_directories():
 
 
 def generate_job_id(order_filename: str = "") -> str:
-    """生成唯一 job_id: 时间戳_订单名"""
+    """生成唯一 job_id: 日期序号_订单名"""
     import time
-    ts = int(time.time())
-    name = Path(order_filename).stem if order_filename else "manual"
-    return f"{ts}_{name}"
+    from datetime import datetime
+    
+    now = datetime.now()
+    date_str = now.strftime("%Y-%m-%d")
+    
+    if order_filename:
+        name = Path(order_filename).stem
+        base_id = f"{date_str}_{name}"
+    else:
+        base_id = f"{date_str}_manual"
+    
+    # 检查该日期是否已有同名 job_id，如果有则加序号
+    job_dir = OUTPUT_DIR / base_id
+    count = 1
+    while job_dir.exists():
+        suffix = f"_{count}"
+        job_dir = OUTPUT_DIR / f"{date_str}{suffix}" / base_id if count > 1 else job_dir
+        count += 1
+    
+    if count > 1:
+        return f"{date_str}{count}_{name}"
+    return base_id
 
 
 def get_job_output_dir(job_id: str) -> Path:

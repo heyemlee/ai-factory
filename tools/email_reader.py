@@ -80,11 +80,14 @@ def download_excel_attachments():
                             else:
                                 filename = decoded_name
 
-                            # 只下载 Excel 文件
+                            # 只下载 Excel 文件，添加日期前缀
                             if filename.lower().endswith(".xlsx"):
-
-                                # 保持原始文件名，不再添加时间戳前缀
-                                filepath = os.path.join(SAVE_DIR, filename)
+                                from datetime import datetime
+                                now = datetime.now()
+                                date_str = now.strftime("%Y-%m-%d")
+                                base_name = filename.split("_")[0] if "_" in filename else filename
+                                timestamp_name = f"{date_str}_{base_name}"
+                                filepath = os.path.join(SAVE_DIR, timestamp_name)
 
                                 with open(filepath, "wb") as f:
                                     f.write(part.get_payload(decode=True))
