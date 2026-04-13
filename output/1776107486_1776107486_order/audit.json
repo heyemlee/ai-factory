@@ -1,0 +1,33 @@
+{
+  "status": "pass",
+  "checks": [
+    {
+      "name": "零件完整性",
+      "status": "pass",
+      "detail": "全部 43 个零件已成功分配"
+    },
+    {
+      "name": "整体利用率",
+      "status": "pass",
+      "detail": "利用率 91.3% ≥ 60%"
+    },
+    {
+      "name": "单板废料",
+      "status": "pass",
+      "detail": "所有板材废料均 ≤ 800mm"
+    },
+    {
+      "name": "数据质量",
+      "status": "pass",
+      "detail": "无数据异常，无未匹配零件"
+    }
+  ],
+  "recommendations": [],
+  "summary": {
+    "total_parts": 43,
+    "placed_parts": 43,
+    "boards_used": 13,
+    "utilization": 0.9135,
+    "total_waste": 2463.6
+  }
+}

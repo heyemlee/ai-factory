@@ -1,36 +1,46 @@
+"""
+邮件读取工具 — 从 Gmail 下载 Excel 订单附件
+
+使用 config/settings.py 中的凭据配置。
+"""
+
 import imaplib
 import email
 import os
+import sys
 import time
 from email.header import decode_header
 
-EMAIL_USER = "orders@abcabinet.us"
-EMAIL_PASS = "dugljgoovcoolloh"
+# 确保从任何目录运行都能找到项目模块
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-IMAP_SERVER = "imap.gmail.com"
+from config.settings import EMAIL_USER, EMAIL_PASS, IMAP_SERVER, INCOMING_ORDERS_DIR
+from config.logger import get_logger
 
-SAVE_DIR = "incoming_orders"
+log = get_logger("email_reader")
+
+SAVE_DIR = str(INCOMING_ORDERS_DIR)
 
 
 def download_excel_attachments():
 
     os.makedirs(SAVE_DIR, exist_ok=True)
 
-    print("连接 Gmail...")
+    log.info("连接 Gmail...")
     mail = imaplib.IMAP4_SSL(IMAP_SERVER)
 
-    print("登录 Gmail...")
+    log.info("登录 Gmail...")
     mail.login(EMAIL_USER, EMAIL_PASS)
 
-    print("登录成功")
+    log.info("登录成功")
 
     mail.select("inbox")
 
-    print("搜索未读邮件...")
+    log.info("搜索未读邮件...")
     status, messages = mail.search(None, '(UNSEEN)')
     email_ids = messages[0].split()
 
-    print("找到未读邮件数量:", len(email_ids))
+    log.info(f"找到未读邮件数量: {len(email_ids)}")
 
     # 只读取最新5封邮件（推荐）
     email_ids = email_ids[-5:]
@@ -51,7 +61,7 @@ def download_excel_attachments():
                 if isinstance(subject, bytes):
                     subject = subject.decode(encoding or "utf-8")
 
-                print(f"处理邮件: {subject}")
+                log.info(f"处理邮件: {subject}")
 
                 for part in msg.walk():
 
@@ -73,9 +83,7 @@ def download_excel_attachments():
                             # 只下载 Excel 文件
                             if filename.lower().endswith(".xlsx"):
 
-                                timestamp = int(time.time())
-                                filename = f"{timestamp}_{filename}"
-
+                                # 保持原始文件名，不再添加时间戳前缀
                                 filepath = os.path.join(SAVE_DIR, filename)
 
                                 with open(filepath, "wb") as f:
@@ -83,11 +91,11 @@ def download_excel_attachments():
 
                                 downloaded.append(filepath)
 
-                                print(f"下载订单: {filepath}")
+                                log.info(f"下载订单: {filepath}")
 
     mail.logout()
 
-    print("邮件处理完成")
+    log.info("邮件处理完成")
 
     return downloaded
 
