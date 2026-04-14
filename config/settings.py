@@ -60,6 +60,7 @@ def ensure_directories():
 def generate_job_id(order_filename: str = "") -> str:
     """生成唯一 job_id: 日期序号_订单名"""
     import time
+    import re
     from datetime import datetime
     
     now = datetime.now()
@@ -67,6 +68,9 @@ def generate_job_id(order_filename: str = "") -> str:
     
     if order_filename:
         name = Path(order_filename).stem
+        # 去除已有的 Unix 时间戳（如 1776107486_）或已有的日期前缀（如 2026-04-13_150400_），避免重复叠加
+        name = re.sub(r'^\d{4}-\d{2}-\d{2}(_\d{6})?_', '', name)
+        name = re.sub(r'^\d{10}_', '', name)
         base_id = f"{date_str}_{name}"
     else:
         base_id = f"{date_str}_manual"

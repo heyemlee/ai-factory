@@ -344,7 +344,9 @@ def _process_single_order(order_file: str, parent_context: dict) -> dict:
 def _archive_success(order_file: str, job_id: str):
     """成功订单归档到 archive/"""
     try:
-        dest = ARCHIVE_DIR / f"{job_id}_{os.path.basename(order_file)}"
+        # 使用 job_id 加上原始扩展名，避免文件名无限叠加
+        ext = os.path.splitext(order_file)[1]
+        dest = ARCHIVE_DIR / f"{job_id}{ext}"
         shutil.copy2(order_file, dest)
         log.info(f"📁 订单已归档: {dest}")
     except Exception as e:
