@@ -28,6 +28,7 @@ logs/
 input/
 output/
 data/
+data/bom_history.jsonl
 archive/
 failed_orders/
 incoming_orders/
