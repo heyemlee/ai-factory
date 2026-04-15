@@ -21,7 +21,7 @@ agents:
 workflows:
   email_auto_order:
     description: Auto read email and process orders
-    entry: workflows/email_to_parts_flow.py
+    entry: backend/workflows/email_to_parts_flow.py
 
 schedule:
   email_auto_order:

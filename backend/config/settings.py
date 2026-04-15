@@ -9,10 +9,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # ── 加载 .env 文件 ──────────────────────────
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+# settings.py 位于 backend/config/，需要上溯 3 级到 ai-factory/
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 # ── 项目根目录 ──────────────────────────────
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# backend/config/settings.py → parent(config) → parent(backend) → parent(ai-factory)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # ── Gmail IMAP ──────────────────────────────
 EMAIL_USER = os.getenv("EMAIL_USER", "")

@@ -8,7 +8,7 @@ import uvicorn
 
 # Import the existing OpenClaw pipeline controller
 from core.workflow_controller import run_pipeline
-from config.settings import INCOMING_ORDERS_DIR, ARCHIVE_DIR, FAILED_ORDERS_DIR, INVENTORY_FILE
+from config.settings import INCOMING_ORDERS_DIR, ARCHIVE_DIR, FAILED_ORDERS_DIR, INVENTORY_FILE, DATA_DIR
 
 app = FastAPI(title="AI Factory OpenClaw API")
 
@@ -67,7 +67,7 @@ def get_order_history():
 @app.get("/api/bom-history")
 def get_bom_history():
     """Returns BOM history."""
-    history_file = "data/bom_history.jsonl"
+    history_file = DATA_DIR / "bom_history.jsonl"
     if os.path.exists(history_file):
         history = []
         with open(history_file, "r", encoding="utf-8") as f:
