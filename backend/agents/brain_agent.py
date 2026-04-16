@@ -221,6 +221,8 @@ def detect_format(path):
         return "new"
     elif "名称" in cols or "柜号" in cols:
         return "old"
+    elif "Type" in cols or "W\"" in cols or "W" in cols:
+        return "calculator"
     else:
         raise RuntimeError(f"无法识别订单格式，列名: {list(cols)}")
 
@@ -234,6 +236,16 @@ def run(order_path="data/order.xlsx", output_path="data/parts.xlsx"):
 
     if fmt == "new":
         return process_new_format(order_path, output_path)
+    elif fmt == "calculator":
+        import sys
+        
+        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if backend_dir not in sys.path:
+            sys.path.append(backend_dir)
+            
+        from cabinet_calculator import process_order
+        process_order(order_path, output_path)
+        return output_path
     else:
         return process_old_format(order_path, output_path)
 

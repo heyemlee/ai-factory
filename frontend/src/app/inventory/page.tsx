@@ -19,9 +19,9 @@ interface InventoryItem {
 
 const initialData: Record<ItemCategory, InventoryItem[]> = {
   main: [
-    { id: "M001", name: "18mm White Melamine", material: "MDF", thickness: 18, width: 1220, length: 2440, stock: 125, threshold: 50, unit: "pcs" },
-    { id: "M002", name: "18mm Wood Grain", material: "Plywood", thickness: 18, width: 1220, length: 2440, stock: 45, threshold: 50, unit: "pcs" },
-    { id: "M003", name: "9mm Back Panel", material: "MDF", thickness: 9, width: 1220, length: 2440, stock: 210, threshold: 100, unit: "pcs" },
+    { id: "T0", name: "T0 Full Sheet", material: "MDF", thickness: 18, width: 1219.2, length: 2438.4, stock: 50, threshold: 10, unit: "pcs" },
+    { id: "T1-305", name: "T1 Wall Stock (12\")", material: "MDF", thickness: 18, width: 304.8, length: 2438.4, stock: 100, threshold: 30, unit: "pcs" },
+    { id: "T1-610", name: "T1 Base/Tall Stock (24\")", material: "MDF", thickness: 18, width: 609.6, length: 2438.4, stock: 100, threshold: 30, unit: "pcs" },
   ],
   sub: [
     { id: "S001", name: "Edge Banding 1mm White", material: "PVC", thickness: 1, width: 22, length: 100000, stock: 12, threshold: 20, unit: "rolls" },

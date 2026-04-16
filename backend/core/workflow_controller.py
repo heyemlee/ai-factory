@@ -205,15 +205,9 @@ def _process_single_order(order_file: str, parent_context: dict) -> dict:
         _notify_error("裁切优化 (Engine Agent)", str(e), job_id)
         return result
 
-    # ── Stage 4: Excel Report ────────────
-    log.info("📊 Stage 4: 生成 Excel 报告...")
-    try:
-        from tools.cutting_optimizer import export_excel
-        export_excel(cut_result_path, cut_excel_path)
-        result["stages"]["excel_report"] = {"status": "success", "output": cut_excel_path}
-    except Exception as e:
-        log.warning(f"   ⚠️ Excel 报告生成失败(非致命): {e}")
-        result["stages"]["excel_report"] = {"status": "warning", "error": str(e)}
+    # ── Stage 4: Excel Report (Skipped) ───
+    log.info("📊 Stage 4: 报告合并到了 worker_order, 不再单独生成 cut_result.xlsx...")
+    result["stages"]["excel_report"] = {"status": "skipped"}
 
     # ── Stage 5: Audit Agent (审核) ──────
     log.info("🔍 Stage 5: 审核 (Audit Agent)...")
@@ -291,6 +285,24 @@ def _process_single_order(order_file: str, parent_context: dict) -> dict:
             final_files.append(new_worker_path)
             log.info(f"   📄 工人工单: {new_worker_name}")
 
+        # 重命名 inventory_check.xlsx
+        inv_check_path = str(job_dir / "inventory_check.xlsx")
+        if os.path.exists(inv_check_path):
+            new_inv_name = f"{date_prefix}_inventory_check.xlsx"
+            new_inv_path = str(job_dir / new_inv_name)
+            os.rename(inv_check_path, new_inv_path)
+            final_files.append(new_inv_path)
+            log.info(f"   📄 库存报告: {new_inv_name}")
+            
+        # 重命名 parts.xlsx
+        parts_path = str(job_dir / "parts.xlsx")
+        if os.path.exists(parts_path):
+            new_parts_name = f"{date_prefix}_parts.xlsx"
+            new_parts_path = str(job_dir / new_parts_name)
+            os.rename(parts_path, new_parts_path)
+            final_files.append(new_parts_path)
+            log.info(f"   📄 拆单结果: {new_parts_name}")
+            
         result["stages"]["output"] = {"status": "success", "files": final_files}
 
         # ── 完成提示 ──
@@ -332,6 +344,17 @@ def _process_single_order(order_file: str, parent_context: dict) -> dict:
         bom_record(job_id=job_id, cut_result_path=cut_result_path)
     except Exception as e:
         log.warning(f"   ⚠️ BOM 历史记录失败(非致命): {e}")
+
+    # ── 清理中间文件 ──────────────────────
+    final_files_set = set(final_files) if 'final_files' in locals() else set()
+    try:
+        if os.path.exists(job_dir):
+            for f in os.listdir(job_dir):
+                clean_path = job_dir / f
+                if clean_path.is_file() and str(clean_path) not in final_files_set:
+                    os.remove(clean_path)
+    except Exception as e:
+        log.warning(f"   ⚠️ 中间文件清理失败: {e}")
 
     result["status"] = "success"
     result["end_time"] = datetime.now().isoformat()

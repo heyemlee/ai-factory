@@ -62,17 +62,18 @@ export default function Orders() {
                 <thead>
                   <tr className="bg-black/[0.02]">
                     <th className="py-3 px-8 text-[13px] font-medium text-apple-gray uppercase tracking-wide">Order ID</th>
+                    <th className="py-3 px-8 text-[13px] font-medium text-apple-gray uppercase tracking-wide">Cabinets</th>
+                    <th className="py-3 px-8 text-[13px] font-medium text-apple-gray uppercase tracking-wide">Boards</th>
                     <th className="py-3 px-8 text-[13px] font-medium text-apple-gray uppercase tracking-wide">Status</th>
                     <th className="py-3 px-8 text-[13px] font-medium text-apple-gray uppercase tracking-wide">Utilization</th>
                     <th className="py-3 px-8 text-[13px] font-medium text-apple-gray uppercase tracking-wide text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  <OrderRow id="2026-04-14_05" status="Processing" yieldRate="—" />
-                  <OrderRow id="2026-04-14_04" status="Completed" yieldRate="94.2%" />
-                  <OrderRow id="2026-04-14_03" status="Completed" yieldRate="95.1%" />
-                  <OrderRow id="2026-04-13_09" status="Failed" yieldRate="—" />
-                  <OrderRow id="2026-04-13_02" status="Completed" yieldRate="93.8%" />
+                  <OrderRow id="2026-04-16_batch" status="Completed" yieldRate="86.9%" cabinets="13 (10W/2B/1T)" boards="49" />
+                  <OrderRow id="2026-04-15_02" status="Processing" yieldRate="—" cabinets="8 (6W/2B)" boards="—" />
+                  <OrderRow id="2026-04-14_01" status="Completed" yieldRate="91.3%" cabinets="6 (4W/2B)" boards="22" />
+                  <OrderRow id="2026-04-13_03" status="Failed" yieldRate="—" cabinets="4" boards="—" />
                 </tbody>
               </table>
             </div>
@@ -83,7 +84,7 @@ export default function Orders() {
   );
 }
 
-function OrderRow({ id, status, yieldRate }: { id: string, status: string, yieldRate: string }) {
+function OrderRow({ id, status, yieldRate, cabinets, boards }: { id: string, status: string, yieldRate: string, cabinets: string, boards: string }) {
   const isCompleted = status === "Completed";
   const isFailed = status === "Failed";
   
@@ -94,6 +95,8 @@ function OrderRow({ id, status, yieldRate }: { id: string, status: string, yield
           {id}
         </Link>
       </td>
+      <td className="py-4 px-8 text-[14px] text-apple-gray">{cabinets}</td>
+      <td className="py-4 px-8 text-[14px] text-foreground font-medium">{boards}</td>
       <td className="py-4 px-8">
         <span className={`inline-flex items-center text-[14px] font-medium ${
           isCompleted ? "text-apple-green" : isFailed ? "text-apple-red" : "text-apple-blue"

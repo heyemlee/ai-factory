@@ -1,98 +1,108 @@
 """
-橱柜工厂直切优化引擎 v2
+橱柜工厂直切优化引擎 v3
 
 术语统一（橱柜行业）:
-  - Height: 板件的高度/长度方向尺寸 (mm)，沿板长方向裁切
-  - Depth:  板件的深度方向尺寸 (mm)，与库存板 Depth 精确匹配
+  - Height: 板件的长度方向 (mm)，沿板长方向排列 (2438.4mm axis)
+  - Depth:  板件的深度/宽度方向 (mm)
 
-逻辑：
-  1. 读取 parts.xlsx（part_id, Height, Depth, qty）
-  2. 读取 t1_inventory.xlsx（board_type, Height, Depth, qty）
-  3. 按 Depth 将零件分组 → 每组对应一种库存板型
-  4. 每组内用 FFD（First Fit Decreasing）装箱算法，
-     把零件沿板 Height 方向排列，尽量塞满每张板
-  5. 输出 output/cut_result.json
+Board Hierarchy:
+  T0: 1219.2 × 2438.4 mm (full raw sheet)
+  T1: 304.8 × 2438.4 mm  (wall cabinet stock)
+  T1: 609.6 × 2438.4 mm  (base/tall cabinet stock)
+  T2: Final cabinet parts (side panels, top/bottom, back, shelves, stretchers)
 
-直切规则：
-  - 板的 Depth（深度）= 零件的 Depth，精确匹配，不切
-  - 板的 Height（长度方向 = 2440mm）用来排列零件
-  - 每张板先扣一次修边损耗 TRIM_LOSS
-  - 每个零件切一刀产生一道锯缝 SAW_KERF
-  - usable = board_Height - TRIM_LOSS
-  - 放 k 个零件：sum(part_Heights) + k × SAW_KERF ≤ usable
-  - waste = usable - sum(part_Heights) - k × SAW_KERF
-  - utilization = sum(part_Heights) / board_Height
+Matching Logic (v3 — Best-Fit):
+  - Parts are assigned to the SMALLEST board whose Depth >= part Depth
+  - If no board fits normally, try rotating the part (swap Height/Depth)
+  - Parts that don't fit any board are reported as unmatched
+
+Cutting Logic (1D FFD Bin Packing):
+  - Board Height (2438.4mm) is the cutting axis
+  - Each board: usable = board_Height - TRIM_LOSS
+  - Placing k parts: sum(cut_lengths) + k × SAW_KERF ≤ usable
+  - utilization = sum(cut_lengths) / board_Height
 """
 
 import json
 import os
-import math
 from collections import defaultdict
 
 import pandas as pd
 
 
-# ── 工厂参数 ─────────────────────────────────────────
-TRIM_LOSS = 5   # mm，每张板修边损耗
-SAW_KERF  = 5   # mm，每刀锯缝
+# ── Factory Parameters (mm) ─────────────────────────────
+TRIM_LOSS = 5.0   # trim per board edge
+SAW_KERF  = 5.0   # kerf per cut
 
 
 # ─────────────────────────────────────────────
-# 数据读取
+# Data Loading
 # ─────────────────────────────────────────────
 
 def load_parts(path: str):
-    """读取 parts.xlsx，展开 qty 为独立零件行。"""
+    """Read parts.xlsx (output from cabinet_calculator v2)."""
     df = pd.read_excel(path)
 
-    required = {"part_id", "Height", "Depth", "qty"}
+    # Support both old format (part_id, Height, Depth, qty)
+    # and new format (part_id, cab_id, cab_type, component, Height, Depth, qty)
+    required = {"Height", "Depth"}
     missing = required - set(df.columns)
     if missing:
-        raise RuntimeError(f"[parts.xlsx] 缺少列: {missing}")
+        raise RuntimeError(f"[parts.xlsx] Missing columns: {missing}")
 
-    df = df.dropna(subset=list(required))
+    df = df.dropna(subset=["Height", "Depth"])
 
     parts = []
     skipped = []
 
     for i, row in df.iterrows():
-        pid = str(row["part_id"]).strip()
+        pid = str(row.get("part_id", f"P{i+1}")).strip()
         try:
             h = float(row["Height"])
             d = float(row["Depth"])
-            q = int(row["qty"])
+            q = int(row.get("qty", 1))
         except (ValueError, TypeError) as e:
             skipped.append({"row": i + 2, "reason": str(e)})
             continue
 
         if h <= 0 or d <= 0 or q <= 0:
-            skipped.append({"row": i + 2, "reason": f"无效值 Height={h}, Depth={d}, qty={q}"})
+            skipped.append({"row": i + 2, "reason": f"Invalid: Height={h}, Depth={d}, qty={q}"})
             continue
 
-        # 展开 qty：每个零件独立一条
+        # Carry over extra metadata if present
+        extra = {}
+        for col in ("cab_id", "cab_type", "component"):
+            if col in row:
+                extra[col] = str(row[col])
+
         for _ in range(q):
-            parts.append({"part_id": pid, "Height": h, "Depth": d})
+            parts.append({
+                "part_id": pid,
+                "Height": h,
+                "Depth": d,
+                **extra,
+            })
 
     if skipped:
-        print(f"⚠️  跳过 {len(skipped)} 行:")
+        print(f"⚠️  Skipped {len(skipped)} rows:")
         for s in skipped:
-            print(f"  第 {s['row']} 行: {s['reason']}")
+            print(f"  Row {s['row']}: {s['reason']}")
 
     if not parts:
-        raise RuntimeError("[parts.xlsx] 没有有效零件")
+        raise RuntimeError("[parts.xlsx] No valid parts found")
 
-    print(f"📦 读取零件: {len(parts)} 个（{len(df)} 行 × qty 展开）")
+    print(f"📦 Loaded parts: {len(parts)} pieces ({len(df)} rows × qty)")
     return parts, skipped
 
 
 def load_inventory(path: str):
-    """读取 t1_inventory.xlsx。"""
+    """Read t1_inventory.xlsx."""
     df = pd.read_excel(path)
 
     required = {"board_type", "Height", "Depth", "qty"}
     missing = required - set(df.columns)
     if missing:
-        raise RuntimeError(f"[t1_inventory.xlsx] 缺少列: {missing}")
+        raise RuntimeError(f"[inventory] Missing columns: {missing}")
 
     boards = {}
     for _, row in df.iterrows():
@@ -104,78 +114,90 @@ def load_inventory(path: str):
             "qty": int(row["qty"]),
         }
 
-    print(f"📋 库存板型: {len(boards)} 种")
+    print(f"📋 Inventory: {len(boards)} board types")
+    for bt, info in sorted(boards.items(), key=lambda x: x[1]["Depth"]):
+        print(f"    {bt}: {info['Depth']} × {info['Height']} mm, qty={info['qty']}")
     return boards
 
 
 # ─────────────────────────────────────────────
-# 匹配：零件 → 库存板型
+# Matching: Parts → Board Types (Best-Fit)
 # ─────────────────────────────────────────────
 
 def match_parts_to_boards(parts: list, boards: dict):
     """
-    按 Depth 匹配零件到库存板型。
-    返回:
-      matched:   dict[board_type] → list of {part_id, cut_length}
-      unmatched: list of parts that have no matching board
-    """
-    # 建立 Depth → board_type 索引
-    depth_to_board = {}
-    for bt, info in boards.items():
-        depth_to_board[info["Depth"]] = bt
+    Best-fit matching: assign each part to the SMALLEST board
+    whose Depth >= part's Depth.
 
-    matched = defaultdict(list)   # board_type → [parts]
+    If normal orientation doesn't fit, try rotating (swap Height/Depth).
+    Rotated parts must also have rotated Height <= board Height.
+
+    Returns:
+      matched:   dict[board_type] → list of {part_id, cut_length, ...}
+      unmatched: list of parts that can't fit any board
+    """
+    # Sort board types by Depth ascending (smallest first for best-fit)
+    sorted_boards = sorted(boards.values(), key=lambda b: b["Depth"])
+
+    matched = defaultdict(list)
     unmatched = []
 
     for p in parts:
         p_height, p_depth = p["Height"], p["Depth"]
+        placed = False
 
-        if p_depth in depth_to_board:
-            # 直接匹配：part.Depth == board.Depth，切割长度 = part.Height
-            bt = depth_to_board[p_depth]
-            matched[bt].append({
-                "part_id": p["part_id"],
-                "Height": p_height,
-                "Depth": p_depth,
-                "cut_length": p_height,   # 沿板 Height 方向占用的尺寸
-            })
-        elif p_height in depth_to_board:
-            # 旋转匹配：part.Height == board.Depth，切割长度 = part.Depth
-            bt = depth_to_board[p_height]
-            matched[bt].append({
-                "part_id": p["part_id"],
-                "Height": p_height,
-                "Depth": p_depth,
-                "cut_length": p_depth,   # 旋转后沿板 Height 方向占用
-                "rotated": True,
-            })
-        else:
+        # Try normal orientation: part Depth ≤ board Depth, part Height is cut_length
+        for board in sorted_boards:
+            if p_depth <= board["Depth"] and p_height <= board["Height"]:
+                matched[board["board_type"]].append({
+                    **p,
+                    "cut_length": p_height,
+                })
+                placed = True
+                break
+
+        if placed:
+            continue
+
+        # Try rotated: swap Height/Depth
+        for board in sorted_boards:
+            if p_height <= board["Depth"] and p_depth <= board["Height"]:
+                matched[board["board_type"]].append({
+                    **p,
+                    "cut_length": p_depth,
+                    "rotated": True,
+                })
+                placed = True
+                break
+
+        if not placed:
             unmatched.append(p)
 
     if unmatched:
-        print(f"\n🚫 {len(unmatched)} 个零件无匹配板型:")
+        print(f"\n🚫 {len(unmatched)} parts have no matching board:")
         seen = set()
         for u in unmatched:
             key = f"{u['part_id']}({u['Height']}×{u['Depth']})"
             if key not in seen:
                 seen.add(key)
-                print(f"  {key}")
+                comp = u.get('component', '?')
+                print(f"  {key} [{comp}]")
 
     return matched, unmatched
 
 
 # ─────────────────────────────────────────────
-# FFD 装箱算法（1D Bin Packing）
+# FFD Bin Packing (1D along board Height axis)
 # ─────────────────────────────────────────────
 
 def ffd_bin_pack(parts_list: list, board_info: dict):
     """
-    First Fit Decreasing：
-    - 把零件按 cut_length 从大到小排序
-    - 依次尝试放入已有的板，放得下就放
-    - 放不下就开一张新板
+    First Fit Decreasing:
+    - Sort parts by cut_length descending
+    - Try to place each part on an existing board
+    - If it doesn't fit, open a new board
 
-    返回: list of boards, 每张板包含 parts 列表和利用率信息
+    Returns: list of board results with parts and utilization info
     """
     board_height = board_info["Height"]
     board_depth  = board_info["Depth"]
@@ -183,22 +205,19 @@ def ffd_bin_pack(parts_list: list, board_info: dict):
     max_qty      = board_info["qty"]
     usable       = board_height - TRIM_LOSS
 
-    # 按 cut_length 降序排列（大件优先）
     sorted_parts = sorted(parts_list, key=lambda p: p["cut_length"], reverse=True)
 
-    # 每张板: {"remaining": float, "parts": [...]}
     open_boards = []
 
     for part in sorted_parts:
         cl = part["cut_length"]
-        needed = cl + SAW_KERF  # 放一个零件需要的空间 = 零件长 + 一道锯缝
+        needed = cl + SAW_KERF
 
         if needed > usable:
-            # 单个零件都放不下（超出板长），标记异常
-            print(f"  ⚠️  零件 {part['part_id']} 切割长度 {cl}mm + 锯缝 {SAW_KERF}mm > 可用 {usable}mm，跳过")
+            print(f"  ⚠️  Part {part['part_id']} cut_length {cl}mm + kerf {SAW_KERF}mm > usable {usable}mm, skipped")
             continue
 
-        # 尝试放入已有的板（First Fit）
+        # First Fit
         placed = False
         for board in open_boards:
             if board["remaining"] >= needed:
@@ -207,17 +226,16 @@ def ffd_bin_pack(parts_list: list, board_info: dict):
                 placed = True
                 break
 
-        # 放不下就开新板
         if not placed:
             if len(open_boards) >= max_qty:
-                print(f"  ⚠️  板型 {board_type} 库存不足 ({max_qty} 张已用完)")
+                print(f"  ⚠️  Board type {board_type} stock depleted ({max_qty} used)")
                 break
             open_boards.append({
                 "remaining": usable - needed,
                 "parts": [part],
             })
 
-    # 计算每张板的利用率
+    # Calculate utilization for each board
     results = []
     for idx, board in enumerate(open_boards, 1):
         board_id = f"{board_type}-{idx:03d}"
@@ -237,16 +255,20 @@ def ffd_bin_pack(parts_list: list, board_info: dict):
                     "Height": p["Height"],
                     "Depth": p["Depth"],
                     "cut_length": p["cut_length"],
+                    "component": p.get("component", ""),
+                    "cab_id": p.get("cab_id", ""),
+                    "cab_type": p.get("cab_type", ""),
+                    "rotated": p.get("rotated", False),
                 }
                 for p in board["parts"]
             ],
             "trim_loss": TRIM_LOSS,
             "saw_kerf": SAW_KERF,
             "cuts": k,
-            "parts_total_length": round(parts_total, 2),
-            "kerf_total": round(kerf_total, 2),
-            "usable_length": round(usable, 2),
-            "waste": round(waste, 2),
+            "parts_total_length": round(parts_total, 1),
+            "kerf_total": round(kerf_total, 1),
+            "usable_length": round(usable, 1),
+            "waste": round(waste, 1),
             "utilization": round(utilization, 4),
         })
 
@@ -254,34 +276,33 @@ def ffd_bin_pack(parts_list: list, board_info: dict):
 
 
 # ─────────────────────────────────────────────
-# 主流程
+# Main Pipeline
 # ─────────────────────────────────────────────
 
-def main():
-    parts_file = "data/parts.xlsx"
-    inv_file   = "data/t1_inventory.xlsx"
+def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/cut_result.json"):
+    """Full engine run: load → match → pack → output JSON."""
 
     print("=" * 55)
-    print("  直切优化引擎 v2 — FFD 装箱算法")
+    print("  Guillotine Cutting Engine v3 — FFD Bin Packing")
     print("=" * 55)
 
-    # 1. 读取数据
-    parts, skipped_rows = load_parts(parts_file)
-    boards = load_inventory(inv_file)
+    # 1. Load data
+    parts, skipped_rows = load_parts(parts_path)
+    boards = load_inventory(inventory_path)
 
-    # 2. 按 Depth 匹配零件 → 库存板型
+    # 2. Match parts to boards (best-fit by Depth)
     matched, unmatched = match_parts_to_boards(parts, boards)
 
     total_matched = sum(len(v) for v in matched.values())
-    print(f"\n✅ 已匹配: {total_matched} 个零件 → {len(matched)} 种板型")
+    print(f"\n✅ Matched: {total_matched} parts → {len(matched)} board types")
 
-    # 3. 每种板型做 FFD 装箱
+    # 3. FFD bin packing per board type
     all_board_results = []
 
     for board_type in sorted(matched.keys()):
         parts_list = matched[board_type]
         board_info = boards[board_type]
-        print(f"\n── {board_type} (Depth {board_info['Depth']}mm) ── {len(parts_list)} 个零件")
+        print(f"\n── {board_type} (Depth {board_info['Depth']}mm) ── {len(parts_list)} parts")
 
         board_results = ffd_bin_pack(parts_list, board_info)
         all_board_results.extend(board_results)
@@ -291,22 +312,20 @@ def main():
                 f"{p['part_id']}({p['cut_length']})"
                 for p in br["parts"]
             )
-            print(f"  {br['board_id']}: 利用率 {br['utilization']*100:.1f}% | 废料 {br['waste']}mm | {parts_str}")
+            print(f"  {br['board_id']}: util {br['utilization']*100:.1f}% | waste {br['waste']}mm | {parts_str}")
 
-    # 4. 汇总
+    # 4. Summary
     total_boards = len(all_board_results)
-    total_parts_required = len(parts)  # parts.xlsx 展开后的总需求
-    total_parts_placed = sum(len(b["parts"]) for b in all_board_results)  # 实际切出
-    total_parts_unmatched = len(unmatched)  # 无法裁切
+    total_parts_required = len(parts)
+    total_parts_placed = sum(len(b["parts"]) for b in all_board_results)
+    total_parts_unmatched = len(unmatched)
     all_parts_cut = (total_parts_placed == total_parts_required) and (total_parts_unmatched == 0)
 
     total_parts_len = sum(b["parts_total_length"] for b in all_board_results)
     total_trim = sum(b["trim_loss"] for b in all_board_results)
     total_kerf = sum(b["kerf_total"] for b in all_board_results)
     total_waste = sum(b["waste"] for b in all_board_results)
-    total_board_len = sum(
-        b["usable_length"] + b["trim_loss"] for b in all_board_results
-    )
+    total_board_len = sum(b["usable_length"] + b["trim_loss"] for b in all_board_results)
     overall_util = total_parts_len / total_board_len if total_board_len > 0 else 0
 
     summary = {
@@ -315,22 +334,22 @@ def main():
         "total_parts_unmatched": total_parts_unmatched,
         "all_parts_cut": all_parts_cut,
         "boards_used": total_boards,
-        "total_parts_length": round(total_parts_len, 2),
-        "total_trim_loss": round(total_trim, 2),
-        "total_kerf_loss": round(total_kerf, 2),
-        "total_waste": round(total_waste, 2),
+        "total_parts_length": round(total_parts_len, 1),
+        "total_trim_loss": round(total_trim, 1),
+        "total_kerf_loss": round(total_kerf, 1),
+        "total_waste": round(total_waste, 1),
         "overall_utilization": round(overall_util, 4),
         "config_trim_loss_mm": TRIM_LOSS,
         "config_saw_kerf_mm": SAW_KERF,
     }
 
     if unmatched:
-        summary["warning"] = f"{len(unmatched)} 个零件无匹配板型，详见 issues"
+        summary["warning"] = f"{len(unmatched)} parts unmatched, see issues"
 
-    # 5. 构建 issues
+    # 5. Issues report
     issues = {
         "skipped_rows": [
-            {"file": "parts.xlsx", "source": f"第 {s['row']} 行: {s['reason']}"}
+            {"file": "parts.xlsx", "source": f"Row {s['row']}: {s['reason']}"}
             for s in skipped_rows
         ],
         "unmatched_parts": [],
@@ -347,13 +366,14 @@ def main():
             "part_id": u["part_id"],
             "Height_mm": u["Height"],
             "Depth_mm": u["Depth"],
+            "component": u.get("component", ""),
             "qty": u["count"],
-            "reasons": [f"没有 Depth={u['Depth']}mm 或 Height={u['Height']}mm 的库存板型"],
-            "suggestion": "请在 t1_inventory.xlsx 中添加对应 Depth 的板型",
+            "reasons": [f"No board with Depth >= {u['Depth']}mm (or rotated Height >= {u['Height']}mm)"],
+            "suggestion": "Add a larger board type to inventory, or check part dimensions",
         })
 
-    # 6. 输出 JSON
-    os.makedirs("output", exist_ok=True)
+    # 6. Output JSON
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
     output = {
         "summary": summary,
@@ -361,23 +381,34 @@ def main():
         "boards": all_board_results,
     }
 
-    with open("output/cut_result.json", "w", encoding="utf-8") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
 
     print(f"\n{'=' * 55}")
-    print(f"  ✅ 优化完成！")
+    print(f"  ✅ Optimization Complete!")
     print(f"  {'=' * 53}")
-    print(f"  零件需求: {total_parts_required} 个")
-    print(f"  成功切出: {total_parts_placed} 个")
+    print(f"  Parts required: {total_parts_required}")
+    print(f"  Parts placed:   {total_parts_placed}")
     if total_parts_unmatched > 0:
-        print(f"  ⚠️  未切出: {total_parts_unmatched} 个（无匹配板型）")
-    print(f"  全部完成: {'✅ 是' if all_parts_cut else '❌ 否'}")
+        print(f"  ⚠️  Unmatched:   {total_parts_unmatched} (no fitting board)")
+    print(f"  All placed:     {'✅ Yes' if all_parts_cut else '❌ No'}")
     print(f"  {'─' * 53}")
-    print(f"  用板: {total_boards} 张 | 利用率: {overall_util*100:.1f}%")
-    print(f"  零件总长: {total_parts_len:.1f}mm")
-    print(f"  总废料: {total_waste:.1f}mm")
-    print(f"  结果已写入 output/cut_result.json")
+    print(f"  Boards used: {total_boards} | Utilization: {overall_util*100:.1f}%")
+    print(f"  Parts total length: {total_parts_len:.1f}mm")
+    print(f"  Total waste: {total_waste:.1f}mm")
+    print(f"  Output: {output_path}")
     print(f"{'=' * 55}")
+
+    return output
+
+
+# Keep backward-compatible function names for workflow_controller
+def main():
+    run_engine(
+        parts_path="data/parts.xlsx",
+        inventory_path="data/t1_inventory.xlsx",
+        output_path="output/cut_result.json",
+    )
 
 
 if __name__ == "__main__":

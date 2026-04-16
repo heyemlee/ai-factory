@@ -65,15 +65,25 @@ def run(cut_result_path: str = None, audit_path: str = None,
         utilization = board.get("utilization", 0)
 
         for idx, part in enumerate(board["parts"]):
+            cab_map = {"wall": "吊柜", "base": "地柜", "tall": "高柜"}
+            ctype = cab_map.get(part.get("cab_type", "").lower(), part.get("cab_type", ""))
+            comp_map = {
+                "Top Panel": "顶板", "Bottom Panel": "底板", 
+                "Side Panel": "侧板", "Back Panel": "背板", 
+                "Adjustable Shelf": "活动层板", "Fixed Shelf": "固定层板", 
+                "Stretcher": "拉条"
+            }
+            comp = comp_map.get(part.get("component", ""), part.get("component", ""))
+            cab_id = part.get("cab_id", "")
+            part_desc = f"{cab_id}-{ctype}-{comp}"
+
             cut_rows.append({
                 "板型": board_type if idx == 0 else "",
-                "板材尺寸": board_size if idx == 0 else "",
-                "板编号": board_id if idx == 0 else "",
                 "序号": idx + 1,
-                "零件编号": part["part_id"],
-                "切割长度(mm)": part["cut_length"],
-                "Height(mm)": part["Height"],
-                "Depth(mm)": part["Depth"],
+                "零件部位信息": part_desc,
+                "机器下刀长度(mm)": part["cut_length"],
+                "t2Height(mm)": part["Height"],
+                "t2Depth(mm)": part["Depth"],
                 "利用率": f"{utilization*100:.1f}%" if idx == 0 else "",
             })
 
@@ -101,19 +111,12 @@ def run(cut_result_path: str = None, audit_path: str = None,
     df_material = pd.DataFrame(material_rows)
 
     # ── 5. Sheet 3: 汇总信息 ─────────────
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    summary_rows = [
-        {"项目": "生成时间", "内容": now},
-        {"项目": "零件总数", "内容": summary.get("total_parts_required", 0)},
-        {"项目": "成功切出", "内容": summary.get("total_parts_placed", 0)},
-        {"项目": "用板总数", "内容": summary.get("boards_used", 0)},
-        {"项目": "整体利用率", "内容": f"{summary.get('overall_utilization', 0)*100:.1f}%"},
-        {"项目": "总废料(mm)", "内容": summary.get("total_waste", 0)},
-        {"项目": "修边设置(mm)", "内容": summary.get("config_trim_loss_mm", 5)},
-        {"项目": "锯缝设置(mm)", "内容": summary.get("config_saw_kerf_mm", 5)},
-        {"项目": "审核状态", "内容": audit_status if 'audit_status' in dir() else "未审核"},
-    ]
-    df_summary = pd.DataFrame(summary_rows)
+    from tools.cutting_optimizer import build_combined_summary
+    df_summary = build_combined_summary(data)
+    
+    # 增加一行审核状态显示
+    audit_df = pd.DataFrame([{"col_0": "审核状态", "col_1": audit_status if 'audit_status' in dir() else "未审核"}])
+    df_summary = pd.concat([audit_df, df_summary], ignore_index=True)
 
     # ── 6. 写入 Excel ──────────────────
     os.makedirs(output_dir, exist_ok=True)

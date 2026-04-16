@@ -151,6 +151,17 @@ def run(cut_result_path: str = None, inventory_path: str = None,
     out_path = os.path.join(output_dir, "inventory_check.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
+        
+    excel_path = os.path.join(output_dir, "inventory_check.xlsx")
+    df_status = pd.DataFrame(board_status)
+    df_status = df_status.rename(columns={
+        "board_type": "板材型号",
+        "current_qty": "原库存(张)",
+        "used_qty": "本次消耗(张)",
+        "remaining_qty": "剩余库存(张)",
+        "status": "状态"
+    })
+    df_status.to_excel(excel_path, index=False)
 
     icon = "❌" if has_shortage else ("⚠️" if low_stock_warnings else "✅")
     log.info(f"{icon} 库存检查完成: {'有缺料' if has_shortage else '无缺料'}")

@@ -1,173 +1,319 @@
 #!/usr/bin/env python3
 """
-Cabinet Panel Dimension Calculator
+Cabinet Panel Calculator v2 — Batch Order Processing
 
-根据输入的柜体宽(W)、深(D)、高(H)，计算各板件的尺寸。
+Reads an order Excel with columns:
+  Cabinet No., ABC Item, W", H", D", Qty, Type,
+  Adjustable Shelf Qty, Fixed Shelf Qty
 
-规则：
-- 板材厚度：18mm
-- 左右侧板包着顶底背板（最外层）
-- 背板包着顶底板（背板在顶底板后方，直接钉上）
-- 左右侧板靠后方各有一个3mm深的上下通槽，用于顶底板插入
-- 层板深度方向内缩20mm
+Outputs a parts list (parts.xlsx) with every individual board piece
+needed for all cabinets, ready for the cutting engine.
+
+Units: Input is inches, all internal calculations and output are in mm.
+Precision: 1 decimal place (× 25.4 conversion).
+
+Cabinet Types:
+  wall  — Wall cabinet  (吊柜): top+bottom, no stretchers
+  base  — Base cabinet  (地柜): bottom only, 2 stretchers, no top
+  tall  — Tall cabinet  (高柜): top+bottom, no stretchers
+
+Construction:
+  - Side panels wrap everything (outermost)
+  - Back panel wraps top/bottom (sits behind them)
+  - Back panel slides into 3mm grooves on each side panel → back panel width = W - 36 + 6 = W - 30
+  - Top/bottom sit between side panels → width = W - 36
+  - Top/bottom depth = D - 18 (back panel thickness)
 """
 
-# ─── 常量 ───────────────────────────────────────────────
-BOARD_THICKNESS = 18       # 板材厚度 (mm)
-GROOVE_DEPTH = 3           # 通槽深度 (mm)，每侧3mm，两侧共6mm
-SHELF_INSET = 20           # 层板前方内缩 (mm)
+import os
+import pandas as pd
+
+# ─── Constants (mm) ─────────────────────────────────────
+BOARD_THICKNESS = 18.0       # 板材厚度
+GROOVE_DEPTH = 3.0           # 通槽深度 (each side)
+SHELF_INSET = 20.0           # 活动层板前方内缩
+STRETCHER_DEPTH = 101.6      # 拉条深度 (4")
+INCHES_TO_MM = 25.4
+
+# ─── Default dimensions (mm) ────────────────────────────
+WALL_DEFAULT_DEPTH = 304.8      # 12"
+BASE_DEFAULT_DEPTH = 609.6      # 24"
+BASE_DEFAULT_HEIGHT = 876.3     # 34.5"
+TALL_DEFAULT_DEPTH = 609.6      # 24"
+TALL_DEFAULT_HEIGHT = 2387.6    # 94"
 
 
-def calculate_panels(width: int, depth: int, height: int, shelf_count: int) -> dict:
+def r1(val: float) -> float:
+    """Round to 1 decimal place."""
+    return round(val, 1)
+
+
+def detect_cabinet_type(abc_item: str) -> str:
     """
-    计算柜体各板件的尺寸。
-
-    Args:
-        width:  柜体宽度 W (mm)
-        depth:  柜体深度 D (mm)
-        height: 柜体高度 H (mm)
-        shelf_count: 层板数量
-
-    Returns:
-        包含各板件尺寸的字典
+    Auto-detect cabinet type from ABC Item code prefix.
+    W... = wall, B/SB/DB... = base, T/UT... = tall, default = wall.
+    Only used as fallback when Type column is missing.
     """
+    s = str(abc_item).strip().upper()
+    if s.startswith(("B", "SB", "DB", "?")):
+        return "base"
+    if s.startswith(("T", "UT")):
+        return "tall"
+    # W, WAC, RFW, etc. → default to wall
+    return "wall"
+
+
+def calculate_panels(
+    width_mm: float,
+    depth_mm: float,
+    height_mm: float,
+    cab_type: str,
+    adj_shelf: int,
+    fixed_shelf: int,
+    cab_id: str = "",
+) -> list[dict]:
+    """
+    Calculate all board pieces for a single cabinet.
+
+    Returns a list of dicts, each representing one piece type:
+      {part_id, component, length, width, qty, cab_type, cab_id}
+    """
+    W = width_mm
+    D = depth_mm
+    H = height_mm
     t = BOARD_THICKNESS
     g = GROOVE_DEPTH
 
-    # ── 左/右侧板（2片，尺寸相同）──
-    # 最外层，完整高度 × 完整深度
-    side_panel = {
-        "name": "左/右侧板",
-        "length": height,       # H
-        "width": depth,         # D
-        "qty": 2,
-        "note": f"H({height}) × D({depth})"
-    }
+    parts = []
 
-    # ── 顶/底板（2片，尺寸相同）──
-    # 长度：W - 18×2 + 6（被侧板包住，但插入两侧通槽各3mm）
-    # 深度：D - 18（背板在后方包着顶底板）
-    top_bottom_length = width - t * 2 + g * 2   # W - 30
-    top_bottom_depth = depth - t                  # D - 18
-    top_bottom_panel = {
-        "name": "顶/底板",
-        "length": top_bottom_length,
-        "width": top_bottom_depth,
+    # ── Side Panels (左右侧板) ── always 2
+    parts.append({
+        "component": "Side Panel",
+        "length": r1(H),
+        "width": r1(D),
         "qty": 2,
-        "note": f"W({width}) - 18×2 + 6 = {top_bottom_length}  ×  D({depth}) - 18 = {top_bottom_depth}"
-    }
+    })
 
-    # ── 背板（1片）──
-    # 宽度：W - 18×2（被侧板包住，不走通槽）
-    # 高度：H（背板包着顶底板，完整高度）
-    back_panel_width = width - t * 2              # W - 36
-    back_panel_height = height                     # H
-    back_panel = {
-        "name": "背板",
-        "length": back_panel_width,
-        "width": back_panel_height,
+    # ── Top Panel (顶板) ── wall & tall only
+    if cab_type in ("wall", "tall"):
+        parts.append({
+            "component": "Top Panel",
+            "length": r1(W - t * 2),           # W - 36
+            "width": r1(D - t),                 # D - 18
+            "qty": 1,
+        })
+
+    # ── Bottom Panel (底板) ── all types
+    parts.append({
+        "component": "Bottom Panel",
+        "length": r1(W - t * 2),               # W - 36
+        "width": r1(D - t),                     # D - 18
         "qty": 1,
-        "note": f"W({width}) - 18×2 = {back_panel_width}  ×  H({height})"
-    }
+    })
 
-    # ── 层板（N片）──
-    # 长度：W - 18×2（在侧板之间，不插通槽）
-    # 深度：D - 18 - 20（减背板厚度，再从前方内缩20mm）
-    shelf_length = width - t * 2                  # W - 36
-    shelf_depth = depth - t - SHELF_INSET          # D - 38
-    shelf_panel = {
-        "name": "层板",
-        "length": shelf_length,
-        "width": shelf_depth,
-        "qty": shelf_count,
-        "note": f"W({width}) - 36 = {shelf_length}  ×  D({depth}) - 18 - 20 = {shelf_depth}"
-    }
+    # ── Back Panel (背板) ── all types, +6mm for grooves
+    parts.append({
+        "component": "Back Panel",
+        "length": r1(W - t * 2 + g * 2),       # W - 30
+        "width": r1(H),
+        "qty": 1,
+    })
 
-    return {
-        "side": side_panel,
-        "top_bottom": top_bottom_panel,
-        "back": back_panel,
-        "shelf": shelf_panel,
-    }
+    # ── Stretcher Rails (拉条) ── base only, × 2
+    if cab_type == "base":
+        parts.append({
+            "component": "Stretcher",
+            "length": r1(W - t * 2),           # W - 36
+            "width": STRETCHER_DEPTH,            # 101.6
+            "qty": 2,
+        })
 
+    # ── Adjustable Shelves (活动层板) ── with 20mm inset
+    if adj_shelf > 0:
+        parts.append({
+            "component": "Adjustable Shelf",
+            "length": r1(W - t * 2),           # W - 36
+            "width": r1(D - t - SHELF_INSET),   # D - 38
+            "qty": adj_shelf,
+        })
 
-def print_results(width: int, depth: int, height: int, panels: dict):
-    """格式化输出计算结果"""
-    separator = "═" * 60
-    thin_sep = "─" * 60
+    # ── Fixed Shelves (固定层板) ── no inset
+    if fixed_shelf > 0:
+        parts.append({
+            "component": "Fixed Shelf",
+            "length": r1(W - t * 2),           # W - 36
+            "width": r1(D - t),                 # D - 18
+            "qty": fixed_shelf,
+        })
 
-    print(f"\n{separator}")
-    print(f"  柜体板件尺寸计算结果")
-    print(f"  柜体尺寸：宽(W)={width}mm  深(D)={depth}mm  高(H)={height}mm")
-    print(f"  板材厚度：{BOARD_THICKNESS}mm  |  通槽深度：{GROOVE_DEPTH}mm  |  层板内缩：{SHELF_INSET}mm")
-    print(separator)
+    # Tag each part with cabinet info
+    for p in parts:
+        p["cab_type"] = cab_type
+        p["cab_id"] = cab_id
 
-    for key, panel in panels.items():
-        print(f"\n  【{panel['name']}】 × {panel['qty']} 片")
-        print(f"    尺寸：{panel['length']} mm  ×  {panel['width']} mm")
-        print(f"    算法：{panel['note']}")
-        print(thin_sep)
-
-    print()
-
-
-def get_positive_int(prompt: str) -> int:
-    """获取正整数输入"""
-    while True:
-        try:
-            value = int(input(prompt))
-            if value <= 0:
-                print("  ⚠ 请输入大于0的数值！")
-                continue
-            return value
-        except ValueError:
-            print("  ⚠ 请输入有效的整数！")
+    return parts
 
 
-def get_non_negative_int(prompt: str) -> int:
-    """获取非负整数输入"""
-    while True:
-        try:
-            value = int(input(prompt))
-            if value < 0:
-                print("  ⚠ 请输入大于等于0的数值！")
-                continue
-            return value
-        except ValueError:
-            print("  ⚠ 请输入有效的整数！")
+def process_order(order_path: str, output_path: str = None) -> pd.DataFrame:
+    """
+    Read an order Excel, calculate all panels for every cabinet,
+    and output a flat parts list.
 
+    Args:
+        order_path: Path to the order .xlsx file.
+        output_path: Where to save parts.xlsx. If None, saves next to order file.
 
-def main():
-    print("\n" + "═" * 60)
-    print("  🏭 柜体板件尺寸计算器")
-    print("  所有数据单位均为 mm")
-    print("═" * 60)
+    Returns:
+        DataFrame with all parts.
+    """
+    df = pd.read_excel(order_path)
 
-    width = get_positive_int("\n  请输入柜体宽度 W (mm): ")
-    depth = get_positive_int("  请输入柜体深度 D (mm): ")
-    height = get_positive_int("  请输入柜体高度 H (mm): ")
-    shelf_count = get_non_negative_int("  请输入层板数量: ")
+    # Normalize column names (strip whitespace and newlines)
+    df.columns = [c.replace("\n", " ").strip() for c in df.columns]
 
-    panels = calculate_panels(width, depth, height, shelf_count)
-    print_results(width, depth, height, panels)
+    # Detect column names (flexible matching)
+    col_map = {}
+    for c in df.columns:
+        cl = c.lower().replace('"', '').replace("'", "").strip()
+        if cl in ("w", "w\""):
+            col_map["W"] = c
+        elif cl in ("h", "h\""):
+            col_map["H"] = c
+        elif cl in ("d", "d\""):
+            col_map["D"] = c
+        elif cl in ("qty",):
+            col_map["Qty"] = c
+        elif "adjustable" in cl and "shelf" in cl:
+            col_map["AdjShelf"] = c
+        elif "fixed" in cl and "shelf" in cl:
+            col_map["FixedShelf"] = c
+        elif cl == "type":
+            col_map["Type"] = c
+        elif cl in ("cabinet no.", "cabinet no", "no.", "no"):
+            col_map["CabNo"] = c
+        elif cl in ("abc item", "item"):
+            col_map["Item"] = c
 
-    # 询问是否继续计算
-    while True:
-        again = input("  是否继续计算下一个柜体？(y/n): ").strip().lower()
-        if again in ("y", "yes", "是"):
-            width = get_positive_int("\n  请输入柜体宽度 W (mm): ")
-            depth = get_positive_int("  请输入柜体深度 D (mm): ")
-            height = get_positive_int("  请输入柜体高度 H (mm): ")
-            shelf_count = get_non_negative_int("  请输入层板数量: ")
+    has_type_col = "Type" in col_map
 
-            panels = calculate_panels(width, depth, height, shelf_count)
-            print_results(width, depth, height, panels)
-        elif again in ("n", "no", "否"):
-            print("\n  bye\n")
-            break
+    all_parts = []
+
+    for idx, row in df.iterrows():
+        # ── Cabinet ID ──
+        cab_no = row.get(col_map.get("CabNo", ""), idx + 1)
+        item = str(row.get(col_map.get("Item", ""), "")).strip()
+        cab_id = item if item else f"C{cab_no}"
+
+        # ── Cabinet Type ──
+        if has_type_col:
+            cab_type = str(row[col_map["Type"]]).strip().lower()
         else:
-            print("  ⚠ 请输入 y 或 n")
+            cab_type = detect_cabinet_type(item)
+
+        if cab_type not in ("wall", "base", "tall"):
+            cab_type = "wall"  # safe fallback
+
+        # ── Dimensions (inches → mm) ──
+        W_in = float(row.get(col_map.get("W", ""), 0))
+        H_in = float(row.get(col_map.get("H", ""), 0))
+        D_in = float(row.get(col_map.get("D", ""), 0))
+
+        W_mm = r1(W_in * INCHES_TO_MM)
+        H_mm = r1(H_in * INCHES_TO_MM)
+        D_mm = r1(D_in * INCHES_TO_MM)
+
+        # Apply defaults if depth/height match known defaults
+        # (user can override via order data, these are just the standard sizes)
+
+        # ── Shelf counts ──
+        qty = int(row.get(col_map.get("Qty", ""), 1))
+        adj_shelf = int(row.get(col_map.get("AdjShelf", ""), 0))
+        fixed_shelf = int(row.get(col_map.get("FixedShelf", ""), 0))
+
+        # ── Calculate panels for this cabinet ──
+        panels = calculate_panels(
+            width_mm=W_mm,
+            depth_mm=D_mm,
+            height_mm=H_mm,
+            cab_type=cab_type,
+            adj_shelf=adj_shelf,
+            fixed_shelf=fixed_shelf,
+            cab_id=cab_id,
+        )
+
+        # Expand by cabinet Qty (e.g. if Qty=2, duplicate all panels)
+        for _ in range(qty):
+            all_parts.extend(panels)
+
+    # ── Build output DataFrame ──
+    records = []
+    part_counter = 1
+    for p in all_parts:
+        for _ in range(p["qty"]):
+            records.append({
+                "part_id": f"P{part_counter:04d}",
+                "cab_id": p["cab_id"],
+                "cab_type": p["cab_type"],
+                "component": p["component"],
+                "Height": p["length"],    # Length direction (along board)
+                "Depth": p["width"],      # Width direction
+                "qty": 1,
+            })
+            part_counter += 1
+
+    result_df = pd.DataFrame(records)
+
+    # ── Save output ──
+    if output_path is None:
+        base = os.path.splitext(order_path)[0]
+        output_path = f"{base}_parts.xlsx"
+
+    result_df.to_excel(output_path, index=False)
+
+    # ── Summary ──
+    print(f"\n{'═' * 60}")
+    print(f"  🏭 Cabinet Calculator v2 — Order Processed")
+    print(f"{'═' * 60}")
+    print(f"  Input:  {order_path}")
+    print(f"  Output: {output_path}")
+    print(f"{'─' * 60}")
+    print(f"  Cabinets: {len(df)} types")
+    print(f"  Total parts generated: {len(result_df)}")
+    print(f"{'─' * 60}")
+
+    # Per-type summary
+    for ctype in ("wall", "base", "tall"):
+        count = len(df[df[col_map.get("Type", "___")].astype(str).str.lower() == ctype]) if has_type_col else 0
+        if count > 0 or not has_type_col:
+            type_parts = result_df[result_df["cab_type"] == ctype]
+            if len(type_parts) > 0:
+                print(f"  {ctype.upper():5s}: {len(type_parts)} pieces")
+
+    # Component breakdown
+    print(f"{'─' * 60}")
+    for comp, group in result_df.groupby("component"):
+        print(f"  {comp:20s}: {len(group):4d} pcs")
+
+    print(f"{'═' * 60}\n")
+
+    return result_df
 
 
+# ─── CLI Entry Point ────────────────────────────────────
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if len(sys.argv) > 1:
+        order_file = sys.argv[1]
+    else:
+        order_file = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "test_order.xlsx"
+        )
+
+    if len(sys.argv) > 2:
+        out_file = sys.argv[2]
+    else:
+        out_file = None
+
+    process_order(order_file, out_file)

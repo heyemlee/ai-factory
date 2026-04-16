@@ -5,10 +5,9 @@ import Link from "next/link";
 import { AlertCircle } from "lucide-react";
 
 const inventoryData = [
-  { name: '18mm White Melamine', stock: 125, threshold: 50 },
-  { name: '18mm Wood Grain', stock: 35, threshold: 50 },
-  { name: '9mm Back Panel', stock: 210, threshold: 100 },
-  { name: '18mm Oak', stock: 85, threshold: 50 },
+  { name: 'T0 Full Sheet (1219×2438)', stock: 50, threshold: 10 },
+  { name: 'T1 Wall 305×2438', stock: 100, threshold: 30 },
+  { name: 'T1 Base 610×2438', stock: 100, threshold: 30 },
 ];
 
 export default function Home() {

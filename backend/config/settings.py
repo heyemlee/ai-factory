@@ -68,32 +68,13 @@ def generate_job_id(order_filename: str = "") -> str:
     now = datetime.now()
     date_str = now.strftime("%Y-%m-%d")
     
-    if order_filename:
-        name = Path(order_filename).stem
-        # 去除所有已有的 Unix 时间戳或日期前缀，避免重复叠加
-        import re
-        while True:
-            new_name = re.sub(r'^\d{4}-\d{2}-\d{2}(_\d{6})?_', '', name)
-            new_name = re.sub(r'^\d{10}_', '', new_name)
-            if new_name == name:
-                break
-            name = new_name
-            
-        base_id = f"{date_str}_{name}"
-    else:
-        base_id = f"{date_str}_manual"
-    
-    # 检查该日期是否已有同名 job_id，如果有则加序号
-    job_dir = OUTPUT_DIR / base_id
+    # 输出目录名强制为 年-月-日_1, 年-月-日_2
     count = 1
-    while job_dir.exists():
-        suffix = f"_{count}"
-        job_dir = OUTPUT_DIR / f"{date_str}{suffix}" / base_id if count > 1 else job_dir
+    while True:
+        job_id = f"{date_str}_{count}"
+        if not (OUTPUT_DIR / job_id).exists():
+            return job_id
         count += 1
-    
-    if count > 1:
-        return f"{date_str}{count}_{name}"
-    return base_id
 
 
 def get_job_output_dir(job_id: str) -> Path:
