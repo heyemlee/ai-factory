@@ -30,9 +30,15 @@
   - Modify `/orders` drag-drop upload to store Excel into Supabase Storage and mark item as `Pending` in DB.
 - [ ] 3. **Refactor OpenClaw Core Scripts**:
   - Unify `cut_result.xlsx` and `worker_order.xlsx` down to one smart file (English naming).
+  - Guarantee "Guillotine Cutting (一直线切断)" logic in Engine: Ensure the generated JSON output dictates strict edge-to-edge panel saw straight cuts, with exact kerf/trim data.
+
 - [ ] 4. **Connect Local OpenClaw to Supabase**:
   - Create a Supabase listener/poller in `workflow_controller.py` to auto-fetch new `Pending` orders from Cloud.
-  - Modify `engine_agent.py`: Hook `load_inventory()` to pull cutting bounds and available stock directly from Supabase instead of local dict.
+  - Modify `engine_agent.py`: Hook `load_inventory()` to pull cutting bounds (1220x2440) and available stock directly from Supabase.
   - On pipeline completion: Push actual JSON dimensions, cut metrics, and `.xlsx` back up to Supabase to turn order `Completed`.
-- [ ] 5. **E2E Validation**:
-  - Run full cycle: *User hits "Upload" on Vercel -> OpenClaw factory PC kicks in -> OpenClaw updates DB -> Vercel UI turns green & shows Cutting Map.*
+
+- [ ] 5. **Frontend Precise Detail View (View Layout Enhancement)**:
+  - Inside `/order/[id]`, connect the "Details" tab to render a precise data table of every block's coordinates, size (WxH), and saw kerf loss, prioritizing raw data accuracy over just the 2D layout.
+
+- [ ] 6. **E2E Validation**:
+  - Run full cycle: *User hits "Upload" on Vercel -> OpenClaw factory PC kicks in -> OpenClaw updates DB -> Vercel UI turns green & shows accurate straight-cut 2D map + Detailed precise spec tables.*
