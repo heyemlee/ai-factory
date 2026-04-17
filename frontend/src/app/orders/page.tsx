@@ -1,11 +1,101 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { UploadCloud, PieChart } from "lucide-react";
 import Link from "next/link";
+import { supabase } from "@/lib/supabase";
+
+interface Order {
+  id: string;
+  job_id: string;
+  filename: string | null;
+  status: string;
+  cabinets_summary: string | null;
+  utilization: number | null;
+  boards_used: number | null;
+  total_parts: number | null;
+  created_at: string;
+}
 
 export default function Orders() {
   const [isDragging, setIsDragging] = useState(false);
-  
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+
+  const fetchOrders = useCallback(async () => {
+    const { data } = await supabase
+      .from("orders")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (data) setOrders(data as Order[]);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchOrders();
+  }, [fetchOrders]);
+
+  // Calculate overall utilization from completed orders
+  const completedOrders = orders.filter(o => o.status === "completed" && o.utilization);
+  const overallUtil = completedOrders.length > 0
+    ? (completedOrders.reduce((sum, o) => sum + (o.utilization || 0), 0) / completedOrders.length * 100).toFixed(1)
+    : "—";
+
+  const handleFileDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) await uploadFile(file);
+  };
+
+  const handleFileSelect = async () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".xlsx,.xls";
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) await uploadFile(file);
+    };
+    input.click();
+  };
+
+  const uploadFile = async (file: File) => {
+    setUploading(true);
+    const now = new Date();
+    const jobId = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}`;
+    const storagePath = `orders/${jobId}_${file.name}`;
+
+    // Upload to Supabase Storage
+    const { error: uploadError } = await supabase.storage
+      .from("order-files")
+      .upload(storagePath, file);
+
+    if (uploadError) {
+      // Storage bucket might not exist — create a row anyway
+      console.warn("Storage upload failed (bucket may not exist):", uploadError.message);
+    }
+
+    const fileUrl = uploadError ? null :
+      supabase.storage.from("order-files").getPublicUrl(storagePath).data.publicUrl;
+
+    // Insert order row
+    const { error: insertError } = await supabase
+      .from("orders")
+      .insert({
+        job_id: jobId,
+        filename: file.name,
+        status: "pending",
+        file_url: fileUrl,
+      });
+
+    if (insertError) {
+      alert(`Error creating order: ${insertError.message}`);
+    } else {
+      await fetchOrders();
+    }
+    setUploading(false);
+  };
+
   return (
     <div className="w-full space-y-10 py-4">
       <div className="flex items-center justify-between">
@@ -18,8 +108,8 @@ export default function Orders() {
             <PieChart size={24} />
           </div>
           <div>
-            <p className="text-[13px] font-medium text-apple-gray">Overall Utilization</p>
-            <p className="text-[28px] font-bold text-foreground">94.2%</p>
+            <p className="text-[13px] font-medium text-apple-gray">Avg Utilization</p>
+            <p className="text-[28px] font-bold text-foreground">{overallUtil}{overallUtil !== "—" ? "%" : ""}</p>
           </div>
         </div>
       </div>
@@ -28,23 +118,29 @@ export default function Orders() {
         <div className="lg:col-span-1">
           <div className="bg-card rounded-2xl p-8 shadow-apple h-full flex flex-col">
             <h2 className="text-xl font-semibold mb-6">New Order</h2>
-            
-            <div 
+
+            <div
               className={`flex-1 border-2 border-dashed rounded-xl flex flex-col items-center justify-center p-8 transition-colors duration-200 ${
-                isDragging 
-                  ? "border-apple-blue bg-apple-blue/5" 
+                isDragging
+                  ? "border-apple-blue bg-apple-blue/5"
                   : "border-border bg-black/[0.02]"
               }`}
               onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
               onDragLeave={() => setIsDragging(false)}
-              onDrop={(e) => { e.preventDefault(); setIsDragging(false); }}
+              onDrop={handleFileDrop}
             >
               <UploadCloud size={40} className={isDragging ? "text-apple-blue mb-4" : "text-apple-gray mb-4"} />
-              <h3 className="text-[15px] font-semibold mb-1">Upload File</h3>
+              <h3 className="text-[15px] font-semibold mb-1">
+                {uploading ? "Uploading..." : "Upload File"}
+              </h3>
               <p className="text-[13px] text-apple-gray text-center mb-6">
                 .xlsx format supported
               </p>
-              <button className="bg-apple-blue text-white px-6 py-2 rounded-full text-[14px] font-medium hover:bg-apple-blue/90 shadow-sm transition-colors">
+              <button
+                onClick={handleFileSelect}
+                disabled={uploading}
+                className="bg-apple-blue text-white px-6 py-2 rounded-full text-[14px] font-medium hover:bg-apple-blue/90 shadow-sm transition-colors disabled:opacity-50"
+              >
                 Browse Files
               </button>
             </div>
@@ -56,8 +152,13 @@ export default function Orders() {
             <div className="px-8 py-6 border-b border-border">
               <h2 className="text-xl font-semibold">Order History</h2>
             </div>
-            
+
             <div className="overflow-x-auto">
+              {loading ? (
+                <div className="flex items-center justify-center h-32 text-apple-gray text-[15px]">Loading...</div>
+              ) : orders.length === 0 ? (
+                <div className="flex items-center justify-center h-32 text-apple-gray text-[15px]">No orders yet. Upload your first order above.</div>
+              ) : (
               <table className="w-full text-left">
                 <thead>
                   <tr className="bg-black/[0.02]">
@@ -70,12 +171,12 @@ export default function Orders() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  <OrderRow id="2026-04-16_batch" status="Completed" yieldRate="86.9%" cabinets="13 (10W/2B/1T)" boards="49" />
-                  <OrderRow id="2026-04-15_02" status="Processing" yieldRate="—" cabinets="8 (6W/2B)" boards="—" />
-                  <OrderRow id="2026-04-14_01" status="Completed" yieldRate="91.3%" cabinets="6 (4W/2B)" boards="22" />
-                  <OrderRow id="2026-04-13_03" status="Failed" yieldRate="—" cabinets="4" boards="—" />
+                  {orders.map(order => (
+                    <OrderRow key={order.id} order={order} />
+                  ))}
                 </tbody>
               </table>
+              )}
             </div>
           </div>
         </div>
@@ -84,33 +185,37 @@ export default function Orders() {
   );
 }
 
-function OrderRow({ id, status, yieldRate, cabinets, boards }: { id: string, status: string, yieldRate: string, cabinets: string, boards: string }) {
-  const isCompleted = status === "Completed";
-  const isFailed = status === "Failed";
-  
+function OrderRow({ order }: { order: Order }) {
+  const isCompleted = order.status === "completed";
+  const isFailed = order.status === "failed";
+  const utilStr = order.utilization ? `${(order.utilization * 100).toFixed(1)}%` : "—";
+  const boardsStr = order.boards_used ? String(order.boards_used) : "—";
+  const cabStr = order.cabinets_summary || "—";
+
   return (
     <tr className="hover:bg-black/[0.01] transition-colors">
       <td className="py-4 px-8 text-[15px] font-medium text-foreground">
-        <Link href={`/order/${id}`} className="hover:text-apple-blue transition-colors">
-          {id}
+        <Link href={`/order/${order.job_id}`} className="hover:text-apple-blue transition-colors">
+          {order.job_id}
         </Link>
       </td>
-      <td className="py-4 px-8 text-[14px] text-apple-gray">{cabinets}</td>
-      <td className="py-4 px-8 text-[14px] text-foreground font-medium">{boards}</td>
+      <td className="py-4 px-8 text-[14px] text-apple-gray">{cabStr}</td>
+      <td className="py-4 px-8 text-[14px] text-foreground font-medium">{boardsStr}</td>
       <td className="py-4 px-8">
         <span className={`inline-flex items-center text-[14px] font-medium ${
           isCompleted ? "text-apple-green" : isFailed ? "text-apple-red" : "text-apple-blue"
         }`}>
-          {status === "Processing" && <span className="w-1.5 h-1.5 rounded-full bg-apple-blue animate-pulse mr-2"></span>}
-          {status}
+          {order.status === "processing" && <span className="w-1.5 h-1.5 rounded-full bg-apple-blue animate-pulse mr-2"></span>}
+          {order.status === "pending" && <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse mr-2"></span>}
+          {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
         </span>
       </td>
-      <td className="py-4 px-8 text-[15px] font-medium text-foreground">{yieldRate}</td>
+      <td className="py-4 px-8 text-[15px] font-medium text-foreground">{utilStr}</td>
       <td className="py-4 px-8 text-right">
         {isCompleted ? (
-          <Link href={`/order/${id}`} className="text-apple-blue text-[14px] font-medium hover:underline px-3 py-1 bg-apple-blue/5 rounded-lg">View Layout</Link>
+          <Link href={`/order/${order.job_id}`} className="text-apple-blue text-[14px] font-medium hover:underline px-3 py-1 bg-apple-blue/5 rounded-lg">View Layout</Link>
         ) : (
-          <span className="text-apple-gray text-[14px]">Pending</span>
+          <span className="text-apple-gray text-[14px]">{order.status === "pending" ? "Pending" : order.status === "processing" ? "In Progress" : "—"}</span>
         )}
       </td>
     </tr>

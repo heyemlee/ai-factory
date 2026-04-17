@@ -1,16 +1,42 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from "recharts";
 import Link from "next/link";
 import { AlertCircle } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
-const inventoryData = [
-  { name: 'T0 Full Sheet (1219×2438)', stock: 50, threshold: 10 },
-  { name: 'T1 Wall 305×2438', stock: 100, threshold: 30 },
-  { name: 'T1 Base 610×2438', stock: 100, threshold: 30 },
-];
+interface InvItem {
+  name: string;
+  stock: number;
+  threshold: number;
+}
 
 export default function Home() {
+  const [inventoryData, setInventoryData] = useState<InvItem[]>([]);
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    // Fetch main materials for chart
+    supabase
+      .from("inventory")
+      .select("name, stock, threshold")
+      .eq("category", "main")
+      .order("id")
+      .then(({ data }) => {
+        if (data) setInventoryData(data as InvItem[]);
+      });
+
+    // Fetch pending order count
+    supabase
+      .from("orders")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "pending")
+      .then(({ count }) => {
+        setPendingCount(count || 0);
+      });
+  }, []);
+
   const lowStockCount = inventoryData.filter(item => item.stock < item.threshold).length;
 
   return (
@@ -21,9 +47,9 @@ export default function Home() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        <MetricCard title="Active Orders Processing" value="12" trend="Steady" positive />
-        <MetricCard title="Boards Consumed (7d)" value="3,450" trend="-1.2%" positive={false} />
-        <MetricCard title="AI Pipeline Speed" value="1.2s" trend="-0.3s" positive />
+        <MetricCard title="Pending Orders" value={String(pendingCount)} trend="Queue" positive />
+        <MetricCard title="Board Types in Stock" value={String(inventoryData.length)} trend="Main materials" positive />
+        <MetricCard title="Low Stock Alerts" value={String(lowStockCount)} trend={lowStockCount > 0 ? "Action needed" : "All good"} positive={lowStockCount === 0} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -44,25 +70,29 @@ export default function Home() {
             </Link>
           </div>
           <div className="h-[300px] w-full">
+            {inventoryData.length > 0 ? (
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={inventoryData} margin={{ top: 10, right: 0, left: -20, bottom: 0 }} barSize={40}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e5ea" />
                 <XAxis dataKey="name" stroke="#86868b" fontSize={13} tickLine={false} axisLine={false} dy={10} />
                 <YAxis stroke="#86868b" fontSize={13} tickLine={false} axisLine={false} />
-                <Tooltip 
-                  cursor={{ fill: 'rgba(0,0,0,0.02)' }} 
-                  contentStyle={{ border: 'none', borderRadius: '12px', boxShadow: '0 4px 24px rgba(0,0,0,0.08)' }} 
+                <Tooltip
+                  cursor={{ fill: 'rgba(0,0,0,0.02)' }}
+                  contentStyle={{ border: 'none', borderRadius: '12px', boxShadow: '0 4px 24px rgba(0,0,0,0.08)' }}
                 />
                 <Bar dataKey="stock" radius={[6, 6, 0, 0]}>
                   {inventoryData.map((entry, index) => (
-                    <Cell 
-                      key={`cell-${index}`} 
-                      fill={entry.stock < entry.threshold ? '#ff3b30' : '#0071e3'} 
+                    <Cell
+                      key={`cell-${index}`}
+                      fill={entry.stock < entry.threshold ? '#ff3b30' : '#0071e3'}
                     />
                   ))}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full text-apple-gray text-[15px]">Loading inventory data...</div>
+            )}
           </div>
         </div>
 
@@ -97,7 +127,6 @@ function MetricCard({ title, value, trend, positive }: { title: string, value: s
       <h3 className="text-[34px] font-bold tracking-tight mt-2 text-foreground">{value}</h3>
       <div className="mt-2 text-[14px] font-medium">
         <span className={positive ? "text-apple-green" : "text-apple-red"}>{trend}</span>
-        <span className="text-apple-gray ml-2">from last week</span>
       </div>
     </div>
   );

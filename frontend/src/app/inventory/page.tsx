@@ -1,42 +1,32 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Search, Edit2, Save, X } from "lucide-react";
 import clsx from "clsx";
+import { supabase } from "@/lib/supabase";
 
 type ItemCategory = "main" | "sub" | "aux";
 
 interface InventoryItem {
-  id: string;
+  id: number;
+  board_type: string;
   name: string;
   material: string;
+  category: string;
   thickness: number;
-  width: number;
-  length: number;
+  depth: number;
+  height: number;
   stock: number;
   threshold: number;
   unit: string;
 }
 
-const initialData: Record<ItemCategory, InventoryItem[]> = {
-  main: [
-    { id: "T0", name: "T0 Full Sheet", material: "MDF", thickness: 18, width: 1219.2, length: 2438.4, stock: 50, threshold: 10, unit: "pcs" },
-    { id: "T1-305", name: "T1 Wall Stock (12\")", material: "MDF", thickness: 18, width: 304.8, length: 2438.4, stock: 100, threshold: 30, unit: "pcs" },
-    { id: "T1-610", name: "T1 Base/Tall Stock (24\")", material: "MDF", thickness: 18, width: 609.6, length: 2438.4, stock: 100, threshold: 30, unit: "pcs" },
-  ],
-  sub: [
-    { id: "S001", name: "Edge Banding 1mm White", material: "PVC", thickness: 1, width: 22, length: 100000, stock: 12, threshold: 20, unit: "rolls" },
-  ],
-  aux: [
-    { id: "A001", name: "Soft Close Hinge", material: "Steel", thickness: 0, width: 0, length: 0, stock: 1250, threshold: 500, unit: "pcs" },
-  ]
-};
-
 export default function Inventory() {
   const [activeTab, setActiveTab] = useState<ItemCategory>("main");
   const [searchQuery, setSearchQuery] = useState("");
-  const [inventory, setInventory] = useState(initialData);
+  const [items, setItems] = useState<InventoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<Partial<InventoryItem>>({});
 
   const tabs = [
@@ -45,9 +35,27 @@ export default function Inventory() {
     { id: "aux", label: "Auxiliary" },
   ] as const;
 
-  const currentItems = inventory[activeTab].filter(item => 
-    item.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    item.id.toLowerCase().includes(searchQuery.toLowerCase())
+  // Fetch inventory from Supabase
+  useEffect(() => {
+    fetchInventory();
+  }, [activeTab]);
+
+  async function fetchInventory() {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("inventory")
+      .select("*")
+      .eq("category", activeTab)
+      .order("id");
+    if (!error && data) {
+      setItems(data as InventoryItem[]);
+    }
+    setLoading(false);
+  }
+
+  const currentItems = items.filter(item =>
+    item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    item.board_type.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const startEdit = (item: InventoryItem) => {
@@ -60,13 +68,27 @@ export default function Inventory() {
     setEditForm({});
   };
 
-  const saveEdit = (id: string) => {
-    setInventory(prev => ({
-      ...prev,
-      [activeTab]: prev[activeTab].map(item => 
-        item.id === id ? { ...item, ...editForm } as InventoryItem : item
-      )
-    }));
+  const saveEdit = async (id: number) => {
+    const { error } = await supabase
+      .from("inventory")
+      .update({
+        name: editForm.name,
+        material: editForm.material,
+        height: editForm.height,
+        depth: editForm.depth,
+        thickness: editForm.thickness,
+        stock: editForm.stock,
+        threshold: editForm.threshold,
+      })
+      .eq("id", id);
+
+    if (!error) {
+      setItems(prev =>
+        prev.map(item =>
+          item.id === id ? { ...item, ...editForm } as InventoryItem : item
+        )
+      );
+    }
     setEditingId(null);
   };
 
@@ -92,8 +114,8 @@ export default function Inventory() {
                 onClick={() => setActiveTab(tab.id)}
                 className={clsx(
                   "px-6 py-2 rounded-lg text-[14px] font-medium transition-all flex-1 sm:flex-none",
-                  activeTab === tab.id 
-                    ? "bg-white text-foreground shadow-sm" 
+                  activeTab === tab.id
+                    ? "bg-white text-foreground shadow-sm"
                     : "text-apple-gray hover:text-foreground"
                 )}
               >
@@ -104,9 +126,9 @@ export default function Inventory() {
 
           <div className="relative w-full sm:w-72">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-apple-gray" />
-            <input 
-              type="text" 
-              placeholder="Search..." 
+            <input
+              type="text"
+              placeholder="Search..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-black/[0.04] rounded-xl pl-9 pr-4 py-2 text-[14px] focus:outline-none focus:bg-white focus:shadow-apple focus:ring-1 focus:ring-apple-blue/30 transition-all text-foreground placeholder:text-apple-gray"
@@ -116,6 +138,9 @@ export default function Inventory() {
 
         {/* Clean Table View */}
         <div className="flex-1 overflow-auto p-2">
+          {loading ? (
+            <div className="flex items-center justify-center h-32 text-apple-gray text-[15px]">Loading...</div>
+          ) : (
           <table className="w-full text-left min-w-[900px]">
             <thead className="sticky top-0 bg-card z-10">
               <tr>
@@ -132,14 +157,14 @@ export default function Inventory() {
             <tbody className="divide-y divide-border">
               {currentItems.map(item => {
                 const isEditing = editingId === item.id;
-                
+
                 return (
                   <tr key={item.id} className={clsx("transition-colors", isEditing ? "bg-apple-blue/5" : "hover:bg-black/[0.01]")}>
-                    <td className="py-4 px-6 text-[14px] text-apple-gray">{item.id}</td>
-                    
+                    <td className="py-4 px-6 text-[14px] text-apple-gray">{item.board_type}</td>
+
                     <td className="py-4 px-6">
                       {isEditing ? (
-                        <input 
+                        <input
                           className="bg-white border border-border rounded-lg px-3 py-1.5 text-[14px] w-full focus:outline-none focus:border-apple-blue"
                           value={editForm.name || ""}
                           onChange={e => setEditForm({...editForm, name: e.target.value})}
@@ -156,14 +181,14 @@ export default function Inventory() {
                       <td className="py-4 px-6 text-[15px] text-foreground">
                         {isEditing ? (
                           <div className="flex items-center gap-2">
-                            <input type="number" className="bg-white border border-border rounded-lg px-2 py-1.5 text-[14px] w-16 focus:outline-none focus:border-apple-blue text-center" value={editForm.length || 0} onChange={e => setEditForm({...editForm, length: Number(e.target.value)})} />
+                            <input type="number" className="bg-white border border-border rounded-lg px-2 py-1.5 text-[14px] w-20 focus:outline-none focus:border-apple-blue text-center" value={editForm.height || 0} onChange={e => setEditForm({...editForm, height: Number(e.target.value)})} />
                             <span className="text-apple-gray">×</span>
-                            <input type="number" className="bg-white border border-border rounded-lg px-2 py-1.5 text-[14px] w-16 focus:outline-none focus:border-apple-blue text-center" value={editForm.width || 0} onChange={e => setEditForm({...editForm, width: Number(e.target.value)})} />
+                            <input type="number" className="bg-white border border-border rounded-lg px-2 py-1.5 text-[14px] w-20 focus:outline-none focus:border-apple-blue text-center" value={editForm.depth || 0} onChange={e => setEditForm({...editForm, depth: Number(e.target.value)})} />
                             <span className="text-apple-gray">×</span>
                             <input type="number" className="bg-white border border-border rounded-lg px-2 py-1.5 text-[14px] w-16 focus:outline-none focus:border-apple-blue text-center" value={editForm.thickness || 0} onChange={e => setEditForm({...editForm, thickness: Number(e.target.value)})} />
                           </div>
                         ) : (
-                          `${item.length} × ${item.width} × ${item.thickness} mm`
+                          `${item.depth} × ${item.height} × ${item.thickness} mm`
                         )}
                       </td>
                     )}
@@ -171,8 +196,8 @@ export default function Inventory() {
                     <td className="py-4 px-6">
                       {isEditing ? (
                         <div className="flex items-center gap-2">
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             className="bg-white border border-apple-blue rounded-lg px-3 py-1.5 text-[14px] w-20 text-foreground font-semibold focus:outline-none"
                             value={editForm.stock || 0}
                             onChange={e => setEditForm({...editForm, stock: Number(e.target.value)})}
@@ -190,8 +215,8 @@ export default function Inventory() {
                     <td className="py-4 px-6">
                       {isEditing ? (
                         <div className="flex items-center gap-2">
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             className="bg-white border border-border rounded-lg px-3 py-1.5 text-[14px] w-20 text-foreground focus:outline-none focus:border-apple-blue"
                             value={editForm.threshold || 0}
                             onChange={e => setEditForm({...editForm, threshold: Number(e.target.value)})}
@@ -228,6 +253,7 @@ export default function Inventory() {
               })}
             </tbody>
           </table>
+          )}
         </div>
       </div>
     </div>

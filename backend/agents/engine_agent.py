@@ -94,9 +94,49 @@ def load_parts(path: str):
     print(f"📦 Loaded parts: {len(parts)} pieces ({len(df)} rows × qty)")
     return parts, skipped
 
+def load_inventory_from_supabase():
+    """Load inventory from Supabase cloud database (main materials only)."""
+    try:
+        from config.supabase_client import supabase
+        result = supabase.table("inventory").select("*").eq("category", "main").execute()
 
-def load_inventory(path: str):
-    """Read t1_inventory.xlsx."""
+        if not result.data:
+            print("⚠️  Supabase inventory is empty")
+            return None
+
+        boards = {}
+        for row in result.data:
+            bt = row["board_type"]
+            boards[bt] = {
+                "board_type": bt,
+                "Height": float(row["height"]),
+                "Depth": float(row["depth"]),
+                "qty": int(row["stock"]),
+            }
+
+        print(f"☁️  Inventory from Supabase: {len(boards)} board types")
+        for bt, info in sorted(boards.items(), key=lambda x: x[1]["Depth"]):
+            print(f"    {bt}: {info['Depth']} × {info['Height']} mm, qty={info['qty']}")
+        return boards
+
+    except Exception as e:
+        print(f"⚠️  Supabase unavailable ({e}), falling back to local Excel")
+        return None
+
+
+def load_inventory(path: str = None):
+    """
+    Load inventory: try Supabase first, fall back to local Excel.
+    """
+    # Try Supabase first
+    boards = load_inventory_from_supabase()
+    if boards:
+        return boards
+
+    # Fallback to local Excel
+    if path is None:
+        raise RuntimeError("No inventory source available (Supabase down, no local file)")
+
     df = pd.read_excel(path)
 
     required = {"board_type", "Height", "Depth", "qty"}
@@ -114,10 +154,34 @@ def load_inventory(path: str):
             "qty": int(row["qty"]),
         }
 
-    print(f"📋 Inventory: {len(boards)} board types")
+    print(f"📋 Inventory (local): {len(boards)} board types")
     for bt, info in sorted(boards.items(), key=lambda x: x[1]["Depth"]):
         print(f"    {bt}: {info['Depth']} × {info['Height']} mm, qty={info['qty']}")
     return boards
+
+
+def deduct_inventory_supabase(board_results: list):
+    """After cutting, deduct used board quantities from Supabase inventory."""
+    try:
+        from config.supabase_client import supabase
+
+        # Count how many of each board_type were used
+        usage = {}
+        for br in board_results:
+            bt = br["board"]
+            usage[bt] = usage.get(bt, 0) + 1
+
+        for bt, used in usage.items():
+            # Get current stock
+            result = supabase.table("inventory").select("stock").eq("board_type", bt).execute()
+            if result.data:
+                current = result.data[0]["stock"]
+                new_stock = max(0, current - used)
+                supabase.table("inventory").update({"stock": new_stock}).eq("board_type", bt).execute()
+                print(f"  📉 {bt}: {current} → {new_stock} ({used} used)")
+
+    except Exception as e:
+        print(f"⚠️  Could not deduct inventory from Supabase: {e}")
 
 
 # ─────────────────────────────────────────────

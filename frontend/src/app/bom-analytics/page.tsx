@@ -1,27 +1,54 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-
-const materialUsage = [
-  { name: '18mm MDF', value: 450, cost: 12500 },
-  { name: '18mm Plywood', value: 300, cost: 15000 },
-  { name: '9mm Back Panel', value: 350, cost: 5250 },
-  { name: 'Edge Banding', value: 120, cost: 850 },
-];
+import { supabase } from "@/lib/supabase";
 
 const COLORS = ['#0071e3', '#34c759', '#ff9500', '#5ac8fa'];
 
-const dailyCost = [
-  { date: '04-08', value: 3200 },
-  { date: '04-09', value: 4100 },
-  { date: '04-10', value: 2900 },
-  { date: '04-11', value: 5500 },
-  { date: '04-12', value: 4800 },
-  { date: '04-13', value: 3700 },
-  { date: '04-14', value: 4200 },
-];
+interface BomRecord {
+  job_id: string;
+  boards_used: number;
+  total_parts: number;
+  overall_utilization: number;
+  total_waste_mm: number;
+  total_cost: number;
+  created_at: string;
+}
 
 export default function BOMAnalytics() {
+  const [bomData, setBomData] = useState<BomRecord[]>([]);
+  const [invUsage, setInvUsage] = useState<{name: string; value: number}[]>([]);
+
+  useEffect(() => {
+    supabase
+      .from("bom_history")
+      .select("*")
+      .order("created_at", { ascending: true })
+      .then(({ data }) => {
+        if (data) setBomData(data as BomRecord[]);
+      });
+
+    // Material volume from inventory stock
+    supabase
+      .from("inventory")
+      .select("name, stock")
+      .eq("category", "main")
+      .then(({ data }) => {
+        if (data) setInvUsage(data.map(d => ({ name: d.name, value: d.stock })));
+      });
+  }, []);
+
+  const totalCost = bomData.reduce((s, b) => s + (b.total_cost || 0), 0);
+  const avgWaste = bomData.length > 0
+    ? bomData.reduce((s, b) => s + (1 - (b.overall_utilization || 0)), 0) / bomData.length * 100
+    : 0;
+
+  const dailyCost = bomData.map(b => ({
+    date: b.job_id.slice(5, 10),
+    value: b.total_cost || 0,
+  }));
+
   return (
     <div className="w-full space-y-10 py-4">
       <div>
@@ -34,7 +61,7 @@ export default function BOMAnalytics() {
         <div className="bg-card rounded-2xl p-8 shadow-apple hover:shadow-apple-hover">
           <p className="text-[15px] font-medium text-apple-gray">Total Cost (MTD)</p>
           <div className="mt-2">
-            <h3 className="text-[34px] font-bold tracking-tight text-foreground">$ 84,250.00</h3>
+            <h3 className="text-[34px] font-bold tracking-tight text-foreground">$ {totalCost.toLocaleString()}</h3>
             <p className="text-[14px] text-apple-green font-medium mt-1">12.5% below average</p>
           </div>
         </div>
@@ -42,7 +69,7 @@ export default function BOMAnalytics() {
         <div className="bg-card rounded-2xl p-8 shadow-apple hover:shadow-apple-hover">
           <p className="text-[15px] font-medium text-apple-gray">Average Waste Rate</p>
           <div className="mt-2">
-            <h3 className="text-[34px] font-bold tracking-tight text-foreground">4.2%</h3>
+            <h3 className="text-[34px] font-bold tracking-tight text-foreground">{avgWaste.toFixed(1)}%</h3>
             <p className="text-[14px] text-apple-green font-medium mt-1">Optimized +0.8%</p>
           </div>
         </div>
@@ -67,7 +94,7 @@ export default function BOMAnalytics() {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
-                  data={materialUsage}
+                  data={invUsage}
                   cx="50%"
                   cy="50%"
                   innerRadius={80}
@@ -77,7 +104,7 @@ export default function BOMAnalytics() {
                   stroke="none"
                   cornerRadius={4}
                 >
-                  {materialUsage.map((entry, index) => (
+                  {invUsage.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
@@ -86,7 +113,7 @@ export default function BOMAnalytics() {
             </ResponsiveContainer>
           </div>
           <div className="flex justify-center flex-wrap gap-4 mt-4">
-            {materialUsage.map((entry, idx) => (
+            {invUsage.map((entry, idx) => (
               <div key={idx} className="flex items-center gap-2">
                 <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }}></div>
                 <span className="text-[13px] text-apple-gray">{entry.name}</span>
