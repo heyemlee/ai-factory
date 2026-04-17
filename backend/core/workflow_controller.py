@@ -130,7 +130,6 @@ def _process_single_order(order_file: str, parent_context: dict) -> dict:
     parts_path = str(job_dir / "parts.xlsx")
     cut_result_path = str(job_dir / "cut_result.json")
     cut_excel_path = str(job_dir / "cut_result.xlsx")
-    audit_path = str(job_dir / "audit.json")
     inventory_path = str(job_dir / "inventory_check.json")
 
     # ── Stage 2: Brain Agent (拆单) ──────
@@ -148,55 +147,25 @@ def _process_single_order(order_file: str, parent_context: dict) -> dict:
         _notify_error("拆单 (Brain Agent)", str(e), job_id)
         return result
 
-    # ── Stage 3: Engine Agent (裁切优化) ──
-    log.info("✂️  Stage 3: 裁切优化 (Engine Agent)...")
+    # ── Stage 3: Engine Agent (裁切优化 v4 — 真实工厂流程) ──
+    log.info("✂️  Stage 3: 裁切优化 (Engine Agent v4)...")
     try:
-        from agents.engine_agent import load_parts, load_inventory, match_parts_to_boards, ffd_bin_pack
-        from config.settings import INVENTORY_FILE, TRIM_LOSS, SAW_KERF
+        from agents.engine_agent import run_engine
+        from config.settings import INVENTORY_FILE
 
-        parts, skipped = load_parts(parts_path)
-        boards = load_inventory(str(INVENTORY_FILE))
-        matched, unmatched = match_parts_to_boards(parts, boards)
+        output_data = run_engine(
+            parts_path=parts_path,
+            inventory_path=str(INVENTORY_FILE),
+            output_path=cut_result_path,
+        )
 
-        all_board_results = []
-        for board_type in sorted(matched.keys()):
-            parts_list = matched[board_type]
-            board_info = boards[board_type]
-            board_results = ffd_bin_pack(parts_list, board_info)
-            all_board_results.extend(board_results)
-
-        # 汇总
-        total_parts_req = len(parts)
-        total_placed = sum(len(b["parts"]) for b in all_board_results)
-        total_unmatched = len(unmatched)
-        all_cut = (total_placed == total_parts_req) and (total_unmatched == 0)
-        total_parts_len = sum(b["parts_total_length"] for b in all_board_results)
-        total_board_len = sum(b["usable_length"] + b["trim_loss"] for b in all_board_results)
-        overall_util = total_parts_len / total_board_len if total_board_len > 0 else 0
-
-        summary = {
-            "total_parts_required": total_parts_req,
-            "total_parts_placed": total_placed,
-            "total_parts_unmatched": total_unmatched,
-            "all_parts_cut": all_cut,
-            "boards_used": len(all_board_results),
-            "total_parts_length": round(total_parts_len, 2),
-            "total_trim_loss": round(sum(b["trim_loss"] for b in all_board_results), 2),
-            "total_kerf_loss": round(sum(b["kerf_total"] for b in all_board_results), 2),
-            "total_waste": round(sum(b["waste"] for b in all_board_results), 2),
-            "overall_utilization": round(overall_util, 4),
-            "config_trim_loss_mm": TRIM_LOSS,
-            "config_saw_kerf_mm": SAW_KERF,
-        }
-
-        issues = {"skipped_rows": [{"file": "parts.xlsx", "source": f"第 {s['row']} 行: {s['reason']}"} for s in skipped], "unmatched_parts": []}
-        output_data = {"summary": summary, "issues": issues, "boards": all_board_results}
-
-        with open(cut_result_path, "w", encoding="utf-8") as f:
-            json.dump(output_data, f, indent=2, ensure_ascii=False)
+        summary = output_data["summary"]
+        overall_util = summary["overall_utilization"]
+        all_board_results = output_data["boards"]
 
         result["stages"]["engine"] = {"status": "success", "output": cut_result_path}
-        log.info(f"   ✅ 裁切优化完成: {len(all_board_results)} 张板, 利用率 {overall_util*100:.1f}%")
+        log.info(f"   ✅ 裁切优化完成: T0={summary.get('t0_sheets_used',0)}张, "
+                 f"strips={summary.get('strips_used',0)}, 利用率 {overall_util*100:.1f}%")
     except Exception as e:
         log.error(f"   ❌ 裁切优化失败: {e}\n{traceback.format_exc()}")
         result["stages"]["engine"] = {"status": "failed", "error": str(e)}
@@ -205,7 +174,6 @@ def _process_single_order(order_file: str, parent_context: dict) -> dict:
         _notify_error("裁切优化 (Engine Agent)", str(e), job_id)
         return result
 
-    # ── Stage 4: Excel Report (Skipped) ───
     log.info("📊 Stage 4: 报告合并到了 worker_order, 不再单独生成 cut_result.xlsx...")
     result["stages"]["excel_report"] = {"status": "skipped"}
 
@@ -344,6 +312,30 @@ def _process_single_order(order_file: str, parent_context: dict) -> dict:
         bom_record(job_id=job_id, cut_result_path=cut_result_path)
     except Exception as e:
         log.warning(f"   ⚠️ BOM 历史记录失败(非致命): {e}")
+
+    # ── 记录裁切统计 ────────────────────
+    try:
+        from config.supabase_client import supabase
+        with open(cut_result_path, "r", encoding="utf-8") as f:
+            cut_data = json.load(f)
+        stats_rows = []
+        for board in cut_data.get("boards", []):
+            board_type = board.get("board", "")
+            for part in board.get("parts", []):
+                stats_rows.append({
+                    "job_id": job_id,
+                    "board_type": board_type,
+                    "t2_height": part.get("Height", 0),
+                    "t2_width": part.get("Width", part.get("Depth", 0)),
+                    "component": part.get("component", ""),
+                    "cab_id": part.get("cab_id", ""),
+                    "quantity": 1,
+                })
+        if stats_rows:
+            supabase.table("cutting_stats").insert(stats_rows).execute()
+            log.info(f"   📊 裁切统计已记录: {len(stats_rows)} 条")
+    except Exception as e:
+        log.warning(f"   ⚠️ 裁切统计记录失败(非致命): {e}")
 
     # ── 清理中间文件 ──────────────────────
     final_files_set = set(final_files) if 'final_files' in locals() else set()

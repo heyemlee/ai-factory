@@ -83,7 +83,7 @@ def run(cut_result_path: str = None, audit_path: str = None,
                 "零件部位信息": part_desc,
                 "机器下刀长度(mm)": part["cut_length"],
                 "t2Height(mm)": part["Height"],
-                "t2Depth(mm)": part["Depth"],
+                "t2Width(mm)": part.get("Width", part.get("Depth", 0)),
                 "利用率": f"{utilization*100:.1f}%" if idx == 0 else "",
             })
 
@@ -118,7 +118,28 @@ def run(cut_result_path: str = None, audit_path: str = None,
     audit_df = pd.DataFrame([{"col_0": "审核状态", "col_1": audit_status if 'audit_status' in dir() else "未审核"}])
     df_summary = pd.concat([audit_df, df_summary], ignore_index=True)
 
-    # ── 6. 写入 Excel ──────────────────
+    # ── 6. Sheet 4 (optional): T0 裁切计划 ───
+    t0_plan = data.get("t0_plan", {})
+    df_t0 = None
+    if t0_plan and t0_plan.get("t0_sheets_needed", 0) > 0:
+        t0_rows = []
+        for sheet in t0_plan.get("t0_sheets", []):
+            sheet_id = sheet["sheet_id"]
+            utilization = sheet.get("utilization", 0)
+            for idx, strip in enumerate(sheet["strips"]):
+                t0_rows.append({
+                    "T0板号": sheet_id if idx == 0 else "",
+                    "T0尺寸": sheet.get("t0_size", "1219.2 × 2438.4") if idx == 0 else "",
+                    "序号": idx + 1,
+                    "裁切板型": strip["board_type"],
+                    "裁切宽度(mm)": strip["width"],
+                    "裁切长度(mm)": strip["height"],
+                    "利用率": f"{utilization*100:.1f}%" if idx == 0 else "",
+                    "废料宽度(mm)": f"{sheet.get('waste_width', 0)}mm" if idx == 0 else "",
+                })
+        df_t0 = pd.DataFrame(t0_rows)
+
+    # ── 7. 写入 Excel ──────────────────
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, "worker_order.xlsx")
 
@@ -126,11 +147,14 @@ def run(cut_result_path: str = None, audit_path: str = None,
         df_cut.to_excel(writer, sheet_name="裁切工单", index=False)
         df_material.to_excel(writer, sheet_name="物料领用单", index=False)
         df_summary.to_excel(writer, sheet_name="汇总信息", index=False)
+        if df_t0 is not None:
+            df_t0.to_excel(writer, sheet_name="T0裁切计划", index=False)
 
     log.info(f"✅ 工单生成完成: {out_path}")
     log.info(f"  裁切工单: {len(cut_rows)} 行")
     log.info(f"  物料领用: {len(material_rows)} 种板材")
-    log.info(f"  3 个 Sheet: 裁切工单 + 物料领用单 + 汇总信息")
+    sheet_count = 4 if df_t0 is not None else 3
+    log.info(f"  {sheet_count} 个 Sheet")
 
     return out_path
 

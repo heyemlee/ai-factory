@@ -73,13 +73,14 @@ python3 tools/email_reader.py
 python3 main.py incoming_orders/xxx_order.xlsx
 ```
 
-### 场景 C：自动模式（每 5 分钟检查邮件）
+### 场景 C：自动 Cloud 模式（轮询 Supabase）
 
 ```bash
-cd ~/Desktop/ai-factory && source venv/bin/activate
+# 一键启动后端 + 前端
+bash scripts/dev.sh
 
-# 启动（Ctrl+C 停止）
-python3 main.py
+# 或仅启动后端轮询
+bash scripts/start_cloud.sh
 ```
 
 ### 场景 D：只运行某个步骤
@@ -88,23 +89,23 @@ python3 main.py
 cd ~/Desktop/ai-factory && source venv/bin/activate
 
 # 只拆单
-python3 agents/brain_agent.py
+python3 -m backend.agents.brain_agent
 
 # 只裁切优化
-python3 agents/engine_agent.py
+python3 -m backend.agents.engine_agent
 
 # 只审核
-python3 agents/audit_agent.py
+python3 -m backend.agents.audit_agent
 
 # 只检查库存
-python3 agents/inventory_agent.py
+python3 -m backend.agents.inventory_agent
 
 # 只生成工单
-python3 agents/production_agent.py
+python3 -m backend.agents.production_agent
 
 # 查看 BOM 历史统计
 python3 -c "
-from core.bom_history import get_monthly_stats
+from backend.core.bom_history import get_monthly_stats
 import json
 print(json.dumps(get_monthly_stats(), indent=2, ensure_ascii=False))
 "
@@ -150,6 +151,12 @@ print(json.dumps(get_monthly_stats(), indent=2, ensure_ascii=False))
 
 ```
 ai-factory/
+├── main.py                   ← 本地 Pipeline 入口
+├── backend/                  ← 后端核心引擎
+├── frontend/                 ← Next.js Dashboard
+├── scripts/                  ← 运维启动脚本
+├── tests/fixtures/           ← 测试用订单文件
+├── docs/                     ← 项目文档
 ├── data/
 │   ├── order.xlsx            ← 默认订单（测试用）
 │   ├── t1_inventory.xlsx     ← T1 板库存（需要手动更新）
@@ -210,16 +217,18 @@ SAW_KERF=5           # 锯缝 (mm)
 cd ~/Desktop/ai-factory && source venv/bin/activate
 
 # === 核心命令 ===
-python3 main.py order.xlsx     # 处理指定订单
-python3 main.py                # 自动轮询模式
+python3 main.py data/order.xlsx          # 处理指定订单
+python3 main.py tests/fixtures/test_order.xlsx  # 用测试数据跑
+bash scripts/start_cloud.sh              # Cloud 轮询模式
+bash scripts/dev.sh                      # 一键启动后端+前端
 
 # === 单步命令 ===
-python3 tools/email_reader.py  # 下载邮件订单
-python3 agents/brain_agent.py  # 拆单
-python3 agents/engine_agent.py # 裁切优化
-python3 agents/audit_agent.py  # 审核
-python3 agents/inventory_agent.py  # 库存检查
-python3 agents/production_agent.py # 生成工单
+python3 -m backend.tools.email_reader        # 下载邮件订单
+python3 -m backend.agents.brain_agent        # 拆单
+python3 -m backend.agents.engine_agent       # 裁切优化
+python3 -m backend.agents.audit_agent        # 审核
+python3 -m backend.agents.inventory_agent    # 库存检查
+python3 -m backend.agents.production_agent   # 生成工单
 
 # === 查看数据 ===
 cat data/bom_history.jsonl     # BOM 历史

@@ -1,13 +1,14 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Package, History, FileText } from "lucide-react";
+import { LayoutDashboard, Package, History, FileText, BarChart3 } from "lucide-react";
 import clsx from "clsx";
 
 const navItems = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Orders", href: "/orders", icon: FileText },
   { name: "Inventory", href: "/inventory", icon: Package },
+  { name: "Cut Stats", href: "/cut-stats", icon: BarChart3 },
   { name: "BOM Analytics", href: "/bom-analytics", icon: History },
 ];
 

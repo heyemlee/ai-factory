@@ -13,11 +13,14 @@ import os
 import sys
 import json
 import time
+import traceback
 import tempfile
 from datetime import datetime
 
-# Add backend to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add backend to path (both backend/ and backend/core/ callers)
+backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
 
 from config.supabase_client import supabase
 
@@ -87,7 +90,13 @@ def process_order(order: dict):
 
         # 2. Run Cabinet Calculator
         print(f"\n  Step 1: Cabinet Calculator")
-        from cabinet_calculator import process_order as calc_order
+        # Ensure backend root is importable
+        import importlib.util
+        calc_path = os.path.join(backend_dir, "cabinet_calculator.py")
+        spec = importlib.util.spec_from_file_location("cabinet_calculator", calc_path)
+        cab_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cab_mod)
+        calc_order = cab_mod.process_order
 
         parts_path = os.path.join(tempfile.gettempdir(), f"{job_id}_parts.xlsx")
         parts_df = calc_order(order_path, parts_path)
@@ -155,12 +164,13 @@ def process_order(order: dict):
         print(f"     Parts placed: {summary['total_parts_placed']}")
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        err_detail = traceback.format_exc()
+        print(f"\n  ❌ Order {job_id} FAILED!")
+        print(err_detail)
 
         supabase.table("orders").update({
             "status": "failed",
-            "cut_result_json": {"error": str(e)},
+            "cut_result_json": {"error": str(e), "traceback": err_detail},
             "completed_at": datetime.now().isoformat(),
         }).eq("id", order["id"]).execute()
 

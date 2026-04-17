@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { UploadCloud, PieChart } from "lucide-react";
+import { UploadCloud, PieChart, Trash2, AlertOctagon } from "lucide-react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
@@ -21,6 +21,42 @@ export default function Orders() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Order | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const openDeleteModal = useCallback((order: Order) => {
+    setDeleteError(null);
+    setDeleteTarget(order);
+  }, []);
+
+  const closeDeleteModal = useCallback(() => {
+    setDeleteTarget(null);
+    setDeleteError(null);
+    setDeleting(false);
+  }, []);
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      // Delete related bom_history first (foreign key on job_id)
+      await supabase.from("bom_history").delete().eq("job_id", deleteTarget.job_id);
+      // Then delete the order itself
+      const { error } = await supabase.from("orders").delete().eq("id", deleteTarget.id);
+      if (error) {
+        setDeleteError(error.message);
+        setDeleting(false);
+        return;
+      }
+      setOrders(prev => prev.filter(o => o.id !== deleteTarget.id));
+      closeDeleteModal();
+    } catch (e: unknown) {
+      setDeleteError(e instanceof Error ? e.message : "Unknown error");
+      setDeleting(false);
+    }
+  };
 
   const fetchOrders = useCallback(async () => {
     const { data } = await supabase
@@ -98,18 +134,18 @@ export default function Orders() {
 
   return (
     <div className="w-full space-y-10 py-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-[32px] font-semibold tracking-tight">Orders</h1>
           <p className="text-apple-gray text-[15px] mt-1">Upload and track cabinet production orders.</p>
         </div>
-        <div className="bg-white rounded-2xl px-8 py-5 shadow-apple flex items-center gap-6">
-          <div className="p-3 bg-apple-blue/10 rounded-xl text-apple-blue">
+        <div className="bg-white rounded-2xl px-6 py-4 sm:px-8 sm:py-5 shadow-apple flex items-center gap-6 shrink-0">
+          <div className="p-3 bg-apple-blue/10 rounded-xl text-apple-blue shrink-0">
             <PieChart size={24} />
           </div>
-          <div>
+          <div className="shrink-0">
             <p className="text-[13px] font-medium text-apple-gray">Avg Utilization</p>
-            <p className="text-[28px] font-bold text-foreground">{overallUtil}{overallUtil !== "—" ? "%" : ""}</p>
+            <p className="text-[28px] border-none font-bold text-foreground leading-none">{overallUtil}{overallUtil !== "—" ? "%" : ""}</p>
           </div>
         </div>
       </div>
@@ -139,7 +175,7 @@ export default function Orders() {
               <button
                 onClick={handleFileSelect}
                 disabled={uploading}
-                className="bg-apple-blue text-white px-6 py-2 rounded-full text-[14px] font-medium hover:bg-apple-blue/90 shadow-sm transition-colors disabled:opacity-50"
+                className="bg-apple-blue text-white px-6 py-2 rounded-full text-[14px] font-medium hover:bg-apple-blue/90 shadow-sm transition-colors disabled:opacity-50 shrink-0 whitespace-nowrap"
               >
                 Browse Files
               </button>
@@ -172,7 +208,7 @@ export default function Orders() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {orders.map(order => (
-                    <OrderRow key={order.id} order={order} />
+                    <OrderRow key={order.id} order={order} onDelete={openDeleteModal} />
                   ))}
                 </tbody>
               </table>
@@ -181,11 +217,65 @@ export default function Orders() {
           </div>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          onClick={(e) => { e.stopPropagation(); closeDeleteModal(); }}
+        >
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+          {/* Modal Card */}
+          <div
+            className="relative bg-white w-full max-w-sm rounded-[24px] shadow-[0_8px_40px_rgba(0,0,0,0.16)] border border-black/5 p-8"
+            onClick={(e) => e.stopPropagation()}
+            style={{ animation: 'modalIn 0.22s cubic-bezier(0.16, 1, 0.3, 1)' }}
+          >
+            <style>{`
+              @keyframes modalIn {
+                from { opacity: 0; transform: scale(0.92) translateY(8px); }
+                to   { opacity: 1; transform: scale(1) translateY(0); }
+              }
+            `}</style>
+            <div className="w-14 h-14 rounded-full bg-apple-red/10 text-apple-red flex items-center justify-center mb-5 mx-auto">
+              <AlertOctagon size={28} />
+            </div>
+            <h3 className="text-[20px] font-semibold text-center mb-2 tracking-tight">Delete Order?</h3>
+            <p className="text-[14px] text-apple-gray text-center leading-relaxed">
+              This will permanently remove <span className="font-semibold text-foreground">{deleteTarget.job_id}</span> and all related production history.
+            </p>
+
+            {deleteError && (
+              <div className="mt-4 p-3 rounded-xl bg-apple-red/10 text-apple-red text-[13px] text-center font-medium">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="flex gap-3 mt-8">
+              <button
+                onClick={(e) => { e.stopPropagation(); closeDeleteModal(); }}
+                disabled={deleting}
+                className="flex-1 px-4 py-3 rounded-xl bg-black/5 text-foreground text-[15px] font-semibold hover:bg-black/10 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); confirmDelete(); }}
+                disabled={deleting}
+                className="flex-1 px-4 py-3 rounded-xl bg-apple-red text-white text-[15px] font-semibold hover:bg-apple-red/90 transition-colors disabled:opacity-50"
+              >
+                {deleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function OrderRow({ order }: { order: Order }) {
+function OrderRow({ order, onDelete }: { order: Order, onDelete: (order: Order) => void }) {
   const isCompleted = order.status === "completed";
   const isFailed = order.status === "failed";
   const utilStr = order.utilization ? `${(order.utilization * 100).toFixed(1)}%` : "—";
@@ -194,14 +284,14 @@ function OrderRow({ order }: { order: Order }) {
 
   return (
     <tr className="hover:bg-black/[0.01] transition-colors">
-      <td className="py-4 px-8 text-[15px] font-medium text-foreground">
+      <td className="py-4 px-8 text-[15px] font-medium text-foreground align-middle">
         <Link href={`/order/${order.job_id}`} className="hover:text-apple-blue transition-colors">
           {order.job_id}
         </Link>
       </td>
-      <td className="py-4 px-8 text-[14px] text-apple-gray">{cabStr}</td>
-      <td className="py-4 px-8 text-[14px] text-foreground font-medium">{boardsStr}</td>
-      <td className="py-4 px-8">
+      <td className="py-4 px-8 text-[14px] text-apple-gray align-middle">{cabStr}</td>
+      <td className="py-4 px-8 text-[14px] text-foreground font-medium align-middle">{boardsStr}</td>
+      <td className="py-4 px-8 align-middle">
         <span className={`inline-flex items-center text-[14px] font-medium ${
           isCompleted ? "text-apple-green" : isFailed ? "text-apple-red" : "text-apple-blue"
         }`}>
@@ -210,13 +300,21 @@ function OrderRow({ order }: { order: Order }) {
           {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
         </span>
       </td>
-      <td className="py-4 px-8 text-[15px] font-medium text-foreground">{utilStr}</td>
-      <td className="py-4 px-8 text-right">
-        {isCompleted ? (
-          <Link href={`/order/${order.job_id}`} className="text-apple-blue text-[14px] font-medium hover:underline px-3 py-1 bg-apple-blue/5 rounded-lg">View Layout</Link>
-        ) : (
-          <span className="text-apple-gray text-[14px]">{order.status === "pending" ? "Pending" : order.status === "processing" ? "In Progress" : "—"}</span>
-        )}
+      <td className="py-4 px-8 text-[15px] font-medium text-foreground align-middle">{utilStr}</td>
+      <td className="py-4 px-8 align-middle text-right">
+        <div className="flex items-center justify-end gap-3">
+          {isCompleted ? (
+            <Link href={`/order/${order.job_id}`} className="text-apple-blue text-[14px] font-medium hover:underline px-3 py-1 bg-apple-blue/5 rounded-lg shrink-0 whitespace-nowrap">View Layout</Link>
+          ) : (
+            <span className="text-apple-gray text-[14px] shrink-0 whitespace-nowrap">{order.status === "pending" ? "Pending" : order.status === "processing" ? "In Progress" : "—"}</span>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); e.preventDefault(); onDelete(order); }}
+            className="p-2 rounded-full text-apple-gray hover:text-apple-red hover:bg-apple-red/10 transition-colors shrink-0"
+          >
+            <Trash2 size={16} />
+          </button>
+        </div>
       </td>
     </tr>
   );

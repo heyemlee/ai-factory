@@ -21,17 +21,10 @@ venv/
 ~$*.xlsx
 .~*.xlsx
 
-# Logs
+# Runtime data (运行时生成)
 logs/
-
-# Data
-input/
-output/
 data/
-data/bom_history.jsonl
+output/
 archive/
 failed_orders/
 incoming_orders/
-
-# Virtual environments
-pipeline_venv/

@@ -144,8 +144,9 @@ def build_combined_summary(data):
         total_cuts = sum(b["cuts"] for b in boards)
         total_kerf = sum(b["kerf_total"] for b in boards)
         total_waste = sum(b["waste"] for b in boards)
-        total_board_area = sum(b["usable_length"] + b["trim_loss"] for b in boards)
-        avg_util = total_parts_len / total_board_area if total_board_area > 0 else 0
+        total_parts_area = sum(b.get("parts_total_area", 0) for b in boards)
+        total_board_area = sum(b.get("board_area", 0) for b in boards)
+        avg_util = total_parts_area / total_board_area if total_board_area > 0 else 0
 
         add_row([board_type, board_size, n_boards, total_parts,
                  total_cuts, round(total_parts_len, 2), round(total_kerf, 2),

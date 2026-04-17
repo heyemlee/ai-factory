@@ -256,7 +256,7 @@ def process_order(order_path: str, output_path: str = None) -> pd.DataFrame:
                 "cab_type": p["cab_type"],
                 "component": p["component"],
                 "Height": p["length"],    # Length direction (along board)
-                "Depth": p["width"],      # Width direction
+                "Width": p["width"],      # Width direction
                 "qty": 1,
             })
             part_counter += 1

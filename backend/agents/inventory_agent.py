@@ -56,7 +56,7 @@ def run(cut_result_path: str = None, inventory_path: str = None,
         inventory[bt] = {
             "board_type": bt,
             "height": float(row["Height"]),
-            "depth": float(row["Depth"]),
+            "width": float(row["Width"]),
             "current_qty": int(row["qty"]),
         }
 

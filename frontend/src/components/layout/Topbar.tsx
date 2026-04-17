@@ -4,11 +4,15 @@ import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
+import { supabase } from "@/lib/supabase";
 
 export default function Topbar() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+
+  const [pendingCount, setPendingCount] = useState<number>(0);
+  const [completedCount, setCompletedCount] = useState<number>(0);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -21,6 +25,28 @@ export default function Topbar() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    async function fetchCounts() {
+      const { data } = await supabase.from("orders").select("status");
+      if (data) {
+        setPendingCount(data.filter((d: any) => d.status === "pending").length);
+        setCompletedCount(data.filter((d: any) => d.status === "completed").length);
+      }
+    }
+    
+    fetchCounts();
+
+    const channel = supabase.channel("topbar_orders_status")
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, () => {
+        fetchCounts();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   const handleSignOut = () => {
     setDropdownOpen(false);
     router.push("/login");
@@ -31,11 +57,11 @@ export default function Topbar() {
       <div className="flex items-center gap-8 flex-1">
         <div className="flex items-center gap-2">
           <Clock size={16} className="text-apple-blue" />
-          <span className="text-[14px] font-medium text-foreground">Pending Orders: <span className="font-bold text-apple-blue ml-1">3</span></span>
+          <span className="text-[14px] font-medium text-foreground">Pending Orders: <span className="font-bold text-apple-blue ml-1">{pendingCount}</span></span>
         </div>
         <div className="flex items-center gap-2">
           <CheckCircle2 size={16} className="text-apple-green" />
-          <span className="text-[14px] font-medium text-foreground">Completed Orders: <span className="font-bold text-apple-green ml-1">12</span></span>
+          <span className="text-[14px] font-medium text-foreground">Completed Orders: <span className="font-bold text-apple-green ml-1">{completedCount}</span></span>
         </div>
       </div>
       

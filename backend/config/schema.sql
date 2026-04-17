@@ -10,9 +10,9 @@ CREATE TABLE IF NOT EXISTS inventory (
   name text NOT NULL,
   material text DEFAULT 'MDF',
   category text DEFAULT 'main' CHECK (category IN ('main', 'sub', 'aux')),
-  height float NOT NULL,
-  depth float NOT NULL,
-  thickness float DEFAULT 18,
+  height float NOT NULL DEFAULT 2438.4,   -- length / board height (mm)
+  width float NOT NULL DEFAULT 0,          -- board width (mm)
+  thickness float DEFAULT 18,              -- material thickness (mm)
   stock int NOT NULL DEFAULT 0,
   threshold int NOT NULL DEFAULT 10,
   unit text DEFAULT 'pcs',
@@ -47,6 +47,19 @@ CREATE TABLE IF NOT EXISTS bom_history (
   created_at timestamptz DEFAULT now()
 );
 
+-- 4. Cutting Stats table (tracks cut frequency per dimension)
+CREATE TABLE IF NOT EXISTS cutting_stats (
+  id serial PRIMARY KEY,
+  job_id text,
+  board_type text NOT NULL,
+  t2_height float NOT NULL,
+  t2_width float NOT NULL,
+  component text,
+  cab_id text,
+  quantity int DEFAULT 1,
+  created_at timestamptz DEFAULT now()
+);
+
 -- Auto-update updated_at on inventory changes
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
@@ -66,6 +79,7 @@ CREATE TRIGGER trg_inventory_updated
 ALTER TABLE inventory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bom_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cutting_stats ENABLE ROW LEVEL SECURITY;
 
 -- Permissive policies (open for development)
 DO $$
@@ -78,5 +92,8 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'allow_all_bom') THEN
     CREATE POLICY allow_all_bom ON bom_history FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'allow_all_cutting_stats') THEN
+    CREATE POLICY allow_all_cutting_stats ON cutting_stats FOR ALL USING (true) WITH CHECK (true);
   END IF;
 END $$;
