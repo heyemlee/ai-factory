@@ -139,6 +139,31 @@ def run(cut_result_path: str = None, audit_path: str = None,
                 })
         df_t0 = pd.DataFrame(t0_rows)
 
+    # ── 7. Sheet 5 (optional): 超板零件 ───
+    issues = data.get("issues", {})
+    oversized_list = issues.get("oversized_parts", [])
+    df_oversized = None
+    if oversized_list:
+        comp_map = {
+            "Top Panel": "顶板", "Bottom Panel": "底板",
+            "Side Panel": "侧板", "Back Panel": "背板",
+            "Adjustable Shelf": "活动层板", "Fixed Shelf": "固定层板",
+            "Stretcher": "拉条"
+        }
+        cab_map = {"wall": "吊柜", "base": "地柜", "tall": "高柜"}
+        oversized_rows = []
+        for op in oversized_list:
+            comp = comp_map.get(op.get("component", ""), op.get("component", ""))
+            oversized_rows.append({
+                "柜号": op.get("cab_id", ""),
+                "零件": comp,
+                "Height(mm)": op.get("Height", 0),
+                "Width(mm)": op.get("Width", 0),
+                "原因": op.get("reason", "尺寸超过板材极限"),
+                "建议": "需要拼接或定制板材",
+            })
+        df_oversized = pd.DataFrame(oversized_rows)
+
     # ── 7. 写入 Excel ──────────────────
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, "worker_order.xlsx")
@@ -149,11 +174,20 @@ def run(cut_result_path: str = None, audit_path: str = None,
         df_summary.to_excel(writer, sheet_name="汇总信息", index=False)
         if df_t0 is not None:
             df_t0.to_excel(writer, sheet_name="T0裁切计划", index=False)
+        if df_oversized is not None:
+            df_oversized.to_excel(writer, sheet_name="⛔超板零件", index=False)
+
+    sheet_count = 3
+    if df_t0 is not None:
+        sheet_count += 1
+    if df_oversized is not None:
+        sheet_count += 1
 
     log.info(f"✅ 工单生成完成: {out_path}")
     log.info(f"  裁切工单: {len(cut_rows)} 行")
     log.info(f"  物料领用: {len(material_rows)} 种板材")
-    sheet_count = 4 if df_t0 is not None else 3
+    if df_oversized is not None:
+        log.info(f"  ⛔ 超板零件: {len(oversized_list)} 个")
     log.info(f"  {sheet_count} 个 Sheet")
 
     return out_path

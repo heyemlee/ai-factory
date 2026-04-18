@@ -602,19 +602,6 @@ def match_parts_to_boards(parts: list, boards: dict):
                 placed = True
                 break
 
-        if placed:
-            continue
-
-        for board in sorted_boards:
-            if p_height <= board["Width"] and p_width <= board["Height"]:
-                matched[board["board_type"]].append({
-                    **p,
-                    "cut_length": p_width,
-                    "rotated": True,
-                })
-                placed = True
-                break
-
         if not placed:
             unmatched.append(p)
 
@@ -732,6 +719,36 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
             if bt_inv.startswith("T0"):
                 t0_name = bt_inv
                 break
+
+    # ─── 检测超板零件 ───
+    # 板材最大尺寸: Height方向=2438.4mm, Width方向=1219.2mm (T0满板)
+    usable_height = BOARD_HEIGHT - TRIM_LOSS  # 2433.4mm
+    # 找到最大可用板宽 (T0 raw sheet width)
+    max_board_width = 1219.2  # T0 default
+    if inventory:
+        for bt, info in inventory.items():
+            if bt.startswith("T0"):
+                max_board_width = info["Width"]
+                break
+
+    valid_parts = []
+    oversized_parts = []
+    for p in parts:
+        h, w = p["Height"], p["Width"]
+        # 超板: Width超过最大板宽 或 Height超过板材可用长度
+        if w > max_board_width or h > usable_height:
+            oversized_parts.append(p)
+        else:
+            valid_parts.append(p)
+
+    if oversized_parts:
+        print(f"\n❌ 发现 {len(oversized_parts)} 个超板零件 (板材极限: {max_board_width}×{BOARD_HEIGHT}mm):")
+        for op in oversized_parts:
+            cab = op.get('cab_id', '?')
+            comp = op.get('component', '?')
+            print(f"   ⛔ {cab}-{comp}: {op['Height']} × {op['Width']}mm — 无法裁切!")
+
+    parts = valid_parts
 
     # ─── STEP 1: Build strip demand ───
     strip_demand = build_strip_demand(parts, inventory)
@@ -937,7 +954,8 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
     total_parts_required = len(parts)
     total_parts_placed = sum(len(b["parts"]) for b in all_board_results)
     total_parts_unmatched = total_parts_required - total_parts_placed
-    all_parts_cut = (total_parts_placed == total_parts_required)
+    total_oversized = len(oversized_parts)
+    all_parts_cut = (total_parts_placed == total_parts_required) and total_oversized == 0
 
     total_parts_area = sum(b["parts_total_area"] for b in all_board_results)
     total_board_area = sum(b["board_area"] for b in all_board_results)
@@ -981,13 +999,31 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
     if total_parts_unmatched > 0:
         summary["warning"] = f"{total_parts_unmatched} parts could not be placed"
 
+    if total_oversized > 0:
+        summary["oversized_count"] = total_oversized
+        summary["oversized_warning"] = (
+            f"{total_oversized} 个零件尺寸超过板材最大尺寸 {BOARD_HEIGHT}mm，无法裁切！"
+        )
+
     # Issues report
+    oversized_issues = [
+        {
+            "part_id": p.get("part_id", "?"),
+            "cab_id": p.get("cab_id", "?"),
+            "component": p.get("component", "?"),
+            "Height": p["Height"],
+            "Width": p["Width"],
+            "reason": f"尺寸 {p['Height']}×{p['Width']}mm 超过板材最大尺寸 {BOARD_HEIGHT}mm",
+        }
+        for p in oversized_parts
+    ]
     issues = {
         "skipped_rows": [
             {"file": "parts.xlsx", "source": f"Row {s['row']}: {s['reason']}"}
             for s in skipped_rows
         ],
         "unmatched_parts": [],
+        "oversized_parts": oversized_issues,
     }
 
     # ─── Output JSON ───
@@ -1018,6 +1054,8 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
     print(f"  Parts placed:    {total_parts_placed}")
     if total_parts_unmatched > 0:
         print(f"  ⚠️  Unplaced:    {total_parts_unmatched}")
+    if total_oversized > 0:
+        print(f"  ⛔ Oversized:    {total_oversized} (超板，无法裁切)")
     print(f"  All placed:      {'✅ Yes' if all_parts_cut else '❌ No'}")
     print(f"  {'─' * 58}")
     print(f"  Board breakdown:")

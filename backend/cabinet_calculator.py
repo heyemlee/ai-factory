@@ -26,6 +26,7 @@ Construction:
 """
 
 import os
+import re
 import pandas as pd
 
 # ─── Constants (mm) ─────────────────────────────────────
@@ -41,6 +42,43 @@ BASE_DEFAULT_DEPTH = 609.6      # 24"
 BASE_DEFAULT_HEIGHT = 876.3     # 34.5"
 TALL_DEFAULT_DEPTH = 609.6      # 24"
 TALL_DEFAULT_HEIGHT = 2387.6    # 94"
+
+
+def parse_imperial(val) -> float:
+    """
+    Parse an imperial dimension value that may be:
+      - A plain number: 24, 12.5
+      - A fractional string: '26 3/16', '34 1/2', '3/4'
+      - NaN, None, 0, or empty string → 0.0
+    Returns the value as a float (in inches).
+    """
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float)):
+        import math
+        return 0.0 if math.isnan(val) else float(val)
+
+    s = str(val).strip()
+    if not s or s.lower() == 'nan':
+        return 0.0
+
+    # Try direct float first (handles "24", "12.5", etc.)
+    try:
+        return float(s)
+    except ValueError:
+        pass
+
+    # Handle fractional: "26 3/16" or "3/4"
+    parts = s.split()
+    total = 0.0
+    for part in parts:
+        if '/' in part:
+            # fraction like "3/16"
+            num, den = part.split('/', 1)
+            total += float(num) / float(den)
+        else:
+            total += float(part)
+    return total
 
 
 def r1(val: float) -> float:
@@ -214,16 +252,31 @@ def process_order(order_path: str, output_path: str = None) -> pd.DataFrame:
             cab_type = "wall"  # safe fallback
 
         # ── Dimensions (inches → mm) ──
-        W_in = float(row.get(col_map.get("W", ""), 0))
-        H_in = float(row.get(col_map.get("H", ""), 0))
-        D_in = float(row.get(col_map.get("D", ""), 0))
+        W_in = parse_imperial(row.get(col_map.get("W", ""), 0))
+        H_in = parse_imperial(row.get(col_map.get("H", ""), 0))
+        D_in = parse_imperial(row.get(col_map.get("D", ""), 0))
 
         W_mm = r1(W_in * INCHES_TO_MM)
         H_mm = r1(H_in * INCHES_TO_MM)
         D_mm = r1(D_in * INCHES_TO_MM)
 
-        # Apply defaults if depth/height match known defaults
-        # (user can override via order data, these are just the standard sizes)
+        # Apply defaults when D or H is 0 (常见于订单未填的情况)
+        if D_mm <= 0:
+            if cab_type == "wall":
+                D_mm = WALL_DEFAULT_DEPTH      # 304.8mm (12")
+            elif cab_type == "base":
+                D_mm = BASE_DEFAULT_DEPTH      # 609.6mm (24")
+            elif cab_type == "tall":
+                D_mm = TALL_DEFAULT_DEPTH      # 609.6mm (24")
+            print(f"  ℹ️  {cab_id}: D=0 → 使用默认深度 {D_mm}mm ({cab_type})")
+
+        if H_mm <= 0:
+            if cab_type == "base":
+                H_mm = BASE_DEFAULT_HEIGHT     # 876.3mm (34.5")
+            elif cab_type == "tall":
+                H_mm = TALL_DEFAULT_HEIGHT     # 2387.6mm (94")
+            if H_mm > 0:
+                print(f"  ℹ️  {cab_id}: H=0 → 使用默认高度 {H_mm}mm ({cab_type})")
 
         # ── Shelf counts ──
         qty = int(row.get(col_map.get("Qty", ""), 1))

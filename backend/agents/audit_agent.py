@@ -45,16 +45,20 @@ def run(cut_result_path: str = None, output_dir: str = None) -> dict:
     checks = []
     status = "pass"
 
-    # ── 检查 1: 零件完整性 ──────────────────
+    # ── 检查 1: 零件完整性（仅比较可裁切零件）──
     total_required = summary.get("total_parts_required", 0)
     total_placed = summary.get("total_parts_placed", 0)
     all_cut = summary.get("all_parts_cut", False)
+    oversized_count = summary.get("oversized_count", 0)
 
-    if all_cut:
+    # 可裁切零件是否全部切好
+    valid_all_placed = (total_placed == total_required)
+
+    if valid_all_placed:
         checks.append({
             "name": "零件完整性",
             "status": "pass",
-            "detail": f"全部 {total_required} 个零件已成功分配"
+            "detail": f"全部 {total_required} 个可裁切零件已成功分配"
         })
     else:
         unmatched = summary.get("total_parts_unmatched", 0)
@@ -64,6 +68,23 @@ def run(cut_result_path: str = None, output_dir: str = None) -> dict:
             "detail": f"需求 {total_required} 个，切出 {total_placed} 个，未切出 {unmatched} 个"
         })
         status = "fail"
+
+    # ── 检查 1b: 超板零件（单独警告）──
+    if oversized_count > 0:
+        oversized_parts = issues.get("oversized_parts", [])
+        detail_items = []
+        for op in oversized_parts[:5]:
+            detail_items.append(f"{op.get('cab_id','?')}-{op.get('component','?')} ({op['Height']}×{op['Width']}mm)")
+        detail = f"{oversized_count} 个零件尺寸超板无法裁切: " + ", ".join(detail_items)
+        if oversized_count > 5:
+            detail += f" ...等共 {oversized_count} 个"
+        checks.append({
+            "name": "超板零件",
+            "status": "warning",
+            "detail": detail
+        })
+        if status == "pass":
+            status = "warning"
 
     # ── 检查 2: 整体利用率 ──────────────────
     overall_util = summary.get("overall_utilization", 0)
@@ -140,6 +161,8 @@ def run(cut_result_path: str = None, output_dir: str = None) -> dict:
         recommendations.append("高废料板可尝试搭配小零件填充")
     if unmatched_parts:
         recommendations.append("请在 t1_inventory.xlsx 中添加缺失的板型")
+    if oversized_count > 0:
+        recommendations.append(f"{oversized_count} 个零件尺寸超过板材极限，需要特殊处理（拼接或定制板材）")
 
     # ── 输出 ──────────────────────────────
     audit = {
@@ -149,11 +172,15 @@ def run(cut_result_path: str = None, output_dir: str = None) -> dict:
         "summary": {
             "total_parts": total_required,
             "placed_parts": total_placed,
+            "oversized_parts": oversized_count,
             "boards_used": summary.get("boards_used", 0),
             "utilization": round(overall_util, 4),
             "total_waste": summary.get("total_waste", 0),
         }
     }
+    # 把超板零件明细也写进审核报告
+    if oversized_count > 0:
+        audit["oversized_parts"] = issues.get("oversized_parts", [])
 
     os.makedirs(output_dir, exist_ok=True)
     audit_path = os.path.join(output_dir, "audit.json")
