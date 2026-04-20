@@ -72,7 +72,7 @@ export default function Orders() {
   }, [fetchOrders]);
 
   // Calculate overall utilization from completed orders
-  const completedOrders = orders.filter(o => o.status === "completed" && o.utilization);
+  const completedOrders = orders.filter(o => (o.status === "completed" || o.status === "cut_done") && o.utilization);
   const overallUtil = completedOrders.length > 0
     ? (completedOrders.reduce((sum, o) => sum + (o.utilization || 0), 0) / completedOrders.length * 100).toFixed(1)
     : "—";
@@ -277,10 +277,15 @@ export default function Orders() {
 
 function OrderRow({ order, onDelete }: { order: Order, onDelete: (order: Order) => void }) {
   const isCompleted = order.status === "completed";
+  const isCutDone = order.status === "cut_done";
   const isFailed = order.status === "failed";
+  const hasLayout = isCompleted || isCutDone;
   const utilStr = order.utilization ? `${(order.utilization * 100).toFixed(1)}%` : "—";
   const boardsStr = order.boards_used ? String(order.boards_used) : "—";
   const cabStr = order.cabinets_summary || "—";
+
+  const statusLabel = isCutDone ? "已裁切" : order.status.charAt(0).toUpperCase() + order.status.slice(1);
+  const statusColor = isCutDone ? "text-apple-green" : isCompleted ? "text-apple-blue" : isFailed ? "text-apple-red" : "text-apple-blue";
 
   return (
     <tr className="hover:bg-black/[0.01] transition-colors">
@@ -292,19 +297,18 @@ function OrderRow({ order, onDelete }: { order: Order, onDelete: (order: Order) 
       <td className="py-4 px-8 text-[14px] text-apple-gray align-middle">{cabStr}</td>
       <td className="py-4 px-8 text-[14px] text-foreground font-medium align-middle">{boardsStr}</td>
       <td className="py-4 px-8 align-middle">
-        <span className={`inline-flex items-center text-[14px] font-medium ${
-          isCompleted ? "text-apple-green" : isFailed ? "text-apple-red" : "text-apple-blue"
-        }`}>
+        <span className={`inline-flex items-center text-[14px] font-medium ${statusColor}`}>
           {order.status === "processing" && <span className="w-1.5 h-1.5 rounded-full bg-apple-blue animate-pulse mr-2"></span>}
           {order.status === "pending" && <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse mr-2"></span>}
-          {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
+          {isCutDone && <span className="mr-1">✅</span>}
+          {statusLabel}
         </span>
       </td>
       <td className="py-4 px-8 text-[15px] font-medium text-foreground align-middle">{utilStr}</td>
       <td className="py-4 px-8 align-middle text-right">
         <div className="flex items-center justify-end gap-3">
-          {isCompleted ? (
-            <Link href={`/order/${order.job_id}`} className="text-apple-blue text-[14px] font-medium hover:underline px-3 py-1 bg-apple-blue/5 rounded-lg shrink-0 whitespace-nowrap">View Layout</Link>
+          {hasLayout ? (
+            <Link href={`/order/${order.job_id}`} className="text-apple-blue text-[14px] font-medium hover:underline px-3 py-1 bg-apple-blue/5 rounded-lg shrink-0 whitespace-nowrap">View</Link>
           ) : (
             <span className="text-apple-gray text-[14px] shrink-0 whitespace-nowrap">{order.status === "pending" ? "Pending" : order.status === "processing" ? "In Progress" : "—"}</span>
           )}

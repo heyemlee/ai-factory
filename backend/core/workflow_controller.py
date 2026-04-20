@@ -313,29 +313,10 @@ def _process_single_order(order_file: str, parent_context: dict) -> dict:
     except Exception as e:
         log.warning(f"   ⚠️ BOM 历史记录失败(非致命): {e}")
 
-    # ── 记录裁切统计 ────────────────────
-    try:
-        from config.supabase_client import supabase
-        with open(cut_result_path, "r", encoding="utf-8") as f:
-            cut_data = json.load(f)
-        stats_rows = []
-        for board in cut_data.get("boards", []):
-            board_type = board.get("board", "")
-            for part in board.get("parts", []):
-                stats_rows.append({
-                    "job_id": job_id,
-                    "board_type": board_type,
-                    "t2_height": part.get("Height", 0),
-                    "t2_width": part.get("Width", part.get("Depth", 0)),
-                    "component": part.get("component", ""),
-                    "cab_id": part.get("cab_id", ""),
-                    "quantity": 1,
-                })
-        if stats_rows:
-            supabase.table("cutting_stats").insert(stats_rows).execute()
-            log.info(f"   📊 裁切统计已记录: {len(stats_rows)} 条")
-    except Exception as e:
-        log.warning(f"   ⚠️ 裁切统计记录失败(非致命): {e}")
+    # ── 裁切统计 (已移至前端确认裁切时记录) ──
+    # NOTE: cutting_stats are now inserted when the user confirms cutting
+    # is complete via the frontend (status → cut_done). This ensures only
+    # actually completed cuts are counted in statistics.
 
     # ── 清理中间文件 ──────────────────────
     final_files_set = set(final_files) if 'final_files' in locals() else set()

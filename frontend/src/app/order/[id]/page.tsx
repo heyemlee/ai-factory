@@ -1,8 +1,8 @@
 "use client";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Layers, Package, BarChart3, Scissors, X, AlertTriangle, Table2, LayoutGrid } from "lucide-react";
-import { useState, useEffect, useMemo } from "react";
+import { ArrowLeft, Layers, Package, BarChart3, Scissors, X, AlertTriangle, Table2, LayoutGrid, CheckCircle2, Plus, Minus, Loader2 } from "lucide-react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 
 /* ── types ──────────────────────────────── */
@@ -58,24 +58,30 @@ interface CutResult {
 }
 
 interface Order {
-  id: number;
+  id: string;
   job_id: string;
   status: string;
   cut_result_json: CutResult | null;
   cabinets_summary: string;
+  extra_boards_used?: { board_type: string; count: number }[];
 }
 
-/*
- * Board size color palette — max 5 distinct colors.
- * Each unique board_size gets ONE consistent color.
- */
+/* Board size color palette — max 5 distinct colors */
 const SIZE_COLORS = [
-  { bg: "#dbeafe", border: "#3b82f6", text: "#1d4ed8", light: "#eff6ff" },   // blue
-  { bg: "#f3e8ff", border: "#8b5cf6", text: "#6d28d9", light: "#faf5ff" },   // purple
-  { bg: "#d1fae5", border: "#10b981", text: "#047857", light: "#ecfdf5" },   // green
-  { bg: "#ffedd5", border: "#f97316", text: "#c2410c", light: "#fff7ed" },   // orange
-  { bg: "#fce7f3", border: "#ec4899", text: "#be185d", light: "#fdf2f8" },   // pink
+  { bg: "#dbeafe", border: "#3b82f6", text: "#1d4ed8", light: "#eff6ff" },
+  { bg: "#f3e8ff", border: "#8b5cf6", text: "#6d28d9", light: "#faf5ff" },
+  { bg: "#d1fae5", border: "#10b981", text: "#047857", light: "#ecfdf5" },
+  { bg: "#ffedd5", border: "#f97316", text: "#c2410c", light: "#fff7ed" },
+  { bg: "#fce7f3", border: "#ec4899", text: "#be185d", light: "#fdf2f8" },
 ];
+
+/* ── Stack cutting: fingerprint a board by its cutting pattern ── */
+function boardFingerprint(board: Board): string {
+  const partSig = board.parts
+    .map((p) => `${p.cut_length || p.Height}x${p.Width}`)
+    .join(",");
+  return `${board.board_size}|${partSig}`;
+}
 
 export default function OrderDetail() {
   const params = useParams();
@@ -85,6 +91,7 @@ export default function OrderDetail() {
   const [loading, setLoading] = useState(true);
   const [selectedBoard, setSelectedBoard] = useState<Board | null>(null);
   const [viewMode, setViewMode] = useState<"layout" | "table">("layout");
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   useEffect(() => {
     supabase
@@ -104,7 +111,7 @@ export default function OrderDetail() {
   const summary = cutResult?.summary;
   const shortages = summary?.inventory_shortage || [];
 
-  /* Build a stable size→color map (max 5 colors) */
+  /* Build stable size → color map */
   const sizeColorMap = useMemo(() => {
     const uniqueSizes: string[] = [];
     for (const b of boards) {
@@ -117,7 +124,7 @@ export default function OrderDetail() {
     return map;
   }, [boards]);
 
-  /* Group boards by board_size for the legend */
+  /* Board size legend groups */
   const sizeGroups = useMemo(() => {
     const groups: Record<string, Board[]> = {};
     for (const b of boards) {
@@ -126,6 +133,65 @@ export default function OrderDetail() {
     }
     return Object.entries(groups);
   }, [boards]);
+
+  /* ── Stack cutting analysis: group boards with identical cutting patterns ── */
+  const stackGroups = useMemo(() => {
+    const fpMap: Record<string, Board[]> = {};
+    for (const b of boards) {
+      const fp = boardFingerprint(b);
+      if (!fpMap[fp]) fpMap[fp] = [];
+      fpMap[fp].push(b);
+    }
+    // Build a lookup: board_id → stack info
+    const lookup: Record<string, { groupSize: number; stackOf: number; isLeader: boolean }> = {};
+    for (const group of Object.values(fpMap)) {
+      if (group.length < 2) {
+        // No stacking possible
+        for (const b of group) {
+          lookup[b.board_id] = { groupSize: 1, stackOf: 1, isLeader: true };
+        }
+      } else {
+        // Split into stacks of max 4
+        let remaining = group.length;
+        let idx = 0;
+        while (remaining > 0) {
+          const stackSize = Math.min(4, remaining);
+          for (let i = 0; i < stackSize; i++) {
+            lookup[group[idx].board_id] = { groupSize: group.length, stackOf: stackSize, isLeader: i === 0 };
+            idx++;
+          }
+          remaining -= stackSize;
+        }
+      }
+    }
+    // Summary: how many actual cuts needed vs total boards
+    const totalBoards = boards.length;
+    let totalCuts = 0;
+    const counted = new Set<string>();
+    for (const group of Object.values(fpMap)) {
+      if (counted.has(group[0].board_id)) continue;
+      let remaining = group.length;
+      while (remaining > 0) {
+        totalCuts++;
+        remaining -= Math.min(4, remaining);
+      }
+      for (const b of group) counted.add(b.board_id);
+    }
+    return { lookup, totalBoards, totalCuts, saved: totalBoards - totalCuts };
+  }, [boards]);
+
+  const handleCutConfirmed = useCallback(() => {
+    // Refetch order to reflect new status
+    supabase
+      .from("orders")
+      .select("*")
+      .eq("job_id", id as string)
+      .single()
+      .then(({ data }) => {
+        if (data) setOrder(data as Order);
+      });
+    setShowConfirmModal(false);
+  }, [id]);
 
   if (loading) {
     return (
@@ -153,6 +219,9 @@ export default function OrderDetail() {
     );
   }
 
+  const isCutDone = order.status === "cut_done";
+  const isCompleted = order.status === "completed";
+
   return (
     <div className="w-full py-4 space-y-5">
       {/* ── Header ── */}
@@ -169,28 +238,31 @@ export default function OrderDetail() {
         <div className="flex items-center gap-3">
           {/* View mode toggle */}
           <div className="flex bg-black/[0.04] p-1 rounded-xl">
-            <button
-              onClick={() => setViewMode("layout")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${
-                viewMode === "layout" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"
-              }`}
-            >
+            <button onClick={() => setViewMode("layout")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${viewMode === "layout" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
               <LayoutGrid size={14} /> 裁切图
             </button>
-            <button
-              onClick={() => setViewMode("table")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${
-                viewMode === "table" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"
-              }`}
-            >
+            <button onClick={() => setViewMode("table")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${viewMode === "table" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
               <Table2 size={14} /> 数据表
             </button>
           </div>
-          <span className={`px-4 py-2 rounded-full text-[13px] font-medium capitalize ${
-            order.status === "completed" ? "bg-apple-green/10 text-apple-green" :
-            order.status === "failed" ? "bg-red-100 text-red-600" :
-            "bg-apple-blue/10 text-apple-blue"
-          }`}>{order.status}</span>
+
+          {/* Status / Confirm button */}
+          {isCutDone ? (
+            <span className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-[13px] font-medium bg-apple-green/10 text-apple-green">
+              <CheckCircle2 size={14} /> 已确认裁切
+            </span>
+          ) : isCompleted ? (
+            <button
+              onClick={() => setShowConfirmModal(true)}
+              className="inline-flex items-center gap-1.5 px-5 py-2 rounded-full text-[13px] font-medium bg-apple-blue text-white hover:bg-apple-blue/90 shadow-sm transition-colors"
+            >
+              <CheckCircle2 size={14} /> 确认裁切完成
+            </button>
+          ) : (
+            <span className={`px-4 py-2 rounded-full text-[13px] font-medium capitalize ${
+              order.status === "failed" ? "bg-red-100 text-red-600" : "bg-apple-blue/10 text-apple-blue"
+            }`}>{order.status}</span>
+          )}
         </div>
       </div>
 
@@ -200,9 +272,7 @@ export default function OrderDetail() {
           <AlertTriangle size={20} className="text-amber-600 shrink-0 mt-0.5" />
           <div>
             <p className="text-[14px] font-semibold text-amber-800">⚠️ 库存不足</p>
-            <p className="text-[13px] text-amber-700 mt-1">
-              以下板材库存不足，裁切方案仍按当前规格出具，请及时补货：
-            </p>
+            <p className="text-[13px] text-amber-700 mt-1">以下板材库存不足，裁切方案仍按当前规格出具，请及时补货：</p>
             <div className="flex flex-wrap gap-2 mt-2">
               {shortages.map(s => (
                 <span key={s.board_type} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-100 text-amber-800 text-[12px] font-medium">
@@ -222,7 +292,23 @@ export default function OrderDetail() {
         <StatCard icon={<Scissors size={18} />} label="总废料" value={`${((summary?.total_waste || 0) / 1000).toFixed(1)}m`} color="#f59e0b" />
       </div>
 
-      {/* ── Board Size Legend (color key) ── */}
+      {/* ── Stack Cutting Optimization Banner ── */}
+      {stackGroups.saved > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-start gap-3">
+          <Layers size={20} className="text-blue-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-[14px] font-semibold text-blue-800">
+              📦 叠切优化：可节省 {stackGroups.saved} 次裁切
+            </p>
+            <p className="text-[13px] text-blue-700 mt-1">
+              {stackGroups.totalBoards}张板材 → 叠切后仅需裁切 {stackGroups.totalCuts} 次（最多4张叠切）。
+              标记 <span className="inline-flex items-center px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px] font-bold mx-0.5">×N</span> 的板材可叠在一起切。
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Board Size Legend ── */}
       <div className="flex flex-wrap gap-2">
         {sizeGroups.map(([size, boardList]) => {
           const c = sizeColorMap[size];
@@ -239,20 +325,21 @@ export default function OrderDetail() {
 
       {/* ── Layout View: Flat tile grid ── */}
       {viewMode === "layout" && (
-        <div className="flex flex-wrap gap-4">
-          {boards.map((board, idx) => (
+        <div className="flex flex-wrap gap-x-12 gap-y-16 pt-8 pb-12 pl-6 pr-6 justify-center sm:justify-start">
+          {boards.filter(board => stackGroups.lookup[board.board_id]?.isLeader).map((board, idx) => (
             <BoardTile
               key={board.board_id}
               board={board}
               index={idx}
               color={sizeColorMap[board.board_size]}
+              stackInfo={stackGroups.lookup[board.board_id]}
               onClick={() => setSelectedBoard(board)}
             />
           ))}
         </div>
       )}
 
-      {/* ── Table View: All cutting data ── */}
+      {/* ── Table View ── */}
       {viewMode === "table" && (
         <div className="bg-card rounded-xl shadow-apple border border-border/30 overflow-hidden">
           <div className="overflow-x-auto">
@@ -267,6 +354,7 @@ export default function OrderDetail() {
                   <th className="text-center py-3 px-4 font-semibold text-apple-gray">刀数</th>
                   <th className="text-right py-3 px-4 font-semibold text-apple-gray">废料(mm)</th>
                   <th className="text-right py-3 px-4 font-semibold text-apple-gray">利用率</th>
+                  <th className="text-center py-3 px-4 font-semibold text-apple-gray">叠切</th>
                   <th className="text-left py-3 px-4 font-semibold text-apple-gray">零件明细</th>
                 </tr>
               </thead>
@@ -275,6 +363,7 @@ export default function OrderDetail() {
                   const c = sizeColorMap[board.board_size];
                   const utilPct = (board.utilization * 100).toFixed(1);
                   const utilNum = parseFloat(utilPct);
+                  const si = stackGroups.lookup[board.board_id];
                   return (
                     <tr key={board.board_id} className="border-b border-border/20 hover:bg-black/[0.01]">
                       <td className="py-2.5 px-4 text-apple-gray">{idx + 1}</td>
@@ -289,9 +378,12 @@ export default function OrderDetail() {
                       <td className="py-2.5 px-4 text-center">{board.parts.length}</td>
                       <td className="py-2.5 px-4 text-center">{board.cuts}</td>
                       <td className="py-2.5 px-4 text-right font-mono">{board.waste.toFixed(0)}</td>
-                      <td className="py-2.5 px-4 text-right font-bold" style={{
-                        color: utilNum > 80 ? "#10b981" : utilNum > 60 ? "#f59e0b" : "#ef4444",
-                      }}>{utilPct}%</td>
+                      <td className="py-2.5 px-4 text-right font-bold" style={{ color: utilNum > 80 ? "#10b981" : utilNum > 60 ? "#f59e0b" : "#ef4444" }}>{utilPct}%</td>
+                      <td className="py-2.5 px-4 text-center">
+                        {si && si.stackOf > 1 ? (
+                          <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-bold">×{si.stackOf}</span>
+                        ) : "—"}
+                      </td>
                       <td className="py-2.5 px-4">
                         <div className="flex flex-wrap gap-1">
                           {board.parts.map((p, pi) => (
@@ -318,6 +410,16 @@ export default function OrderDetail() {
           onClose={() => setSelectedBoard(null)}
         />
       )}
+
+      {/* ── Confirm Cut Modal ── */}
+      {showConfirmModal && order && cutResult && (
+        <ConfirmCutModal
+          order={order}
+          boards={boards}
+          onConfirmed={handleCutConfirmed}
+          onClose={() => setShowConfirmModal(false)}
+        />
+      )}
     </div>
   );
 }
@@ -335,58 +437,45 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
   );
 }
 
-/* ======================================================
-   BoardTile — Small tile for the flat grid overview
-   Each board is its own natural size, no T0 reference frame.
-   Wider proportions for narrow boards.
-   ====================================================== */
-function BoardTile({ board, index, color, onClick }: {
+/* ═══════════════════════════════════════════
+   BoardTile — Small tile for flat grid overview
+   ═══════════════════════════════════════════ */
+function BoardTile({ board, index, color, stackInfo, onClick }: {
   board: Board;
   index: number;
   color: typeof SIZE_COLORS[0];
+  stackInfo?: { groupSize: number; stackOf: number; isLeader: boolean };
   onClick: () => void;
 }) {
-  /* Parse board dimensions */
+  const [isHovered, setIsHovered] = useState(false);
+
   const boardDims = useMemo(() => {
     const p = board.board_size.split("×").map((s) => parseFloat(s.trim()));
     return { width: p[0] || 0, height: p[1] || 0 };
   }, [board.board_size]);
 
-  /*
-   * Visual sizing: board is its own size (no T0 background).
-   * 48" horizontal = 1219.2mm, 96" vertical = 2438.4mm.
-   * We scale proportionally but ensure narrow boards are still readable.
-   * Target: ~120px wide for a 609.6mm board, ~80px for 304.8mm, ~160px for 1219.2mm.
-   * Aspect ratio maintained with a slight width stretch for narrow boards.
-   */
-  const TILE_BASE_H = 200; // visual height for 96" board
+  const TILE_BASE_H = 200;
   const widthRatio = boardDims.width / boardDims.height;
-  // Apply width multiplier: narrow boards get 1.8x stretch, wide boards 1.2x
   const stretchFactor = widthRatio < 0.3 ? 1.8 : widthRatio < 0.5 ? 1.4 : 1.2;
   const tileW = Math.max(60, Math.round(TILE_BASE_H * widthRatio * stretchFactor));
   const tileH = TILE_BASE_H;
 
-  /* Build part layout positions */
   const partLayout = useMemo(() => {
     if (!boardDims.height) return [];
     const bH = boardDims.height;
     const bW = boardDims.width;
-    const trim = board.trim_loss;
-    const kerf = board.saw_kerf;
-
-    let y = trim;
+    let y = board.trim_loss;
     return board.parts.map((p, idx) => {
       const pH = p.cut_length || p.Height;
       const pW = p.Width;
       const top = (y / bH) * 100;
       const height = (pH / bH) * 100;
       const width = Math.min((pW / bW) * 100, 100);
-      y += pH + kerf;
+      y += pH + board.saw_kerf;
       return { ...p, top, height, width, idx };
     });
   }, [board, boardDims]);
 
-  /* Waste position */
   const wasteTop = useMemo(() => {
     if (!partLayout.length) return 100;
     const last = partLayout[partLayout.length - 1];
@@ -397,105 +486,138 @@ function BoardTile({ board, index, color, onClick }: {
   const utilNum = parseFloat(utilPct);
   const utilColor = utilNum > 80 ? "#10b981" : utilNum > 60 ? "#f59e0b" : "#ef4444";
 
+  const stackOf = stackInfo?.stackOf || 1;
+
   return (
     <div
-      className="bg-card rounded-xl shadow-sm border overflow-hidden cursor-pointer hover:shadow-apple hover:-translate-y-0.5 transition-all group"
-      style={{ borderColor: color.border + "30", width: `${tileW + 24}px` }}
+      // elevate z-index massively so the hover popout spans over adjacent items without layout shift
+      className={`relative cursor-pointer transition-all duration-300 ${isHovered ? 'z-50' : 'z-0'}`}
+      style={{ width: `${tileW + 24}px`, height: `${tileH + 36}px` }}
       onClick={onClick}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
     >
-      {/* Board title */}
-      <div className="px-2 pt-2 pb-1 flex items-center justify-between">
-        <span className="text-[10px] font-semibold text-foreground truncate">{board.board_id}</span>
-        <span className="text-[10px] font-bold tabular-nums" style={{ color: utilColor }}>{utilPct}%</span>
-      </div>
-
-      {/* Board visual */}
-      <div className="px-2 pb-1 flex justify-center">
-        <div
-          className="relative rounded-sm overflow-hidden"
+      {/* Floating Badge above the card */}
+      {stackOf > 1 && (
+        <div 
+          className="absolute left-1/2 -translate-x-1/2 transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] z-50 rounded-full px-2 py-0.5 pointer-events-none flex items-center shadow-lg border"
           style={{
-            width: `${tileW}px`,
-            height: `${tileH}px`,
-            backgroundColor: color.light,
-            border: `1.5px solid ${color.border}50`,
+             top: isHovered ? '-40px' : '-20px',
+             background: color.bg, // Matches the size legend background color
+             borderColor: color.border,
+             color: color.text,
+             transform: isHovered ? `translateX(-50%) scale(1.15)` : `translateX(-50%) scale(1)`,
+             opacity: 1
           }}
         >
-          {/* Parts */}
-          {partLayout.map((p) => (
-            <div
-              key={`${p.part_id}-${p.idx}`}
-              className="absolute"
-              style={{
-                top: `${p.top}%`,
-                left: `0%`,
-                width: `${p.width}%`,
-                height: `${p.height}%`,
+          <span className="font-bold text-[11px] whitespace-nowrap">×{stackOf} 叠切</span>
+        </div>
+      )}
+
+      {/* Backdrops for stack effect (animated on hover to fan out like cards) */}
+      {stackOf > 1 && Array.from({ length: stackOf - 1 }).map((_, domIndex) => {
+        const depth = Math.min(stackOf - 1, 4) - domIndex; 
+        
+        const direction = (depth % 2 !== 0) ? -1 : 1; 
+        const currentSpread = Math.ceil(depth / 2); 
+        
+        const baseTransform = `translate(${depth * 4}px, ${depth * 4}px) rotate(0deg) scale(1)`;
+        // Macbook pop effect: extreme pop scale and spaced left and right symmetrically
+        const hoverTransform = `translate(${direction * currentSpread * 45}px, -15px) rotate(${direction * currentSpread * 6}deg) scale(1.15)`;
+        
+        return (
+          <div 
+            key={domIndex}
+            className="absolute top-0 left-0 bg-white rounded-xl border transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] origin-bottom-left"
+            style={{ 
+              borderColor: color.border + "30", 
+              width: `100%`, 
+              height: `100%`,
+              transform: isHovered ? hoverTransform : baseTransform,
+              boxShadow: isHovered ? 'inset 0 0 0 1px rgba(0,0,0,0.12), 0 8px 30px rgba(0,0,0,0.12)' : 'inset 0 0 0 1px rgba(0,0,0,0.08)'
+            }}
+          >
+             <div 
+               className="w-full h-full rounded-xl transition-opacity duration-500" 
+               style={{ backgroundColor: color.light, opacity: isHovered ? 0.8 : 0.3 }} 
+             />
+          </div>
+        );
+      })}
+
+      {/* Main Tile */}
+      <div
+        className="absolute top-0 left-0 bg-card rounded-xl border overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] origin-bottom-left bg-white"
+        style={{ 
+          borderColor: color.border + "30", 
+          width: `100%`, 
+          height: `100%`,
+          transform: isHovered ? `translate(0px, -20px) rotate(0deg) scale(1.25)` : `translate(0px, 0px) rotate(0deg) scale(1)`,
+          boxShadow: isHovered ? '0 20px 40px rgba(0,0,0,0.2)' : '0 2px 8px rgba(0,0,0,0.04)'
+        }}
+      >
+        {/* Board title without inline badge to keep it clean */}
+        <div className="px-2 pt-2 pb-1 flex items-center justify-between gap-1">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-[10px] font-semibold text-foreground truncate">{board.board_id}</span>
+          </div>
+          <span className="text-[10px] font-bold tabular-nums shrink-0" style={{ color: utilColor }}>{utilPct}%</span>
+        </div>
+
+        {/* Board visual */}
+        <div className="px-2 pb-2 flex justify-center">
+          <div className="relative rounded-sm overflow-hidden" style={{
+            width: `${tileW}px`, height: `${tileH}px`,
+            backgroundColor: color.light, border: `1.5px solid ${color.border}50`,
+          }}>
+            {partLayout.map((p) => (
+              <div key={`${p.part_id}-${p.idx}`} className="absolute" style={{
+                top: `${p.top}%`, left: `0%`, width: `${p.width}%`, height: `${p.height}%`,
                 backgroundColor: color.bg,
                 borderBottom: `1px solid ${color.border}60`,
                 borderRight: p.width < 100 ? `1px solid ${color.border}60` : undefined,
-              }}
-            />
-          ))}
-
-          {/* Waste */}
-          {wasteTop < 96 && (
-            <div
-              className="absolute left-0 w-full"
-              style={{
-                top: `${wasteTop}%`,
-                height: `${Math.max(100 - wasteTop, 0)}%`,
+              }} />
+            ))}
+            {wasteTop < 96 && (
+              <div className="absolute left-0 w-full" style={{
+                top: `${wasteTop}%`, height: `${Math.max(100 - wasteTop, 0)}%`,
                 background: "repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px)",
                 borderTop: "1px dashed #ddd",
-              }}
-            />
-          )}
+              }} />
+            )}
+          </div>
         </div>
-      </div>
-
-      {/* Bottom info */}
-      <div className="px-2 pb-2 pt-0.5 text-center">
-        <span className="text-[9px] text-apple-gray">{board.parts.length}件 · {board.waste.toFixed(0)}mm废</span>
       </div>
     </div>
   );
 }
 
-/* ======================================================
-   BoardDetailModal — Shows detailed info when clicking a tile
-   ====================================================== */
+/* ═══════════════════════════════════════════
+   BoardDetailModal
+   ═══════════════════════════════════════════ */
 function BoardDetailModal({ board, color, onClose }: {
-  board: Board;
-  color: typeof SIZE_COLORS[0];
-  onClose: () => void;
+  board: Board; color: typeof SIZE_COLORS[0]; onClose: () => void;
 }) {
-  /* Parse board dimensions */
   const boardDims = useMemo(() => {
     const p = board.board_size.split("×").map((s) => parseFloat(s.trim()));
     return { width: p[0] || 0, height: p[1] || 0 };
   }, [board.board_size]);
 
-  /* Visual sizing for modal — larger */
   const MODAL_H = 400;
   const widthRatio = boardDims.width / boardDims.height;
   const stretchFactor = widthRatio < 0.3 ? 2.2 : widthRatio < 0.5 ? 1.6 : 1.3;
   const modalVisualW = Math.max(100, Math.round(MODAL_H * widthRatio * stretchFactor));
 
-  /* Build part layout */
   const partLayout = useMemo(() => {
     if (!boardDims.height) return [];
-    const bH = boardDims.height;
-    const bW = boardDims.width;
-    const trim = board.trim_loss;
-    const kerf = board.saw_kerf;
-
-    let y = trim;
+    let y = board.trim_loss;
     return board.parts.map((p, idx) => {
       const pH = p.cut_length || p.Height;
       const pW = p.Width;
-      const top = (y / bH) * 100;
-      const height = (pH / bH) * 100;
-      const width = Math.min((pW / bW) * 100, 100);
-      y += pH + kerf;
+      const top = (y / boardDims.height) * 100;
+      const height = (pH / boardDims.height) * 100;
+      const width = Math.min((pW / boardDims.width) * 100, 100);
+      y += pH + board.saw_kerf;
       return { ...p, top, height, width, idx };
     });
   }, [board, boardDims]);
@@ -513,14 +635,10 @@ function BoardDetailModal({ board, color, onClose }: {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/25 backdrop-blur-sm" />
-      <div
-        className="relative bg-white w-full max-w-3xl rounded-2xl shadow-[0_8px_40px_rgba(0,0,0,0.15)] border border-black/5 overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-        style={{ animation: "modalIn 0.22s cubic-bezier(0.16, 1, 0.3, 1)" }}
-      >
+      <div className="relative bg-white w-full max-w-3xl rounded-2xl shadow-[0_8px_40px_rgba(0,0,0,0.15)] border border-black/5 overflow-hidden"
+        onClick={(e) => e.stopPropagation()} style={{ animation: "modalIn 0.22s cubic-bezier(0.16, 1, 0.3, 1)" }}>
         <style>{`@keyframes modalIn { from { opacity: 0; transform: scale(0.95) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }`}</style>
 
-        {/* Modal Header */}
         <div className="p-5 border-b border-border/40 flex items-center justify-between" style={{ backgroundColor: color.light }}>
           <div className="flex items-center gap-3">
             <span className="w-4 h-4 rounded" style={{ backgroundColor: color.bg, border: `2px solid ${color.border}` }} />
@@ -531,52 +649,34 @@ function BoardDetailModal({ board, color, onClose }: {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-[18px] font-bold" style={{ color: utilColor }}>{utilPct}%</span>
-            <button onClick={onClose} className="p-2 rounded-full hover:bg-black/5 transition-colors">
-              <X size={18} className="text-apple-gray" />
-            </button>
+            <button onClick={onClose} className="p-2 rounded-full hover:bg-black/5 transition-colors"><X size={18} className="text-apple-gray" /></button>
           </div>
         </div>
 
-        {/* Modal Body */}
         <div className="flex flex-col lg:flex-row">
-          {/* Left: Board visual */}
           <div className="p-5 flex flex-col items-center justify-start lg:border-r border-border/30 bg-[#fafafa] shrink-0">
-            {/* Width label */}
             <div className="flex items-center gap-1 mb-2">
               <div className="h-px bg-apple-gray/20" style={{ width: "16px" }} />
               <span className="text-[10px] text-apple-gray font-mono">{boardDims.width}mm</span>
               <div className="h-px bg-apple-gray/20" style={{ width: "16px" }} />
             </div>
-
             <div className="flex items-stretch gap-1.5">
-              <div
-                className="relative rounded-sm overflow-hidden"
-                style={{
-                  width: `${modalVisualW}px`,
-                  height: `${MODAL_H}px`,
-                  backgroundColor: color.light,
-                  border: `2px solid ${color.border}60`,
-                }}
-              >
+              <div className="relative rounded-sm overflow-hidden" style={{
+                width: `${modalVisualW}px`, height: `${MODAL_H}px`,
+                backgroundColor: color.light, border: `2px solid ${color.border}60`,
+              }}>
                 {partLayout.map((p) => {
                   const partPxH = (p.height / 100) * MODAL_H;
                   const partPxW = (p.width / 100) * modalVisualW;
                   const showText = partPxH > 14 && partPxW > 35;
                   const showDims = partPxH > 26 && partPxW > 50;
                   return (
-                    <div
-                      key={`${p.part_id}-${p.idx}`}
-                      className="absolute flex items-center justify-center overflow-hidden"
-                      style={{
-                        top: `${p.top}%`,
-                        left: `0%`,
-                        width: `${p.width}%`,
-                        height: `${p.height}%`,
-                        backgroundColor: color.bg,
-                        borderBottom: `1px solid ${color.border}70`,
-                        borderRight: p.width < 100 ? `1px solid ${color.border}70` : undefined,
-                      }}
-                    >
+                    <div key={`${p.part_id}-${p.idx}`} className="absolute flex items-center justify-center overflow-hidden" style={{
+                      top: `${p.top}%`, left: `0%`, width: `${p.width}%`, height: `${p.height}%`,
+                      backgroundColor: color.bg,
+                      borderBottom: `1px solid ${color.border}70`,
+                      borderRight: p.width < 100 ? `1px solid ${color.border}70` : undefined,
+                    }}>
                       {showText && (
                         <div className="text-center leading-tight select-none px-0.5">
                           <span className="text-[9px] font-bold block truncate" style={{ color: color.text }}>{p.component || p.part_id}</span>
@@ -586,45 +686,27 @@ function BoardDetailModal({ board, color, onClose }: {
                     </div>
                   );
                 })}
-
                 {wasteTop < 96 && (
-                  <div
-                    className="absolute left-0 w-full flex items-center justify-center"
-                    style={{
-                      top: `${wasteTop}%`,
-                      height: `${Math.max(100 - wasteTop, 0)}%`,
-                      background: "repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.02) 3px, rgba(0,0,0,0.02) 6px)",
-                      borderTop: "1px dashed #ddd",
-                    }}
-                  >
-                    {(100 - wasteTop) > 6 && (
-                      <span className="text-[8px] text-gray-400 font-bold">废料 {board.waste.toFixed(0)}mm</span>
-                    )}
+                  <div className="absolute left-0 w-full flex items-center justify-center" style={{
+                    top: `${wasteTop}%`, height: `${Math.max(100 - wasteTop, 0)}%`,
+                    background: "repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.02) 3px, rgba(0,0,0,0.02) 6px)",
+                    borderTop: "1px dashed #ddd",
+                  }}>
+                    {(100 - wasteTop) > 6 && <span className="text-[8px] text-gray-400 font-bold">废料 {board.waste.toFixed(0)}mm</span>}
                   </div>
                 )}
               </div>
-
-              {/* Height label */}
               <div className="flex flex-col items-center justify-center">
-                <div className="text-[10px] text-apple-gray font-mono" style={{ writingMode: "vertical-rl" }}>
-                  {boardDims.height}mm
-                </div>
+                <div className="text-[10px] text-apple-gray font-mono" style={{ writingMode: "vertical-rl" }}>{boardDims.height}mm</div>
               </div>
             </div>
-
-            {/* Utilization bar */}
             <div className="w-full mt-3" style={{ maxWidth: `${modalVisualW + 20}px` }}>
               <div className="w-full bg-black/[0.04] rounded-full h-2 overflow-hidden">
                 <div className="h-full rounded-full" style={{ width: `${utilPct}%`, backgroundColor: utilColor, transition: "width 0.5s" }} />
               </div>
-              <div className="flex justify-between mt-1 text-[10px] text-apple-gray">
-                <span>锯缝 {board.kerf_total}mm</span>
-                <span>废料 {board.waste.toFixed(0)}mm</span>
-              </div>
             </div>
           </div>
 
-          {/* Right: Parts table */}
           <div className="flex-1 min-w-0 overflow-auto max-h-[500px]">
             <table className="w-full text-[12px]">
               <thead className="sticky top-0 bg-white">
@@ -661,6 +743,221 @@ function BoardDetailModal({ board, color, onClose }: {
               </tfoot>
             </table>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   ConfirmCutModal — Confirm cutting, adjust extra boards, deduct inventory
+   ═══════════════════════════════════════════ */
+function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
+  order: Order;
+  boards: Board[];
+  onConfirmed: () => void;
+  onClose: () => void;
+}) {
+  /* Compute board usage by board_type */
+  const boardUsage = useMemo(() => {
+    const usage: Record<string, number> = {};
+    for (const b of boards) {
+      const bt = b.board;
+      usage[bt] = (usage[bt] || 0) + 1;
+    }
+    return Object.entries(usage).map(([board_type, count]) => ({
+      board_type,
+      planned: count,
+    }));
+  }, [boards]);
+
+  const [extras, setExtras] = useState<Record<string, number>>(() => {
+    const init: Record<string, number> = {};
+    boardUsage.forEach((u) => { init[u.board_type] = 0; });
+    return init;
+  });
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const adjustExtra = (bt: string, delta: number) => {
+    setExtras((prev) => ({
+      ...prev,
+      [bt]: Math.max(0, (prev[bt] || 0) + delta),
+    }));
+  };
+
+  const handleConfirm = async () => {
+    setConfirming(true);
+    setError(null);
+
+    try {
+      // 1. Deduct inventory for each board_type (planned + extra)
+      for (const u of boardUsage) {
+        const totalUsed = u.planned + (extras[u.board_type] || 0);
+        if (totalUsed <= 0) continue;
+
+        // Get current stock
+        const { data: invData } = await supabase
+          .from("inventory")
+          .select("stock")
+          .eq("board_type", u.board_type)
+          .single();
+
+        if (invData) {
+          const newStock = Math.max(0, invData.stock - totalUsed);
+          await supabase
+            .from("inventory")
+            .update({ stock: newStock })
+            .eq("board_type", u.board_type);
+        }
+      }
+
+      // 2. Insert cutting_stats
+      const cutResult = order.cut_result_json;
+      if (cutResult) {
+        const statsRows: Array<{
+          job_id: string;
+          board_type: string;
+          t2_height: number;
+          t2_width: number;
+          component: string;
+          cab_id: string;
+          quantity: number;
+        }> = [];
+        for (const board of cutResult.boards) {
+          for (const part of board.parts) {
+            statsRows.push({
+              job_id: order.job_id,
+              board_type: board.board,
+              t2_height: part.Height,
+              t2_width: part.Width,
+              component: part.component || "",
+              cab_id: part.cab_id || "",
+              quantity: 1,
+            });
+          }
+        }
+        if (statsRows.length > 0) {
+          await supabase.from("cutting_stats").insert(statsRows);
+        }
+      }
+
+      // 3. Build extra_boards_used array
+      const extraBoardsUsed = Object.entries(extras)
+        .filter(([, count]) => count > 0)
+        .map(([board_type, count]) => ({ board_type, count }));
+
+      // 4. Update order status → cut_done
+      await supabase
+        .from("orders")
+        .update({
+          status: "cut_done",
+          cut_confirmed_at: new Date().toISOString(),
+          extra_boards_used: extraBoardsUsed,
+        })
+        .eq("id", order.id);
+
+      onConfirmed();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "确认失败");
+      setConfirming(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/25 backdrop-blur-sm" />
+      <div
+        className="relative bg-white w-full max-w-lg rounded-2xl shadow-[0_8px_40px_rgba(0,0,0,0.15)] border border-black/5 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+        style={{ animation: "modalIn 0.22s cubic-bezier(0.16, 1, 0.3, 1)" }}
+      >
+        <style>{`@keyframes modalIn { from { opacity: 0; transform: scale(0.95) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }`}</style>
+
+        {/* Header */}
+        <div className="p-6 border-b border-border/40">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-10 h-10 rounded-full bg-apple-blue/10 text-apple-blue flex items-center justify-center">
+              <CheckCircle2 size={22} />
+            </div>
+            <h3 className="text-[20px] font-semibold tracking-tight">确认裁切完成</h3>
+          </div>
+          <p className="text-[13px] text-apple-gray leading-relaxed">
+            确认后将扣减库存并记录裁切统计。如有板材损坏等额外消耗，请在下方调整。
+          </p>
+        </div>
+
+        {/* Board usage table */}
+        <div className="p-6">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="border-b border-border/40">
+                <th className="text-left py-2 font-semibold text-apple-gray">板材类型</th>
+                <th className="text-center py-2 font-semibold text-apple-gray">计划用量</th>
+                <th className="text-center py-2 font-semibold text-apple-gray">额外消耗</th>
+                <th className="text-center py-2 font-semibold text-apple-gray">总计扣减</th>
+              </tr>
+            </thead>
+            <tbody>
+              {boardUsage.map((u) => {
+                const extra = extras[u.board_type] || 0;
+                return (
+                  <tr key={u.board_type} className="border-b border-border/20">
+                    <td className="py-3 font-medium">{u.board_type}</td>
+                    <td className="py-3 text-center text-apple-gray">{u.planned}</td>
+                    <td className="py-3">
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          onClick={() => adjustExtra(u.board_type, -1)}
+                          disabled={extra <= 0}
+                          className="w-6 h-6 rounded-full bg-black/5 hover:bg-black/10 flex items-center justify-center text-apple-gray disabled:opacity-30 transition-colors"
+                        >
+                          <Minus size={12} />
+                        </button>
+                        <span className={`w-6 text-center font-bold ${extra > 0 ? "text-amber-600" : "text-apple-gray"}`}>
+                          {extra}
+                        </span>
+                        <button
+                          onClick={() => adjustExtra(u.board_type, 1)}
+                          className="w-6 h-6 rounded-full bg-black/5 hover:bg-black/10 flex items-center justify-center text-apple-gray transition-colors"
+                        >
+                          <Plus size={12} />
+                        </button>
+                      </div>
+                    </td>
+                    <td className="py-3 text-center font-bold text-foreground">{u.planned + extra}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Error */}
+        {error && (
+          <div className="mx-6 mb-4 p-3 rounded-xl bg-red-50 text-red-600 text-[13px] font-medium">{error}</div>
+        )}
+
+        {/* Actions */}
+        <div className="p-6 border-t border-border/40 flex gap-3">
+          <button
+            onClick={onClose}
+            disabled={confirming}
+            className="flex-1 px-4 py-3 rounded-xl bg-black/5 text-foreground text-[15px] font-semibold hover:bg-black/10 transition-colors disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            onClick={handleConfirm}
+            disabled={confirming}
+            className="flex-1 px-4 py-3 rounded-xl bg-apple-blue text-white text-[15px] font-semibold hover:bg-apple-blue/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {confirming ? (
+              <><Loader2 size={16} className="animate-spin" /> 处理中...</>
+            ) : (
+              <><CheckCircle2 size={16} /> 确认并扣减库存</>
+            )}
+          </button>
         </div>
       </div>
     </div>

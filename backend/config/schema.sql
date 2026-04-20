@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS orders (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   job_id text UNIQUE NOT NULL,
   filename text,
-  status text DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+  status text DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'cut_done', 'failed')),
   cabinets_summary text,
   utilization float,
   boards_used int,
@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS orders (
   cut_result_json jsonb,
   file_url text,
   created_at timestamptz DEFAULT now(),
-  completed_at timestamptz
+  completed_at timestamptz,
+  cut_confirmed_at timestamptz,
+  extra_boards_used jsonb DEFAULT '[]'
 );
 
 -- 3. BOM History table

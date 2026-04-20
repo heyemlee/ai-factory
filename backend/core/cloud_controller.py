@@ -132,9 +132,10 @@ def process_order(order: dict):
             output_path=cut_result_path,
         )
 
-        # 4. Deduct inventory
-        print(f"\n  Step 3: Deducting inventory...")
-        deduct_inventory_supabase(result["boards"])
+        # NOTE: Inventory deduction is now handled when user confirms cutting
+        # is complete via the frontend (status → cut_done). This prevents
+        # premature deduction before actual cutting occurs.
+        # Old code: deduct_inventory_supabase(result["boards"])
 
         # 5. Update order in Supabase
         summary = result["summary"]
