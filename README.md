@@ -62,5 +62,6 @@ bash scripts/start_cloud.sh
 
 ## 文档
 
+- [开发者技术文档](docs/developer_guide.md) — 系统设计、Pipeline 详解、开发指南
 - [操作指南](docs/operation_guide.md) — 日常操作详细说明
 - [架构说明](docs/architecture.md) — 系统架构与数据流

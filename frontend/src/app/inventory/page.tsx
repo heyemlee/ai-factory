@@ -220,6 +220,7 @@ export default function Inventory() {
           <table className="w-full text-left min-w-[900px]">
             <thead className="sticky top-0 bg-card z-10">
               <tr>
+                <th className="py-4 px-3 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border w-12 text-center">#</th>
                 <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">ID</th>
                 <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">Name</th>
                 {(activeTab === "main" || activeTab === "sub") && (
@@ -231,11 +232,12 @@ export default function Inventory() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {currentItems.map(item => {
+              {currentItems.map((item, rowIndex) => {
                 const isEditing = editingId === item.id;
 
                 return (
                   <tr key={item.id} className={clsx("transition-colors", isEditing ? "bg-apple-blue/5" : "hover:bg-black/[0.01]")}>
+                    <td className="py-4 px-3 text-[13px] text-apple-gray text-center font-mono">{rowIndex + 1}</td>
                     <td className="py-4 px-6 text-[14px] text-apple-gray">{item.board_type}</td>
 
                     <td className="py-4 px-6">

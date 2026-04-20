@@ -976,6 +976,35 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
     for b in all_board_results:
         board_type_counts[b["board"]] += 1
 
+    # ── Inventory shortage detection ──
+    # Compare boards needed (board_type_counts) vs inventory stock
+    inventory_shortage = []
+    for bt, needed in board_type_counts.items():
+        if bt in inventory:
+            stock = inventory[bt]["qty"]
+            if needed > stock:
+                inventory_shortage.append({
+                    "board_type": bt,
+                    "needed": needed,
+                    "stock": stock,
+                    "shortage": needed - stock,
+                })
+        # Also check via used_inventory (which tracks T1 inventory usage)
+    for bt, used_count in used_inventory.items():
+        if bt in inventory:
+            stock = inventory[bt]["qty"]
+            if used_count > stock and not any(s["board_type"] == bt for s in inventory_shortage):
+                inventory_shortage.append({
+                    "board_type": bt,
+                    "needed": used_count,
+                    "stock": stock,
+                    "shortage": used_count - stock,
+                })
+    if inventory_shortage:
+        print(f"\n⚠️  库存不足:")
+        for s in inventory_shortage:
+            print(f"   {s['board_type']}: 需要 {s['needed']}张, 库存 {s['stock']}张, 缺少 {s['shortage']}张")
+
     summary = {
         "total_parts_required": total_parts_required,
         "total_parts_placed": total_parts_placed,
@@ -986,6 +1015,7 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
         "t0_sheets_used": t0_sheets_used,
         "t0_recovered_strips": t0_total_recovery,
         "inventory_used": used_inventory,
+        "inventory_shortage": inventory_shortage,
         "board_type_breakdown": dict(board_type_counts),
         "total_parts_length": round(sum(b["parts_total_length"] for b in all_board_results), 1),
         "total_trim_loss": round(sum(b["trim_loss"] for b in all_board_results), 1),
