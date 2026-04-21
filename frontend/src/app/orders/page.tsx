@@ -1,9 +1,10 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { UploadCloud, PieChart, Trash2, AlertOctagon, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
-import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { revertCut } from "@/lib/order_actions";
+import { useRouter } from "next/navigation";
+import { useLanguage } from "@/lib/i18n";
 
 interface Order {
   id: string;
@@ -19,6 +20,7 @@ interface Order {
 }
 
 export default function Orders() {
+  const { t } = useLanguage();
   const [isDragging, setIsDragging] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -29,7 +31,6 @@ export default function Orders() {
   const [deleting, setDeleting] = useState(false);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [isDeleteMode, setIsDeleteMode] = useState(false);
-  const router = import("next/navigation").then(mod => mod.useRouter); // We'll just import it at top
 
   const openDeleteModal = useCallback((ordersList: Order[]) => {
     setDeleteError(null);
@@ -88,15 +89,16 @@ export default function Orders() {
   }, []);
 
   useEffect(() => {
-    fetchOrders();
+    (async () => {
+      await fetchOrders();
+    })();
 
-    // Subscribe to realtime updates for orders table
-    const channel = supabase.channel("custom-all-channel")
+    // Subscribe to realtime updates for orders table (INSERT/DELETE/status changes)
+    const channel = supabase.channel("orders-realtime")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "orders" },
-        (payload) => {
-          // You could optimize by updating just the specific order, but re-fetching all ensures full consistency
+        () => {
           fetchOrders();
         }
       )
@@ -106,6 +108,20 @@ export default function Orders() {
       supabase.removeChannel(channel);
     };
   }, [fetchOrders]);
+
+  // Poll every 5s when there are pending/processing orders so that
+  // status changes (pending → completed) appear without a manual refresh.
+  // This is a fallback in case Supabase Realtime replication is not enabled.
+  useEffect(() => {
+    const hasActive = orders.some(o => o.status === "pending" || o.status === "processing");
+    if (!hasActive) return;
+
+    const timer = setInterval(() => {
+      fetchOrders();
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [orders, fetchOrders]);
 
   // Calculate overall utilization from completed orders
   const completedOrders = orders.filter(o => (o.status === "completed" || o.status === "cut_done") && o.utilization);
@@ -188,15 +204,15 @@ export default function Orders() {
     <div className="w-full space-y-10 py-4">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-[32px] font-semibold tracking-tight">Orders</h1>
-          <p className="text-apple-gray text-[15px] mt-1">Upload and track cabinet production orders.</p>
+          <h1 className="text-[32px] font-semibold tracking-tight">{t("orders.title")}</h1>
+          <p className="text-apple-gray text-[15px] mt-1">{t("orders.subtitle")}</p>
         </div>
         <div className="bg-white rounded-2xl px-6 py-4 sm:px-8 sm:py-5 shadow-apple flex items-center gap-6 shrink-0">
           <div className="p-3 bg-apple-blue/10 rounded-xl text-apple-blue shrink-0">
             <PieChart size={24} />
           </div>
           <div className="shrink-0">
-            <p className="text-[13px] font-medium text-apple-gray">Avg Utilization</p>
+            <p className="text-[13px] font-medium text-apple-gray">{t("orders.table.yield")}</p>
             <p className="text-[28px] border-none font-bold text-foreground leading-none">{overallUtil}{overallUtil !== "—" ? "%" : ""}</p>
           </div>
         </div>
@@ -205,7 +221,7 @@ export default function Orders() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-1">
           <div className="bg-card rounded-2xl p-8 shadow-apple h-full flex flex-col">
-            <h2 className="text-xl font-semibold mb-6">New Order</h2>
+            <h2 className="text-xl font-semibold mb-6">{t("orders.upload")}</h2>
 
             <div
               className={`flex-1 border-2 border-dashed rounded-xl flex flex-col items-center justify-center p-8 transition-colors duration-200 ${
@@ -219,7 +235,7 @@ export default function Orders() {
             >
               <UploadCloud size={40} className={isDragging ? "text-apple-blue mb-4" : "text-apple-gray mb-4"} />
               <h3 className="text-[15px] font-semibold mb-1">
-                {uploading ? "Uploading..." : "Upload File"}
+                {uploading ? t("orders.uploading") : t("orders.upload")}
               </h3>
               <p className="text-[13px] text-apple-gray text-center mb-6">
                 .xlsx format supported
@@ -244,7 +260,7 @@ export default function Orders() {
         <div className="lg:col-span-2">
           <div className="bg-card rounded-2xl shadow-apple overflow-hidden">
             <div className="px-8 py-6 border-b border-border flex justify-between items-center">
-              <h2 className="text-xl font-semibold">Order History</h2>
+              <h2 className="text-xl font-semibold">{t("orders.title")}</h2>
               {!isDeleteMode ? (
                 <button
                   onClick={() => setIsDeleteMode(true)}
@@ -266,7 +282,7 @@ export default function Orders() {
                     disabled={selectedOrders.size === 0}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-apple-red/10 text-apple-red rounded-lg text-[13px] font-medium hover:bg-apple-red/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <Trash2 size={14} /> Delete Selected ({selectedOrders.size})
+                    <Trash2 size={14} /> {t("orders.deleteSelected")} ({selectedOrders.size})
                   </button>
                 </div>
               )}
@@ -297,13 +313,13 @@ export default function Orders() {
                         />
                       </th>
                     )}
-                    <th className="py-3 px-4 text-[13px] font-medium text-apple-gray uppercase tracking-wide text-center">Order ID</th>
+                    <th className="py-3 px-4 text-[13px] font-medium text-apple-gray uppercase tracking-wide text-center">{t("orders.table.file")}</th>
                     <th className="py-3 px-4 text-[13px] font-medium text-apple-gray uppercase tracking-wide text-center">Cabinets</th>
                     <th className="py-3 px-4 text-[13px] font-medium text-apple-gray uppercase tracking-wide text-center">Boards</th>
-                    <th className="py-3 px-4 text-[13px] font-medium text-apple-gray uppercase tracking-wide text-center">Status</th>
-                    <th className="py-3 px-4 text-[13px] font-medium text-apple-gray uppercase tracking-wide text-center">Utilization</th>
-                    <th className="py-3 px-4 text-[13px] font-medium text-apple-gray uppercase tracking-wide text-center">Date</th>
-                    <th className="py-3 px-4 text-[13px] font-medium text-apple-gray uppercase tracking-wide text-center">Action</th>
+                    <th className="py-3 px-4 text-[13px] font-medium text-apple-gray uppercase tracking-wide text-center">{t("orders.table.status")}</th>
+                    <th className="py-3 px-4 text-[13px] font-medium text-apple-gray uppercase tracking-wide text-center">{t("orders.table.yield")}</th>
+                    <th className="py-3 px-4 text-[13px] font-medium text-apple-gray uppercase tracking-wide text-center">{t("orders.table.date")}</th>
+                    <th className="py-3 px-4 text-[13px] font-medium text-apple-gray uppercase tracking-wide text-center">{t("orders.table.actions")}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -382,6 +398,8 @@ export default function Orders() {
 }
 
 function OrderRow({ order, isSelected, isDeleteMode, onToggle }: { order: Order, isSelected: boolean, isDeleteMode: boolean, onToggle: (id: string) => void }) {
+  const { t } = useLanguage();
+  const router = useRouter();
   const [showError, setShowError] = useState(false);
   const isCompleted = order.status === "completed";
   const isCutDone = order.status === "cut_done";
@@ -396,10 +414,8 @@ function OrderRow({ order, isSelected, isDeleteMode, onToggle }: { order: Order,
     ? (order.cut_result_json as Record<string, unknown>).error as string || null
     : null;
 
-  const statusLabel = isCutDone ? "已裁切" : order.status.charAt(0).toUpperCase() + order.status.slice(1);
+  const statusLabel = isCutDone ? t("orders.status.cutdone") : isCompleted ? t("orders.status.completed") : isFailed ? t("orders.status.failed") : order.status === "pending" ? t("orders.status.pending") : t("orders.status.processing");
   const statusColor = isCutDone ? "text-apple-green" : isCompleted ? "text-apple-blue" : isFailed ? "text-apple-red" : "text-apple-blue";
-
-  const router = require("next/navigation").useRouter();
 
   const dateObj = new Date(order.created_at);
   const dateStr = `${String(dateObj.getMonth() + 1).padStart(2, '0')}/${String(dateObj.getDate()).padStart(2, '0')} ${String(dateObj.getHours()).padStart(2, '0')}:${String(dateObj.getMinutes()).padStart(2, '0')}`;
@@ -426,8 +442,8 @@ function OrderRow({ order, isSelected, isDeleteMode, onToggle }: { order: Order,
             />
           </td>
         )}
-        <td className="py-4 px-4 text-[15px] font-medium text-foreground align-middle text-center max-w-[180px] truncate" title={order.filename || order.job_id}>
-          {order.filename || order.job_id}
+        <td className="py-4 px-4 text-[15px] font-medium text-foreground align-middle text-center max-w-[180px] truncate" title={order.filename?.replace(/\.(xlsx|xls)$/i, '') || order.job_id}>
+          {order.filename?.replace(/\.(xlsx|xls)$/i, '') || order.job_id}
         </td>
         <td className="py-4 px-4 text-[14px] text-apple-gray align-middle text-center">{cabStr}</td>
         <td className="py-4 px-4 text-[14px] text-foreground font-medium align-middle text-center">{boardsStr}</td>
@@ -442,28 +458,11 @@ function OrderRow({ order, isSelected, isDeleteMode, onToggle }: { order: Order,
             )}
             
             {(order.status === "processing" || order.status === "pending") && (
-              <div className="mt-0.5 space-y-1.5 w-full">
-                <div className="h-1.5 w-full bg-black/5 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-apple-blue rounded-full transition-all duration-500 ease-out" 
-                    style={{ 
-                      width: `${order.status === "pending" ? 0 : (order.cut_result_json?.progress || 5)}%`,
-                      // Add a subtle pulse to the bar itself to indicate active work only when processing
-                      animation: order.status === "processing" ? "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite" : "none"
-                    }} 
-                  />
-                </div>
-                <div className="flex justify-between items-center text-[11px] font-medium">
-                  <span className="text-apple-gray flex items-center gap-1.5">
-                    {order.status === "pending" && <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse"></span>}
-                    {order.status === "processing" && <span className="w-1.5 h-1.5 rounded-full bg-apple-blue animate-pulse"></span>}
-                    {order.status === "pending" ? "等待排队处理..." : (order.cut_result_json?.message || "处理中...")}
-                  </span>
-                  <span className="text-apple-blue font-bold">
-                    {order.status === "pending" ? 0 : (order.cut_result_json?.progress || 0)}%
-                  </span>
-                </div>
-              </div>
+              <span className="inline-flex items-center text-[14px] font-medium text-apple-gray">
+                {order.status === "pending" && <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse mr-2"></span>}
+                {order.status === "processing" && <span className="w-2 h-2 rounded-full bg-apple-blue animate-pulse mr-2"></span>}
+                {order.status === "pending" ? t("orders.status.pending") : t("orders.status.processing")}
+              </span>
             )}
 
             {isFailed && errorMessage && (
@@ -472,7 +471,7 @@ function OrderRow({ order, isSelected, isDeleteMode, onToggle }: { order: Order,
                 className="inline-flex items-center gap-1 text-[12px] text-apple-red/70 hover:text-apple-red transition-colors"
               >
                 {showError ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                查看原因
+                {t("orders.viewReason")}
               </button>
             )}
           </div>
@@ -482,9 +481,9 @@ function OrderRow({ order, isSelected, isDeleteMode, onToggle }: { order: Order,
         <td className="py-4 px-4 align-middle text-center">
           <div className="flex items-center justify-center gap-3">
             {hasLayout ? (
-              <span className="text-apple-blue text-[14px] font-medium px-3 py-1 bg-apple-blue/5 rounded-lg shrink-0 whitespace-nowrap group-hover:bg-apple-blue/10 transition-colors">View</span>
+              <span className="text-apple-blue text-[14px] font-medium px-3 py-1 bg-apple-blue/5 rounded-lg shrink-0 whitespace-nowrap group-hover:bg-apple-blue/10 transition-colors">{t("orders.action.view")}</span>
             ) : (
-              <span className="text-apple-gray text-[14px] shrink-0 whitespace-nowrap">{order.status === "pending" ? "Pending" : order.status === "processing" ? "In Progress" : "—"}</span>
+              <span className="text-apple-gray text-[14px] shrink-0 whitespace-nowrap">{order.status === "pending" ? t("orders.status.pending") : order.status === "processing" ? t("orders.status.processing") : "—"}</span>
             )}
           </div>
         </td>
@@ -495,7 +494,7 @@ function OrderRow({ order, isSelected, isDeleteMode, onToggle }: { order: Order,
             <div className="p-3 rounded-xl bg-apple-red/5 border border-apple-red/10 text-[13px] text-apple-red/80 flex items-start gap-2">
               <AlertTriangle size={14} className="shrink-0 mt-0.5" />
               <div className="min-w-0">
-                <span className="font-semibold text-apple-red">失败原因: </span>
+                <span className="font-semibold text-apple-red">{t("orders.failReason")}: </span>
                 <span className="break-all">{errorMessage}</span>
               </div>
             </div>

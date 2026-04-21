@@ -240,7 +240,9 @@ def process_order(order_path: str, output_path: str = None) -> pd.DataFrame:
         # ── Cabinet ID ──
         cab_no = row.get(col_map.get("CabNo", ""), idx + 1)
         item = str(row.get(col_map.get("Item", ""), "")).strip()
-        cab_id = item if item else f"C{cab_no}"
+        # Use "CabinetNo-ABCItem" to ensure uniqueness — multiple cabinets
+        # can share the same ABC Item code (e.g., two W3333T cabinets).
+        cab_id = f"{cab_no}-{item}" if item else f"C{cab_no}"
 
         # ── Cabinet Type ──
         if has_type_col:

@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
 import { supabase } from "@/lib/supabase";
+import { useLanguage } from "@/lib/i18n";
 
 interface CutStat {
   id: number;
@@ -25,6 +26,7 @@ interface WidthGroup {
 const COLORS = ["#0071e3", "#5856d6", "#34c759", "#ff9500", "#ff3b30", "#5ac8fa", "#af52de", "#ff2d55", "#64d2ff", "#30d158"];
 
 export default function CutStats() {
+  const { t } = useLanguage();
   const [stats, setStats] = useState<CutStat[]>([]);
   const [inventoryWidths, setInventoryWidths] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -120,17 +122,15 @@ export default function CutStats() {
   return (
     <div className="w-full space-y-10 py-4">
       <div>
-        <h1 className="text-[32px] font-semibold tracking-tight">裁切统计</h1>
-        <p className="text-apple-gray text-[15px] mt-1">分析各板材宽度的裁切频率（已排除现有库存规格），为新增 T1 库存决策提供数据支持。</p>
+        <h1 className="text-[32px] font-semibold tracking-tight">{t("cutStats.title")}</h1>
       </div>
 
       {/* Top 10 Bar Chart */}
       <div className="bg-card rounded-2xl p-8 shadow-apple hover:shadow-apple-hover">
-        <h2 className="text-xl font-semibold mb-2">Top 10 需新增常备宽度</h2>
-        <p className="text-apple-gray text-[13px] mb-8">这些是当前库存中没有，但裁切频率较高的高频宽度规格。</p>
+        <h2 className="text-xl font-semibold mb-8">{t("cutStats.top10")}</h2>
         <div className="h-[360px] w-full">
           {loading ? (
-            <div className="flex items-center justify-center h-full text-apple-gray text-[15px]">加载中...</div>
+            <div className="flex items-center justify-center h-full text-apple-gray text-[15px]">{t("cutStats.loading")}</div>
           ) : top10.length > 0 ? (
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={top10} layout="vertical" margin={{ top: 5, right: 30, left: 120, bottom: 5 }}>
@@ -150,7 +150,7 @@ export default function CutStats() {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div className="flex items-center justify-center h-full text-apple-gray text-[15px]">暂无裁切数据或当前规格均已在库存中</div>
+            <div className="flex items-center justify-center h-full text-apple-gray text-[15px]">{t("cutStats.noData")}</div>
           )}
         </div>
       </div>
@@ -158,20 +158,20 @@ export default function CutStats() {
       {/* Full Table */}
       <div className="bg-card rounded-2xl p-8 shadow-apple hover:shadow-apple-hover">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-semibold">裁切宽度频率表</h2>
+          <h2 className="text-xl font-semibold">{t("cutStats.freqTable")}</h2>
           <span className="text-[14px] font-medium text-apple-gray bg-black/[0.04] px-4 py-1.5 rounded-lg">
-            需新增宽度种类: <span className="text-foreground font-bold ml-1">{uniqueSizes}</span>
+            {t("cutStats.newWidthsCount")} <span className="text-foreground font-bold ml-1">{uniqueSizes}</span>
           </span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-[14px]">
             <thead>
               <tr className="border-b border-border">
-                <th className="text-left py-3 px-4 font-semibold text-apple-gray w-20">排名</th>
-                <th className="text-left py-3 px-4 font-semibold text-apple-gray">宽度 (Width mm)</th>
-                <th className="text-left py-3 px-4 font-semibold text-apple-gray">零件总数</th>
-                <th className="text-left py-3 px-4 font-semibold text-apple-gray">零件类型 (Component)</th>
-                <th className="text-left py-3 px-4 font-semibold text-apple-gray">原板型 (Board Type)</th>
+                <th className="text-left py-3 px-4 font-semibold text-apple-gray w-20">{t("cutStats.rank")}</th>
+                <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("cutStats.width")}</th>
+                <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("cutStats.parts")}</th>
+                <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("cutStats.component")}</th>
+                <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("cutStats.boardType")}</th>
               </tr>
             </thead>
             <tbody>
@@ -196,7 +196,7 @@ export default function CutStats() {
               ))}
               {widthGroups.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-apple-gray">暂无需要新增库存的裁切统计数据，或现有库存规格已覆盖。</td>
+                  <td colSpan={5} className="py-8 text-center text-apple-gray">{t("cutStats.noData")}</td>
                 </tr>
               )}
             </tbody>

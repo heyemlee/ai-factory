@@ -5,6 +5,7 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGri
 import Link from "next/link";
 import { AlertCircle } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useLanguage } from "@/lib/i18n";
 
 interface InvItem {
   name: string;
@@ -13,6 +14,7 @@ interface InvItem {
 }
 
 export default function Home() {
+  const { t } = useLanguage();
   const [inventoryData, setInventoryData] = useState<InvItem[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [recentOps, setRecentOps] = useState<any[]>([]);
@@ -54,14 +56,14 @@ export default function Home() {
   return (
     <div className="w-full space-y-10 py-4">
       <div>
-        <h1 className="text-[32px] font-semibold tracking-tight">Overview</h1>
-        <p className="text-apple-gray text-[15px] mt-1">Real-time factory metrics and system status.</p>
+        <h1 className="text-[32px] font-semibold tracking-tight">{t("dash.overview")}</h1>
+        <p className="text-apple-gray text-[15px] mt-1">{t("dash.subtitle")}</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        <MetricCard title="Pending Orders" value={String(pendingCount)} trend="Queue" positive />
-        <MetricCard title="Board Types in Stock" value={String(inventoryData.length)} trend="Main materials" positive />
-        <MetricCard title="Low Stock Alerts" value={String(lowStockCount)} trend={lowStockCount > 0 ? "Action needed" : "All good"} positive={lowStockCount === 0} />
+        <MetricCard title={t("topbar.pending")} value={String(pendingCount)} trend="Queue" positive />
+        <MetricCard title={t("dash.boardTypes")} value={String(inventoryData.length)} trend="Main materials" positive />
+        <MetricCard title={t("dash.lowStock")} value={String(lowStockCount)} trend={lowStockCount > 0 ? "Action needed" : "All good"} positive={lowStockCount === 0} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -69,16 +71,16 @@ export default function Home() {
         <div className="lg:col-span-2 bg-card rounded-2xl p-8 shadow-apple hover:shadow-apple-hover">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
             <div className="flex flex-wrap items-center gap-4">
-              <h2 className="text-xl font-semibold">Main Materials Inventory</h2>
+              <h2 className="text-xl font-semibold">{t("dash.mainInv")}</h2>
               {lowStockCount > 0 && (
                 <div className="flex items-center gap-1.5 bg-apple-red/10 text-apple-red px-3 py-1 rounded-full text-[13px] font-medium shrink-0 whitespace-nowrap">
                   <AlertCircle size={14} />
-                  <span>{lowStockCount} below threshold</span>
+                  <span>{lowStockCount} {t("dash.belowThreshold")}</span>
                 </div>
               )}
             </div>
             <Link href="/inventory" className="text-[14px] text-apple-blue font-medium hover:underline shrink-0 whitespace-nowrap">
-              Manage Inventory
+              {t("dash.manageInv")}
             </Link>
           </div>
           <div className="h-[300px] w-full">
@@ -103,14 +105,14 @@ export default function Home() {
               </BarChart>
             </ResponsiveContainer>
             ) : (
-              <div className="flex items-center justify-center h-full text-apple-gray text-[15px]">Loading inventory data...</div>
+              <div className="flex items-center justify-center h-full text-apple-gray text-[15px]">{t("dash.loading")}</div>
             )}
           </div>
         </div>
 
         {/* Activity List */}
         <div className="bg-card rounded-2xl p-8 shadow-apple hover:shadow-apple-hover flex flex-col">
-          <h2 className="text-xl font-semibold mb-6">Recent Operations</h2>
+          <h2 className="text-xl font-semibold mb-6">{t("dash.recentOps")}</h2>
           <div className="flex-1 space-y-6">
             {recentOps.length > 0 ? recentOps.map((op, idx) => {
               const util = op.utilization ? (op.utilization * 100).toFixed(1) : "—";
@@ -127,7 +129,7 @@ export default function Home() {
                 <div key={idx} className="flex items-start gap-4">
                   <div className="w-2.5 h-2.5 rounded-full bg-apple-blue mt-1.5 shrink-0"></div>
                   <div>
-                    <div className="text-[15px] font-semibold">Yield Optimization</div>
+                    <div className="text-[15px] font-semibold">{t("dash.yieldOpt")}</div>
                     <div className="text-[14px] text-apple-gray mt-0.5">Order #{op.job_id} completed</div>
                     <div className="text-[13px] font-medium text-apple-gray mt-1 flex gap-3">
                       <span className="text-foreground">{util}% yield</span>
@@ -137,7 +139,7 @@ export default function Home() {
                 </div>
               );
             }) : (
-              <div className="text-apple-gray text-[14px]">No recent completed operations.</div>
+              <div className="text-apple-gray text-[14px]">{t("dash.noOps")}</div>
             )}
           </div>
         </div>

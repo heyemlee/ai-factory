@@ -6,6 +6,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { revertCut } from "@/lib/order_actions";
 import dynamic from "next/dynamic";
+import { useLanguage } from "@/lib/i18n";
 
 const CabinetCanvas = dynamic(() => import("@/components/CabinetViewer"), { ssr: false });
 
@@ -98,6 +99,7 @@ function boardFingerprint(board: Board): string {
 }
 
 export default function OrderDetail() {
+  const { t } = useLanguage();
   const params = useParams();
   const id = params?.id || "N/A";
 
@@ -154,19 +156,20 @@ export default function OrderDetail() {
 
   /* ── Stack cutting analysis: group boards with identical cutting patterns ── */
   const stackGroups = useMemo(() => {
-    const fpMap: Record<string, Board[]> = {};
-    for (const b of boards) {
+    const fpMap: Record<string, { board: Board; index: number }[]> = {};
+    for (let i = 0; i < boards.length; i++) {
+      const b = boards[i];
       const fp = boardFingerprint(b);
       if (!fpMap[fp]) fpMap[fp] = [];
-      fpMap[fp].push(b);
+      fpMap[fp].push({ board: b, index: i });
     }
-    // Build a lookup: board_id → stack info
-    const lookup: Record<string, { groupSize: number; stackOf: number; isLeader: boolean }> = {};
+    // Build a lookup: array_index → stack info
+    const lookup: Record<number, { groupSize: number; stackOf: number; isLeader: boolean }> = {};
     for (const group of Object.values(fpMap)) {
       if (group.length < 2) {
         // No stacking possible
-        for (const b of group) {
-          lookup[b.board_id] = { groupSize: 1, stackOf: 1, isLeader: true };
+        for (const item of group) {
+          lookup[item.index] = { groupSize: 1, stackOf: 1, isLeader: true };
         }
       } else {
         // Split into stacks of max 4
@@ -175,7 +178,7 @@ export default function OrderDetail() {
         while (remaining > 0) {
           const stackSize = Math.min(4, remaining);
           for (let i = 0; i < stackSize; i++) {
-            lookup[group[idx].board_id] = { groupSize: group.length, stackOf: stackSize, isLeader: i === 0 };
+            lookup[group[idx].index] = { groupSize: group.length, stackOf: stackSize, isLeader: i === 0 };
             idx++;
           }
           remaining -= stackSize;
@@ -185,15 +188,12 @@ export default function OrderDetail() {
     // Summary: how many actual cuts needed vs total boards
     const totalBoards = boards.length;
     let totalCuts = 0;
-    const counted = new Set<string>();
     for (const group of Object.values(fpMap)) {
-      if (counted.has(group[0].board_id)) continue;
       let remaining = group.length;
       while (remaining > 0) {
         totalCuts++;
         remaining -= Math.min(4, remaining);
       }
-      for (const b of group) counted.add(b.board_id);
     }
     return { lookup, totalBoards, totalCuts, saved: totalBoards - totalCuts };
   }, [boards]);
@@ -267,7 +267,7 @@ export default function OrderDetail() {
 
   const handleRevertCut = async () => {
     if (!order) return;
-    if (!confirm("确定要撤回裁切吗？这将恢复库存并删除相关裁切统计。")) return;
+    if (!confirm(t("orderDetail.revertConfirm"))) return;
     setIsReverting(true);
     try {
       await revertCut(order);
@@ -275,7 +275,7 @@ export default function OrderDetail() {
       const { data } = await supabase.from("orders").select("*").eq("job_id", id as string).maybeSingle();
       if (data) setOrder(data as Order);
     } catch (e) {
-      alert("撤回失败: " + e);
+      alert(t("orderDetail.revertFailed") + e);
     } finally {
       setIsReverting(false);
     }
@@ -286,7 +286,7 @@ export default function OrderDetail() {
       <div className="w-full py-4 flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-3">
           <div className="w-8 h-8 border-2 border-apple-blue/30 border-t-apple-blue rounded-full animate-spin mx-auto" />
-          <p className="text-apple-gray text-[15px]">加载裁切数据...</p>
+          <p className="text-apple-gray text-[15px]">{t("orderDetail.loadingData")}</p>
         </div>
       </div>
     );
@@ -296,11 +296,11 @@ export default function OrderDetail() {
     return (
       <div className="w-full py-4 space-y-4">
         <Link href="/orders" className="inline-flex items-center gap-2 text-apple-blue text-[14px] font-medium hover:underline">
-          <ArrowLeft size={16} /> 返回订单
+          <ArrowLeft size={16} /> {t("orderDetail.back")}
         </Link>
         <div className="bg-card rounded-2xl p-12 shadow-apple text-center">
           <p className="text-apple-gray text-[15px]">
-            {order?.status === "pending" ? "订单处理中，请稍后刷新..." : "未找到裁切结果数据"}
+            {order?.status === "pending" ? t("orderDetail.processingOrder") : t("orderDetail.notFound")}
           </p>
         </div>
       </div>
@@ -319,21 +319,20 @@ export default function OrderDetail() {
             <ArrowLeft size={20} className="text-foreground" />
           </Link>
           <div>
-            <h1 className="text-[26px] font-semibold tracking-tight">裁切方案 #{id as string}</h1>
-            <p className="text-apple-gray text-[14px] mt-0.5">{order.cabinets_summary || "Cutting Layout"}</p>
+            <h1 className="text-[26px] font-semibold tracking-tight">{t("orderDetail.title")} #{id as string}</h1>
           </div>
         </div>
         <div className="flex items-center gap-3">
           {/* View mode toggle */}
           <div className="flex bg-black/[0.04] p-1 rounded-xl">
             <button onClick={() => setViewMode("layout")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${viewMode === "layout" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
-              <LayoutGrid size={14} /> 裁切图
+              <LayoutGrid size={14} /> {t("orderDetail.layout")}
             </button>
             <button onClick={() => setViewMode("table")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${viewMode === "table" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
-              <Table2 size={14} /> 数据表
+              <Table2 size={14} /> {t("orderDetail.dataTable")}
             </button>
             <button onClick={() => setViewMode("cabinets")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${viewMode === "cabinets" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
-              <Box size={14} /> 柜体试图
+              <Box size={14} /> {t("orderDetail.cabinetView")}
             </button>
           </div>
 
@@ -341,14 +340,14 @@ export default function OrderDetail() {
           {isCutDone ? (
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-[13px] font-medium bg-apple-green/10 text-apple-green">
-                <CheckCircle2 size={14} /> 已确认裁切
+                <CheckCircle2 size={14} /> {t("orderDetail.confirmedCut")}
               </span>
               <button 
                 onClick={handleRevertCut}
                 disabled={isReverting}
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full text-[13px] font-medium bg-apple-red/10 text-apple-red hover:bg-apple-red/20 transition-colors disabled:opacity-50"
               >
-                {isReverting ? "处理中..." : "撤回"}
+                {isReverting ? t("orderDetail.processing") : "撤回"}
               </button>
             </div>
           ) : isCompleted ? (
@@ -356,7 +355,7 @@ export default function OrderDetail() {
               onClick={() => setShowConfirmModal(true)}
               className="inline-flex items-center gap-1.5 px-5 py-2 rounded-full text-[13px] font-medium bg-apple-blue text-white hover:bg-apple-blue/90 shadow-sm transition-colors"
             >
-              <CheckCircle2 size={14} /> 确认裁切完成
+              <CheckCircle2 size={14} /> {t("orderDetail.confirmCut")}
             </button>
           ) : (
             <span className={`px-4 py-2 rounded-full text-[13px] font-medium capitalize ${
@@ -371,12 +370,12 @@ export default function OrderDetail() {
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
           <AlertTriangle size={20} className="text-amber-600 shrink-0 mt-0.5" />
           <div>
-            <p className="text-[14px] font-semibold text-amber-800">⚠️ 库存不足</p>
-            <p className="text-[13px] text-amber-700 mt-1">以下板材库存不足，裁切方案仍按当前规格出具，请及时补货：</p>
+            <p className="text-[14px] font-semibold text-amber-800">{t("orderDetail.shortageTitle")}</p>
+            <p className="text-[13px] text-amber-700 mt-1">{t("orderDetail.shortageDesc")}</p>
             <div className="flex flex-wrap gap-2 mt-2">
               {shortages.map(s => (
                 <span key={s.board_type} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-100 text-amber-800 text-[12px] font-medium">
-                  {s.board_type}: 需{s.needed}张 / 库存{s.stock}张 / 缺{s.shortage}张
+                  {s.board_type}: {t("orderDetail.need")}{s.needed} / {t("orderDetail.stock")}{s.stock} / {t("orderDetail.missing")}{s.shortage}
                 </span>
               ))}
             </div>
@@ -389,43 +388,33 @@ export default function OrderDetail() {
         <>
           {/* ── Summary Stats ── */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <StatCard icon={<Layers size={18} />} label="大板数量" value={String(summary?.boards_used || 0)} color="#3b82f6" />
-            <StatCard icon={<Package size={18} />} label="零件总数" value={String(summary?.total_parts_placed || 0)} color="#8b5cf6" />
-            <StatCard icon={<BarChart3 size={18} />} label="整体利用率" value={`${((summary?.overall_utilization || 0) * 100).toFixed(1)}%`} color="#10b981" />
-            <StatCard icon={<Scissors size={18} />} label="总废料" value={`${((summary?.total_waste || 0) / 1000).toFixed(1)}m`} color="#f59e0b" />
+            <StatCard icon={<Layers size={18} />} label={t("orderDetail.boardsCount")} value={String(summary?.boards_used || 0)} color="#3b82f6" />
+            <StatCard icon={<Package size={18} />} label={t("orderDetail.partsCount")} value={String(summary?.total_parts_placed || 0)} color="#8b5cf6" />
+            <StatCard icon={<BarChart3 size={18} />} label={t("orderDetail.overallUtil")} value={`${((summary?.overall_utilization || 0) * 100).toFixed(1)}%`} color="#10b981" />
+            <StatCard icon={<Scissors size={18} />} label={t("orderDetail.totalWaste")} value={`${((summary?.total_waste || 0) / 1000).toFixed(1)}m`} color="#f59e0b" />
           </div>
 
-          {/* ── Stack Cutting Optimization Banner ── */}
-          {stackGroups.saved > 0 && (
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-start gap-3">
-              <Layers size={20} className="text-blue-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="text-[14px] font-semibold text-blue-800">
-                  📦 叠切优化：可节省 {stackGroups.saved} 次裁切
-                </p>
-                <p className="text-[13px] text-blue-700 mt-1">
-                  {stackGroups.totalBoards}张板材 → 叠切后仅需裁切 {stackGroups.totalCuts} 次（最多4张叠切）。
-                  标记 <span className="inline-flex items-center px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px] font-bold mx-0.5">×N</span> 的板材可叠在一起切。
-                </p>
-              </div>
-            </div>
-          )}
+
         </>
       )}
 
       {/* ── Layout View: Flat tile grid ── */}
       {viewMode === "layout" && (
         <div className="flex flex-wrap gap-x-12 gap-y-16 pt-8 pb-12 pl-6 pr-6 justify-center sm:justify-start">
-          {boards.filter(board => stackGroups.lookup[board.board_id]?.isLeader).map((board, idx) => (
-            <BoardTile
-              key={board.board_id}
-              board={board}
-              index={idx}
-              color={sizeColorMap[board.board_size]}
-              stackInfo={stackGroups.lookup[board.board_id]}
-              onClick={() => setSelectedBoard(board)}
-            />
-          ))}
+          {boards.map((board, idx) => {
+            const stackInfo = stackGroups.lookup[idx];
+            if (!stackInfo?.isLeader) return null;
+            return (
+              <BoardTile
+                key={`${board.board_id}-${idx}`}
+                board={board}
+                index={idx}
+                color={sizeColorMap[board.board_size]}
+                stackInfo={stackInfo}
+                onClick={() => setSelectedBoard(board)}
+              />
+            );
+          })}
         </div>
       )}
 
@@ -437,15 +426,15 @@ export default function OrderDetail() {
               <thead>
                 <tr className="bg-black/[0.02]">
                   <th className="text-left py-3 px-4 font-semibold text-apple-gray">#</th>
-                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">板材ID</th>
-                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">板材类型</th>
-                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">尺寸</th>
-                  <th className="text-center py-3 px-4 font-semibold text-apple-gray">零件数</th>
-                  <th className="text-center py-3 px-4 font-semibold text-apple-gray">刀数</th>
-                  <th className="text-right py-3 px-4 font-semibold text-apple-gray">废料(mm)</th>
-                  <th className="text-right py-3 px-4 font-semibold text-apple-gray">利用率</th>
-                  <th className="text-center py-3 px-4 font-semibold text-apple-gray">叠切</th>
-                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">零件明细</th>
+                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thBoardId")}</th>
+                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thBoardType")}</th>
+                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thSize")}</th>
+                  <th className="text-center py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thParts")}</th>
+                  <th className="text-center py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thCuts")}</th>
+                  <th className="text-right py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thWaste")}</th>
+                  <th className="text-right py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thUtil")}</th>
+                  <th className="text-center py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thStack")}</th>
+                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thDetails")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -453,9 +442,9 @@ export default function OrderDetail() {
                   const c = sizeColorMap[board.board_size];
                   const utilPct = (board.utilization * 100).toFixed(1);
                   const utilNum = parseFloat(utilPct);
-                  const si = stackGroups.lookup[board.board_id];
+                  const si = stackGroups.lookup[idx];
                   return (
-                    <tr key={board.board_id} className="border-b border-border/20 hover:bg-black/[0.01]">
+                    <tr key={`${board.board_id}-${idx}`} className="border-b border-border/20 hover:bg-black/[0.01]">
                       <td className="py-2.5 px-4 text-apple-gray">{idx + 1}</td>
                       <td className="py-2.5 px-4 font-medium">
                         <span className="inline-flex items-center gap-1.5">
@@ -501,7 +490,7 @@ export default function OrderDetail() {
             <div className="p-4 border-b border-border/40 bg-black/[0.02]">
               <h3 className="font-semibold text-[15px] flex items-center gap-2">
                 <Box size={16} className="text-apple-blue" />
-                选择柜体 ({cabinets.length})
+                {t("orderDetail.selectCabinet")} ({cabinets.length})
               </h3>
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
@@ -518,7 +507,7 @@ export default function OrderDetail() {
                   <div>
                     <div className="font-medium text-[14px] leading-tight">{cab.cab_id}</div>
                     <div className={`text-[11px] mt-0.5 ${selectedCabinetId === cab.cab_id ? "text-blue-100" : "text-apple-gray"}`}>
-                      {cab.cab_type} · {cab.parts.length}板件
+                      {cab.cab_type} · {cab.parts.length}{t("orderDetail.cabParts")}
                     </div>
                   </div>
                   <ArrowLeft size={14} className={`rotate-180 opacity-0 group-hover:opacity-100 transition-opacity ${selectedCabinetId === cab.cab_id ? "opacity-100" : ""}`} />
@@ -545,7 +534,7 @@ export default function OrderDetail() {
             <div className="p-4 border-b border-border/40 bg-black/[0.02] sticky top-0 z-10 backdrop-blur-md bg-white/95">
               <h3 className="font-semibold text-[15px] flex items-center gap-2 text-apple-gray">
                 <Layers size={16} className="text-apple-blue" />
-                柜体零件清单
+                {t("orderDetail.cabPartsList")}
               </h3>
             </div>
             <div className="p-2 space-y-1">
@@ -560,7 +549,7 @@ export default function OrderDetail() {
                 >
                   <div>
                     <div className={`font-medium text-[14px] leading-tight ${hoveredPartId === p.part_id ? "text-apple-blue" : "text-foreground"}`}>
-                      {p.component || "未命名部位"}
+                      {p.component || t("orderDetail.unnamedPart")}
                     </div>
                     <div className="text-[12px] mt-1 text-apple-gray flex items-center gap-2 font-mono">
                       <span className="inline-flex items-center gap-1"><span className="text-black/40 font-sans">H</span>{p.Height}</span>
@@ -621,12 +610,17 @@ function BoardTile({ board, index, color, stackInfo, onClick }: {
   stackInfo?: { groupSize: number; stackOf: number; isLeader: boolean };
   onClick: () => void;
 }) {
+  const { t } = useLanguage();
   const [isHovered, setIsHovered] = useState(false);
 
   const boardDims = useMemo(() => {
+    const match = board.board.match(/(\d+(?:\.\d+)?)[x×*](\d+(?:\.\d+)?)/i);
+    if (match) {
+      return { width: parseFloat(match[1]), height: parseFloat(match[2]) };
+    }
     const p = board.board_size.split("×").map((s) => parseFloat(s.trim()));
     return { width: p[0] || 0, height: p[1] || 0 };
-  }, [board.board_size]);
+  }, [board.board_size, board.board]);
 
   const TILE_BASE_H = 200;
   const widthRatio = boardDims.width / boardDims.height;
@@ -719,7 +713,7 @@ function BoardTile({ board, index, color, stackInfo, onClick }: {
              opacity: 1
           }}
         >
-          <span className="font-bold text-[11px] whitespace-nowrap">×{stackOf} 叠切</span>
+          <span className="font-bold text-[11px] whitespace-nowrap">×{stackOf} {t("orderDetail.stackCutBadge")}</span>
         </div>
       )}
 
@@ -780,10 +774,15 @@ function BoardTile({ board, index, color, stackInfo, onClick }: {
 function BoardDetailModal({ board, color, onClose }: {
   board: Board; color: typeof SIZE_COLORS[0]; onClose: () => void;
 }) {
+  const { t } = useLanguage();
   const boardDims = useMemo(() => {
+    const match = board.board.match(/(\d+(?:\.\d+)?)[x×*](\d+(?:\.\d+)?)/i);
+    if (match) {
+      return { width: parseFloat(match[1]), height: parseFloat(match[2]) };
+    }
     const p = board.board_size.split("×").map((s) => parseFloat(s.trim()));
     return { width: p[0] || 0, height: p[1] || 0 };
-  }, [board.board_size]);
+  }, [board.board_size, board.board]);
 
   const MODAL_H = 400;
   const widthRatio = boardDims.width / boardDims.height;
@@ -826,7 +825,7 @@ function BoardDetailModal({ board, color, onClose }: {
             <span className="w-4 h-4 rounded" style={{ backgroundColor: color.bg, border: `2px solid ${color.border}` }} />
             <div>
               <h3 className="text-[18px] font-semibold">{board.board_id}</h3>
-              <p className="text-[13px] text-apple-gray">{board.board} · {board.board_size}mm · {board.parts.length}零件 · {board.cuts}刀</p>
+              <p className="text-[13px] text-apple-gray">{board.board} · {board.board_size}mm · {board.parts.length} {t("orderDetail.thParts")} · {board.cuts} {t("orderDetail.thCuts")}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -875,7 +874,7 @@ function BoardDetailModal({ board, color, onClose }: {
                     backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
                     borderTop: `1.5px dashed #94a3b8`,
                   }}>
-                    {(100 - wasteTop) > 6 && <span className="text-[9px] font-bold text-slate-400">废料 {board.waste.toFixed(0)}mm</span>}
+                    {(100 - wasteTop) > 6 && <span className="text-[9px] font-bold text-slate-400">{t("orderDetail.modalWaste")} {board.waste.toFixed(0)}mm</span>}
                   </div>
                 )}
               </div>
@@ -895,9 +894,9 @@ function BoardDetailModal({ board, color, onClose }: {
               <thead className="sticky top-0 bg-white">
                 <tr className="bg-black/[0.02]">
                   <th className="text-left py-2.5 px-4 font-semibold text-apple-gray">#</th>
-                  <th className="text-left py-2.5 px-4 font-semibold text-apple-gray">零件ID</th>
-                  <th className="text-left py-2.5 px-4 font-semibold text-apple-gray">部位</th>
-                  <th className="text-left py-2.5 px-4 font-semibold text-apple-gray">柜号</th>
+                  <th className="text-left py-2.5 px-4 font-semibold text-apple-gray">{t("orderDetail.modalPartId")}</th>
+                  <th className="text-left py-2.5 px-4 font-semibold text-apple-gray">{t("orderDetail.modalComponent")}</th>
+                  <th className="text-left py-2.5 px-4 font-semibold text-apple-gray">{t("orderDetail.modalCabinetId")}</th>
                   <th className="text-right py-2.5 px-4 font-semibold text-apple-gray">Height</th>
                   <th className="text-right py-2.5 px-4 font-semibold text-apple-gray">Width</th>
                 </tr>
@@ -917,10 +916,10 @@ function BoardDetailModal({ board, color, onClose }: {
               <tfoot>
                 <tr className="border-t border-border/40 bg-black/[0.01]">
                   <td colSpan={4} className="py-2.5 px-4 text-[11px] text-apple-gray font-medium">
-                    {board.parts.length}零件 · {board.cuts}刀 · 锯缝{board.kerf_total}mm · 废料{board.waste.toFixed(1)}mm
+                    {board.parts.length} {t("orderDetail.thParts")} · {board.cuts} {t("orderDetail.thCuts")} · {t("orderDetail.modalKerf")}{board.kerf_total}mm · {t("orderDetail.modalWaste")}{board.waste.toFixed(1)}mm
                   </td>
                   <td colSpan={2} className="py-2.5 px-4 text-right text-[13px] font-bold" style={{ color: utilColor }}>
-                    利用率 {utilPct}%
+                    {t("orderDetail.thUtil")} {utilPct}%
                   </td>
                 </tr>
               </tfoot>
@@ -941,6 +940,7 @@ function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
   onConfirmed: () => void;
   onClose: () => void;
 }) {
+  const { t } = useLanguage();
   /* Compute board usage by board_type */
   const boardUsage = useMemo(() => {
     const usage: Record<string, number> = {};
@@ -1042,7 +1042,7 @@ function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
 
       onConfirmed();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "确认失败");
+      setError(e instanceof Error ? e.message : t("orderDetail.modalConfirmFailed"));
       setConfirming(false);
     }
   };
@@ -1063,10 +1063,10 @@ function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
             <div className="w-10 h-10 rounded-full bg-apple-blue/10 text-apple-blue flex items-center justify-center">
               <CheckCircle2 size={22} />
             </div>
-            <h3 className="text-[20px] font-semibold tracking-tight">确认裁切完成</h3>
+            <h3 className="text-[20px] font-semibold tracking-tight">{t("orderDetail.modalConfirmTitle")}</h3>
           </div>
           <p className="text-[13px] text-apple-gray leading-relaxed">
-            确认后将扣减库存并记录裁切统计。如有板材损坏等额外消耗，请在下方调整。
+            {t("orderDetail.modalConfirmDesc")}
           </p>
         </div>
 
@@ -1075,10 +1075,10 @@ function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
           <table className="w-full text-[13px]">
             <thead>
               <tr className="border-b border-border/40">
-                <th className="text-left py-2 font-semibold text-apple-gray">板材类型</th>
-                <th className="text-center py-2 font-semibold text-apple-gray">计划用量</th>
-                <th className="text-center py-2 font-semibold text-apple-gray">额外消耗</th>
-                <th className="text-center py-2 font-semibold text-apple-gray">总计扣减</th>
+                <th className="text-left py-2 font-semibold text-apple-gray">{t("orderDetail.modalThBoardType")}</th>
+                <th className="text-center py-2 font-semibold text-apple-gray">{t("orderDetail.modalThPlanned")}</th>
+                <th className="text-center py-2 font-semibold text-apple-gray">{t("orderDetail.modalThExtra")}</th>
+                <th className="text-center py-2 font-semibold text-apple-gray">{t("orderDetail.modalThTotal")}</th>
               </tr>
             </thead>
             <tbody>
@@ -1128,7 +1128,7 @@ function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
             disabled={confirming}
             className="flex-1 px-4 py-3 rounded-xl bg-black/5 text-foreground text-[15px] font-semibold hover:bg-black/10 transition-colors disabled:opacity-50"
           >
-            取消
+            {t("orderDetail.modalCancel")}
           </button>
           <button
             onClick={handleConfirm}
@@ -1136,9 +1136,9 @@ function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
             className="flex-1 px-4 py-3 rounded-xl bg-apple-blue text-white text-[15px] font-semibold hover:bg-apple-blue/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {confirming ? (
-              <><Loader2 size={16} className="animate-spin" /> 处理中...</>
+              <><Loader2 size={16} className="animate-spin" /> {t("orderDetail.processing")}</>
             ) : (
-              <><CheckCircle2 size={16} /> 确认并扣减库存</>
+              <><CheckCircle2 size={16} /> {t("orderDetail.modalConfirmBtn")}</>
             )}
           </button>
         </div>

@@ -3,23 +3,25 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, Package, History, FileText, BarChart3 } from "lucide-react";
 import clsx from "clsx";
-
-const navItems = [
-  { name: "Dashboard", href: "/", icon: LayoutDashboard },
-  { name: "Orders", href: "/orders", icon: FileText },
-  { name: "Inventory", href: "/inventory", icon: Package },
-  { name: "Cut Stats", href: "/cut-stats", icon: BarChart3 },
-  { name: "BOM Analytics", href: "/bom-analytics", icon: History },
-];
+import { useLanguage } from "@/lib/i18n";
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { t } = useLanguage();
+
+  const navItems = [
+    { name: t("nav.dashboard"), href: "/", icon: LayoutDashboard },
+    { name: t("nav.orders"), href: "/orders", icon: FileText },
+    { name: t("nav.inventory"), href: "/inventory", icon: Package },
+    { name: t("nav.cutStats"), href: "/cut-stats", icon: BarChart3 },
+    { name: t("nav.bomAnalytics"), href: "/bom-analytics", icon: History },
+  ];
 
   return (
     <div className="w-64 bg-background border-r border-border h-screen flex flex-col fixed left-0 top-0 z-20">
       <div className="p-8 pb-4">
         <h1 className="text-xl font-semibold tracking-tight text-foreground">
-          AI Factory
+          {t("app.title")}
         </h1>
       </div>
       

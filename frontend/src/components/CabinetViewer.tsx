@@ -4,6 +4,7 @@ import React, { useMemo, useState, useRef } from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Edges } from "@react-three/drei";
 import * as THREE from "three";
+import { useLanguage } from "@/lib/i18n";
 
 // Suppress THREE.Clock deprecation warning from react-three-fiber internals
 if (typeof console !== 'undefined') {
@@ -204,6 +205,7 @@ export default function CabinetCanvas({ cabinet, hoveredPartId, setHoveredPartId
   hoveredPartId: string | null;
   setHoveredPartId: (id: string | null) => void;
 }) {
+  const { t } = useLanguage();
   return (
     <div className="w-full h-full relative cursor-grab active:cursor-grabbing bg-[#f8fafc] rounded-2xl overflow-hidden border border-black/5 shadow-inner">
       <Canvas camera={{ position: [12, 10, 15], fov: 45 }}>
@@ -211,9 +213,9 @@ export default function CabinetCanvas({ cabinet, hoveredPartId, setHoveredPartId
       </Canvas>
       <div className="absolute top-4 left-4 pointer-events-none">
         <div className="flex items-center gap-2 px-3 py-1.5 bg-white/80 backdrop-blur rounded-lg border border-black/5 shadow-sm text-[12px] font-medium text-apple-gray">
-          <span>拖拽旋转</span>
+          <span>{t("cabinet.dragRotate")}</span>
           <span className="w-1 h-1 rounded-full bg-apple-gray/30" />
-          <span>滚轮缩放</span>
+          <span>{t("cabinet.scrollZoom")}</span>
         </div>
       </div>
     </div>

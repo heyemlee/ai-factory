@@ -2,6 +2,7 @@
 import { usePathname } from "next/navigation";
 import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
+import { LanguageProvider } from "@/lib/i18n";
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -12,7 +13,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <>
+    <LanguageProvider>
       <Sidebar />
       <div className="flex-1 flex flex-col ml-64 min-h-screen relative w-full">
         <Topbar />
@@ -20,6 +21,6 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
-    </>
+    </LanguageProvider>
   );
 }
