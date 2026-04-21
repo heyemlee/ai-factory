@@ -387,11 +387,10 @@ export default function OrderDetail() {
       {viewMode === "table" && (
         <>
           {/* ── Summary Stats ── */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <StatCard icon={<Layers size={18} />} label={t("orderDetail.boardsCount")} value={String(summary?.boards_used || 0)} color="#3b82f6" />
             <StatCard icon={<Package size={18} />} label={t("orderDetail.partsCount")} value={String(summary?.total_parts_placed || 0)} color="#8b5cf6" />
             <StatCard icon={<BarChart3 size={18} />} label={t("orderDetail.overallUtil")} value={`${((summary?.overall_utilization || 0) * 100).toFixed(1)}%`} color="#10b981" />
-            <StatCard icon={<Scissors size={18} />} label={t("orderDetail.totalWaste")} value={`${((summary?.total_waste || 0) / 1000).toFixed(1)}m`} color="#f59e0b" />
           </div>
 
 
@@ -431,7 +430,6 @@ export default function OrderDetail() {
                   <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thSize")}</th>
                   <th className="text-center py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thParts")}</th>
                   <th className="text-center py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thCuts")}</th>
-                  <th className="text-right py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thWaste")}</th>
                   <th className="text-right py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thUtil")}</th>
                   <th className="text-center py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thStack")}</th>
                   <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thDetails")}</th>
@@ -456,7 +454,6 @@ export default function OrderDetail() {
                       <td className="py-2.5 px-4 font-mono text-[12px]">{board.board_size}mm</td>
                       <td className="py-2.5 px-4 text-center">{board.parts.length}</td>
                       <td className="py-2.5 px-4 text-center">{board.cuts}</td>
-                      <td className="py-2.5 px-4 text-right font-mono">{board.waste.toFixed(0)}</td>
                       <td className="py-2.5 px-4 text-right font-bold" style={{ color: utilNum > 80 ? "#10b981" : utilNum > 60 ? "#f59e0b" : "#ef4444" }}>{utilPct}%</td>
                       <td className="py-2.5 px-4 text-center">
                         {si && si.stackOf > 1 ? (

@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Search, Edit2, Save, X, Trash2, AlertOctagon, Plus } from "lucide-react";
+import { Search, Edit2, Save, X, Trash2, AlertOctagon, Plus, ChevronDown } from "lucide-react";
 import clsx from "clsx";
 import { supabase } from "@/lib/supabase";
 
@@ -97,6 +97,7 @@ export default function Inventory() {
   const [deleting, setDeleting] = useState(false);
 
   const [showAddModal, setShowAddModal] = useState(false);
+  const [categoryDropdownOpen, setCategoryDropdownOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [addFormError, setAddFormError] = useState<string | null>(null);
   const [addForm, setAddForm] = useState<Partial<InventoryItem>>({
@@ -152,6 +153,7 @@ export default function Inventory() {
         }
       }
       setShowAddModal(false);
+      setCategoryDropdownOpen(false);
       setAddForm({
         board_type: "", name: "", material: "MDF", category: activeTab, height: 2438.4, width: 0, thickness: 18, stock: 0, threshold: 10, unit: "pcs"
       });
@@ -163,7 +165,7 @@ export default function Inventory() {
   };
 
   return (
-    <div className="w-full space-y-8 py-4 h-[calc(100vh-6rem)] flex flex-col">
+    <div className="w-full space-y-8 py-4 flex flex-col">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between shrink-0 gap-4">
         <div>
           <h1 className="text-[32px] font-semibold tracking-tight">Inventory</h1>
@@ -180,7 +182,7 @@ export default function Inventory() {
         </button>
       </div>
 
-      <div className="bg-card rounded-xl shadow-apple flex flex-col flex-1 min-h-0 border border-border">
+      <div className="bg-card rounded-xl shadow-apple flex flex-col border border-border">
         {/* iOS style segmented control header */}
         <div className="p-6 border-b border-border flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0">
           <div className="flex flex-wrap items-center bg-black/[0.04] p-1 rounded-xl w-full sm:w-auto">
@@ -213,7 +215,7 @@ export default function Inventory() {
         </div>
 
         {/* Clean Table View */}
-        <div className="flex-1 overflow-auto p-2">
+        <div className="overflow-x-auto p-2">
           {loading ? (
             <div className="flex items-center justify-center h-32 text-apple-gray text-[15px]">Loading...</div>
           ) : (
@@ -380,7 +382,7 @@ export default function Inventory() {
       {/* Add Material Modal */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => { if(!adding) setShowAddModal(false); }} />
+          <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => { if(!adding) { setShowAddModal(false); setCategoryDropdownOpen(false); } }} />
           <div className="relative bg-white w-full max-w-lg rounded-[24px] shadow-[0_8px_40px_rgba(0,0,0,0.16)] border border-black/5 p-8" style={{ animation: 'modalIn 0.22s cubic-bezier(0.16, 1, 0.3, 1)' }}>
             <h3 className="text-[24px] font-semibold mb-6 tracking-tight">Add Material</h3>
             
@@ -401,13 +403,28 @@ export default function Inventory() {
                   <label className="block text-[13px] font-medium text-apple-gray mb-1">Material</label>
                   <input type="text" value={addForm.material} onChange={e => setAddForm({...addForm, material: e.target.value})} className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white focus:shadow-apple border border-transparent focus:border-apple-blue/30 transition-all text-foreground" placeholder="e.g. MDF / Plywood" />
                 </div>
-                <div>
+                <div className="relative">
                   <label className="block text-[13px] font-medium text-apple-gray mb-1">Category</label>
-                  <select value={addForm.category} onChange={e => setAddForm({...addForm, category: e.target.value as ItemCategory})} className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white focus:shadow-apple border border-transparent focus:border-apple-blue/30 transition-all text-foreground appearance-none">
-                    <option value="main">Main Materials</option>
-                    <option value="sub">Sub Materials</option>
-                    <option value="aux">Auxiliary</option>
-                  </select>
+                  <div
+                    onClick={() => setCategoryDropdownOpen(!categoryDropdownOpen)}
+                    className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] cursor-pointer focus:outline-none hover:bg-black/[0.06] border border-transparent transition-all text-foreground flex items-center justify-between"
+                  >
+                    <span>
+                      {addForm.category === "main" ? "Main Materials" : addForm.category === "sub" ? "Sub Materials" : "Auxiliary"}
+                    </span>
+                    <ChevronDown size={16} className={`text-apple-gray transition-transform duration-200 ${categoryDropdownOpen ? "rotate-180" : ""}`} />
+                  </div>
+                  
+                  {categoryDropdownOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setCategoryDropdownOpen(false)} />
+                      <div className="absolute top-full left-0 mt-2 w-full bg-white border border-border rounded-xl shadow-[0_8px_30px_rgba(0,0,0,0.12)] p-1 flex flex-col z-50 transform origin-top animate-in fade-in zoom-in-95 duration-100">
+                        <button onClick={() => { setAddForm({...addForm, category: "main"}); setCategoryDropdownOpen(false); }} className={`text-left px-3 py-2 text-[14px] rounded-lg mx-1 transition-colors ${addForm.category === 'main' ? 'bg-black/5 font-semibold text-foreground' : 'text-apple-gray hover:bg-black/[0.04]'}`}>Main Materials</button>
+                        <button onClick={() => { setAddForm({...addForm, category: "sub"}); setCategoryDropdownOpen(false); }} className={`text-left px-3 py-2 text-[14px] rounded-lg mx-1 transition-colors ${addForm.category === 'sub' ? 'bg-black/5 font-semibold text-foreground' : 'text-apple-gray hover:bg-black/[0.04]'}`}>Sub Materials</button>
+                        <button onClick={() => { setAddForm({...addForm, category: "aux"}); setCategoryDropdownOpen(false); }} className={`text-left px-3 py-2 text-[14px] rounded-lg mx-1 transition-colors ${addForm.category === 'aux' ? 'bg-black/5 font-semibold text-foreground' : 'text-apple-gray hover:bg-black/[0.04]'}`}>Auxiliary</button>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -452,7 +469,7 @@ export default function Inventory() {
             )}
 
             <div className="flex justify-end gap-3 mt-8">
-              <button onClick={() => setShowAddModal(false)} disabled={adding} className="px-6 py-2.5 rounded-full bg-black/5 text-foreground text-[14px] font-medium hover:bg-black/10 transition-colors disabled:opacity-50">Cancel</button>
+              <button onClick={() => { setShowAddModal(false); setCategoryDropdownOpen(false); }} disabled={adding} className="px-6 py-2.5 rounded-full bg-black/5 text-foreground text-[14px] font-medium hover:bg-black/10 transition-colors disabled:opacity-50">Cancel</button>
               <button onClick={confirmAdd} disabled={adding} className="px-6 py-2.5 rounded-full bg-apple-blue text-white text-[14px] font-medium hover:bg-apple-blue/90 shadow-sm transition-colors disabled:opacity-50">{adding ? 'Adding...' : 'Add Material'}</button>
             </div>
           </div>

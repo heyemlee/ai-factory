@@ -207,15 +207,6 @@ export default function Orders() {
           <h1 className="text-[32px] font-semibold tracking-tight">{t("orders.title")}</h1>
           <p className="text-apple-gray text-[15px] mt-1">{t("orders.subtitle")}</p>
         </div>
-        <div className="bg-white rounded-2xl px-6 py-4 sm:px-8 sm:py-5 shadow-apple flex items-center gap-6 shrink-0">
-          <div className="p-3 bg-apple-blue/10 rounded-xl text-apple-blue shrink-0">
-            <PieChart size={24} />
-          </div>
-          <div className="shrink-0">
-            <p className="text-[13px] font-medium text-apple-gray">{t("orders.table.yield")}</p>
-            <p className="text-[28px] border-none font-bold text-foreground leading-none">{overallUtil}{overallUtil !== "—" ? "%" : ""}</p>
-          </div>
-        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -234,12 +225,9 @@ export default function Orders() {
               onDrop={handleFileDrop}
             >
               <UploadCloud size={40} className={isDragging ? "text-apple-blue mb-4" : "text-apple-gray mb-4"} />
-              <h3 className="text-[15px] font-semibold mb-1">
+              <h3 className="text-[15px] font-semibold mb-6">
                 {uploading ? t("orders.uploading") : t("orders.upload")}
               </h3>
-              <p className="text-[13px] text-apple-gray text-center mb-6">
-                .xlsx format supported
-              </p>
               {uploadError && (
                 <div className="mb-4 p-3 rounded-xl bg-apple-red/10 text-apple-red text-[13px] text-center font-medium flex items-start gap-2 max-w-full">
                   <AlertTriangle size={16} className="shrink-0 mt-0.5" />

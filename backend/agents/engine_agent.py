@@ -204,6 +204,12 @@ def build_strip_demand(parts: list, inventory: dict = None) -> list:
     """
     Convert all parts into strip demands based on part Width.
 
+    ⚠️ 扫边规则: 所有 Height=2438.4mm 的库存板材(t0,t1), 拿到手第一下
+       扫边 5mm (Height方向, 单边, 只扫一次)
+       - 2438.4mm → 可用长度 2433.4mm
+       - Width 方向不扫边
+       - 未来回收/剩余板材不需要再扫 (已经扫过)
+
     Strategy (优先精确匹配库存):
       1. 先查库存: 精确匹配 Width (±0.5mm 容差)
          e.g.: Width=101.6 → T1-101.6x2438.4 (库存有就用)
@@ -265,7 +271,7 @@ def build_strip_demand(parts: list, inventory: dict = None) -> list:
             strip_groups[(fit_w, fit_bt, False)].append(p)
             continue
 
-        # Strategy 3: default thresholds
+        # Strategy 3: default thresholds (Width不扫边, 直接比较)
         if part_width <= STRIP_WIDTH_NARROW:
             bt = find_inv_by_width(STRIP_WIDTH_NARROW) or DEFAULT_BOARD_T1_NARROW
             strip_groups[(STRIP_WIDTH_NARROW, bt, False)].append(p)
@@ -492,6 +498,8 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
     """
     FFD bin packing of parts within a strip along the Height (2438.4mm) axis.
 
+    ⚠️ 扫边: Height方向扫边 5mm (2438.4 → 2433.4mm), Width方向不扫边.
+
     This is used for BOTH inventory strips AND T0-cut strips.
 
     Args:
@@ -503,7 +511,7 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
     Returns:
       list of strip results, each with parts and utilization
     """
-    usable = board_height - TRIM_LOSS
+    usable = board_height - TRIM_LOSS  # Height方向扫边: 2438.4 - 5 = 2433.4mm
     sorted_parts = sorted(parts, key=lambda p: p["Height"], reverse=True)
 
     open_strips = []  # each: {remaining, parts}
@@ -919,6 +927,7 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
     all_board_results = []
 
     # 5a. Inventory strips — pack parts using T1-xxx-INV name
+    #     扫边: Height方向 5mm (2438.4→2433.4), Width不扫
     for inv_strip in inventory_strips:
         results = ffd_strip_pack(
             inv_strip["parts"],
