@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { UploadCloud, PieChart, Trash2, AlertOctagon } from "lucide-react";
+import { UploadCloud, PieChart, Trash2, AlertOctagon, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
@@ -14,6 +14,7 @@ interface Order {
   boards_used: number | null;
   total_parts: number | null;
   created_at: string;
+  cut_result_json: Record<string, unknown> | null;
 }
 
 export default function Orders() {
@@ -21,6 +22,7 @@ export default function Orders() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Order | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -97,22 +99,28 @@ export default function Orders() {
 
   const uploadFile = async (file: File) => {
     setUploading(true);
+    setUploadError(null);
     const now = new Date();
     const jobId = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}`;
     const storagePath = `orders/${jobId}_${file.name}`;
 
     // Upload to Supabase Storage
-    const { error: uploadError } = await supabase.storage
+    const { error: storageError } = await supabase.storage
       .from("order-files")
       .upload(storagePath, file);
 
-    if (uploadError) {
-      // Storage bucket might not exist — create a row anyway
-      console.warn("Storage upload failed (bucket may not exist):", uploadError.message);
+    if (storageError) {
+      console.error("Storage upload failed:", storageError.message);
+      // Show error to user — the file won't be available for backend processing
+      const friendlyMsg = storageError.message.includes("Bucket not found")
+        ? `文件上传失败: Supabase Storage 中 "order-files" bucket 不存在。请在 Supabase Dashboard → Storage 中创建名为 "order-files" 的 bucket。`
+        : `文件上传失败: ${storageError.message}`;
+      setUploadError(friendlyMsg);
+      setUploading(false);
+      return;
     }
 
-    const fileUrl = uploadError ? null :
-      supabase.storage.from("order-files").getPublicUrl(storagePath).data.publicUrl;
+    const fileUrl = supabase.storage.from("order-files").getPublicUrl(storagePath).data.publicUrl;
 
     // Insert order row
     const { error: insertError } = await supabase
@@ -125,7 +133,7 @@ export default function Orders() {
       });
 
     if (insertError) {
-      alert(`Error creating order: ${insertError.message}`);
+      setUploadError(`订单创建失败: ${insertError.message}`);
     } else {
       await fetchOrders();
     }
@@ -172,6 +180,12 @@ export default function Orders() {
               <p className="text-[13px] text-apple-gray text-center mb-6">
                 .xlsx format supported
               </p>
+              {uploadError && (
+                <div className="mb-4 p-3 rounded-xl bg-apple-red/10 text-apple-red text-[13px] text-center font-medium flex items-start gap-2 max-w-full">
+                  <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                  <span>{uploadError}</span>
+                </div>
+              )}
               <button
                 onClick={handleFileSelect}
                 disabled={uploading}
@@ -276,6 +290,7 @@ export default function Orders() {
 }
 
 function OrderRow({ order, onDelete }: { order: Order, onDelete: (order: Order) => void }) {
+  const [showError, setShowError] = useState(false);
   const isCompleted = order.status === "completed";
   const isCutDone = order.status === "cut_done";
   const isFailed = order.status === "failed";
@@ -284,42 +299,74 @@ function OrderRow({ order, onDelete }: { order: Order, onDelete: (order: Order) 
   const boardsStr = order.boards_used ? String(order.boards_used) : "—";
   const cabStr = order.cabinets_summary || "—";
 
+  // Extract error message from cut_result_json when order failed
+  const errorMessage = isFailed && order.cut_result_json
+    ? (order.cut_result_json as Record<string, unknown>).error as string || null
+    : null;
+
   const statusLabel = isCutDone ? "已裁切" : order.status.charAt(0).toUpperCase() + order.status.slice(1);
   const statusColor = isCutDone ? "text-apple-green" : isCompleted ? "text-apple-blue" : isFailed ? "text-apple-red" : "text-apple-blue";
 
   return (
-    <tr className="hover:bg-black/[0.01] transition-colors">
-      <td className="py-4 px-8 text-[15px] font-medium text-foreground align-middle">
-        <Link href={`/order/${order.job_id}`} className="hover:text-apple-blue transition-colors">
-          {order.job_id}
-        </Link>
-      </td>
-      <td className="py-4 px-8 text-[14px] text-apple-gray align-middle">{cabStr}</td>
-      <td className="py-4 px-8 text-[14px] text-foreground font-medium align-middle">{boardsStr}</td>
-      <td className="py-4 px-8 align-middle">
-        <span className={`inline-flex items-center text-[14px] font-medium ${statusColor}`}>
-          {order.status === "processing" && <span className="w-1.5 h-1.5 rounded-full bg-apple-blue animate-pulse mr-2"></span>}
-          {order.status === "pending" && <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse mr-2"></span>}
-          {isCutDone && <span className="mr-1">✅</span>}
-          {statusLabel}
-        </span>
-      </td>
-      <td className="py-4 px-8 text-[15px] font-medium text-foreground align-middle">{utilStr}</td>
-      <td className="py-4 px-8 align-middle text-right">
-        <div className="flex items-center justify-end gap-3">
-          {hasLayout ? (
-            <Link href={`/order/${order.job_id}`} className="text-apple-blue text-[14px] font-medium hover:underline px-3 py-1 bg-apple-blue/5 rounded-lg shrink-0 whitespace-nowrap">View</Link>
-          ) : (
-            <span className="text-apple-gray text-[14px] shrink-0 whitespace-nowrap">{order.status === "pending" ? "Pending" : order.status === "processing" ? "In Progress" : "—"}</span>
-          )}
-          <button
-            onClick={(e) => { e.stopPropagation(); e.preventDefault(); onDelete(order); }}
-            className="p-2 rounded-full text-apple-gray hover:text-apple-red hover:bg-apple-red/10 transition-colors shrink-0"
-          >
-            <Trash2 size={16} />
-          </button>
-        </div>
-      </td>
-    </tr>
+    <>
+      <tr className="hover:bg-black/[0.01] transition-colors">
+        <td className="py-4 px-8 text-[15px] font-medium text-foreground align-middle">
+          <Link href={`/order/${order.job_id}`} className="hover:text-apple-blue transition-colors">
+            {order.job_id}
+          </Link>
+        </td>
+        <td className="py-4 px-8 text-[14px] text-apple-gray align-middle">{cabStr}</td>
+        <td className="py-4 px-8 text-[14px] text-foreground font-medium align-middle">{boardsStr}</td>
+        <td className="py-4 px-8 align-middle">
+          <div className="flex flex-col gap-1">
+            <span className={`inline-flex items-center text-[14px] font-medium ${statusColor}`}>
+              {order.status === "processing" && <span className="w-1.5 h-1.5 rounded-full bg-apple-blue animate-pulse mr-2"></span>}
+              {order.status === "pending" && <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse mr-2"></span>}
+              {isCutDone && <span className="mr-1">✅</span>}
+              {isFailed && <span className="mr-1">❌</span>}
+              {statusLabel}
+            </span>
+            {isFailed && errorMessage && (
+              <button
+                onClick={(e) => { e.stopPropagation(); e.preventDefault(); setShowError(!showError); }}
+                className="inline-flex items-center gap-1 text-[12px] text-apple-red/70 hover:text-apple-red transition-colors"
+              >
+                {showError ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                查看原因
+              </button>
+            )}
+          </div>
+        </td>
+        <td className="py-4 px-8 text-[15px] font-medium text-foreground align-middle">{utilStr}</td>
+        <td className="py-4 px-8 align-middle text-right">
+          <div className="flex items-center justify-end gap-3">
+            {hasLayout ? (
+              <Link href={`/order/${order.job_id}`} className="text-apple-blue text-[14px] font-medium hover:underline px-3 py-1 bg-apple-blue/5 rounded-lg shrink-0 whitespace-nowrap">View</Link>
+            ) : (
+              <span className="text-apple-gray text-[14px] shrink-0 whitespace-nowrap">{order.status === "pending" ? "Pending" : order.status === "processing" ? "In Progress" : "—"}</span>
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); e.preventDefault(); onDelete(order); }}
+              className="p-2 rounded-full text-apple-gray hover:text-apple-red hover:bg-apple-red/10 transition-colors shrink-0"
+            >
+              <Trash2 size={16} />
+            </button>
+          </div>
+        </td>
+      </tr>
+      {isFailed && errorMessage && showError && (
+        <tr>
+          <td colSpan={6} className="px-8 pb-4 pt-0">
+            <div className="p-3 rounded-xl bg-apple-red/5 border border-apple-red/10 text-[13px] text-apple-red/80 flex items-start gap-2">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <span className="font-semibold text-apple-red">失败原因: </span>
+                <span className="break-all">{errorMessage}</span>
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

@@ -1,9 +1,13 @@
 "use client";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Layers, Package, BarChart3, Scissors, X, AlertTriangle, Table2, LayoutGrid, CheckCircle2, Plus, Minus, Loader2 } from "lucide-react";
+import { ArrowLeft, Layers, Package, BarChart3, Scissors, X, AlertTriangle, Table2, LayoutGrid, CheckCircle2, Plus, Minus, Loader2, Box } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
+import dynamic from "next/dynamic";
+
+const CabinetCanvas = dynamic(() => import("@/components/CabinetViewer"), { ssr: false });
+
 
 /* ── types ──────────────────────────────── */
 interface Part {
@@ -66,6 +70,14 @@ interface Order {
   extra_boards_used?: { board_type: string; count: number }[];
 }
 
+interface Cabinet {
+  cab_id: string;
+  cab_type: string;
+  parts: Part[];
+  dimensions: { width: number; height: number; depth: number };
+}
+
+
 /* Board size color palette — max 5 distinct colors */
 const SIZE_COLORS = [
   { bg: "#dbeafe", border: "#3b82f6", text: "#1d4ed8", light: "#eff6ff" },
@@ -90,8 +102,11 @@ export default function OrderDetail() {
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedBoard, setSelectedBoard] = useState<Board | null>(null);
-  const [viewMode, setViewMode] = useState<"layout" | "table">("layout");
+  const [viewMode, setViewMode] = useState<"layout" | "table" | "cabinets">("layout");
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [selectedCabinetId, setSelectedCabinetId] = useState<string | null>(null);
+  const [hoveredPartId, setHoveredPartId] = useState<string | null>(null);
+
 
   useEffect(() => {
     supabase
@@ -180,6 +195,60 @@ export default function OrderDetail() {
     return { lookup, totalBoards, totalCuts, saved: totalBoards - totalCuts };
   }, [boards]);
 
+  /* ── Group parts into cabinets ── */
+  const cabinets = useMemo(() => {
+    const cabMap: Record<string, Cabinet> = {};
+    for (const b of boards) {
+      for (const p of b.parts) {
+        if (!p.cab_id || p.cab_id === "?" || p.cab_id === "Unknown") continue;
+        if (!cabMap[p.cab_id]) {
+          cabMap[p.cab_id] = {
+            cab_id: p.cab_id,
+            cab_type: p.cab_type || "Unknown",
+            parts: [],
+            dimensions: { width: 0, height: 0, depth: 0 }
+          };
+        }
+        cabMap[p.cab_id].parts.push(p);
+      }
+    }
+    // Heuristically calculate dimensions
+    return Object.values(cabMap).map(cab => {
+      let maxH = 0, maxW = 0, maxD = 0;
+      cab.parts.forEach(p => {
+        const c = (p.component || "").toLowerCase();
+        if (c.includes("side") || c.includes("侧板")) {
+          // 侧板: Height=柜高, Width=柜深
+          maxH = Math.max(maxH, p.Height);
+          maxD = Math.max(maxD, p.Width);
+        } else if (c.includes("top") || c.includes("bottom") || c.includes("顶板") || c.includes("底板")) {
+          // 顶板/底板: Height=柜宽-36, Width=柜深-18 → 补回扣减值
+          maxW = Math.max(maxW, p.Height + 36);
+          maxD = Math.max(maxD, p.Width + 18);
+        } else if (c.includes("back") || c.includes("背板")) {
+          // 背板: Height=柜宽-30, Width=柜高 → 注意Height和Width的含义
+          maxW = Math.max(maxW, p.Height + 30);
+          maxH = Math.max(maxH, p.Width);
+        }
+      });
+      // Fallbacks if heuristics fail
+      if (maxH === 0) maxH = 720;
+      if (maxW === 0) maxW = 600;
+      if (maxD === 0) maxD = 560;
+      
+      cab.dimensions = { width: maxW, height: maxH, depth: maxD };
+      return cab;
+    }).sort((a, b) => a.cab_id.localeCompare(b.cab_id));
+  }, [boards]);
+
+  // Set default selected cabinet when switching to cabinets view
+  useEffect(() => {
+    if (viewMode === "cabinets" && cabinets.length > 0 && !selectedCabinetId) {
+      setSelectedCabinetId(cabinets[0].cab_id);
+    }
+  }, [viewMode, cabinets, selectedCabinetId]);
+
+
   const handleCutConfirmed = useCallback(() => {
     // Refetch order to reflect new status
     supabase
@@ -243,6 +312,9 @@ export default function OrderDetail() {
             </button>
             <button onClick={() => setViewMode("table")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${viewMode === "table" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
               <Table2 size={14} /> 数据表
+            </button>
+            <button onClick={() => setViewMode("cabinets")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${viewMode === "cabinets" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
+              <Box size={14} /> 柜体试图
             </button>
           </div>
 
@@ -399,6 +471,90 @@ export default function OrderDetail() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* ── Cabinets View ── */}
+      {viewMode === "cabinets" && cabinets.length > 0 && (
+        <div className="flex flex-col lg:flex-row gap-6 items-start">
+          
+          {/* 1. Leftmost Area - Cabinet List (Sticky) */}
+          <div className="w-full lg:w-64 flex flex-col bg-card rounded-2xl shadow-apple border border-border/30 overflow-hidden shrink-0 lg:sticky lg:top-4 h-[calc(100vh-140px)] max-h-[700px]">
+            <div className="p-4 border-b border-border/40 bg-black/[0.02]">
+              <h3 className="font-semibold text-[15px] flex items-center gap-2">
+                <Box size={16} className="text-apple-blue" />
+                选择柜体 ({cabinets.length})
+              </h3>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+              {cabinets.map(cab => (
+                <button
+                  key={cab.cab_id}
+                  onClick={() => setSelectedCabinetId(cab.cab_id)}
+                  className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors flex items-center justify-between group ${
+                    selectedCabinetId === cab.cab_id 
+                      ? "bg-apple-blue text-white shadow-sm" 
+                      : "hover:bg-black/[0.04] text-foreground"
+                  }`}
+                >
+                  <div>
+                    <div className="font-medium text-[14px] leading-tight">{cab.cab_id}</div>
+                    <div className={`text-[11px] mt-0.5 ${selectedCabinetId === cab.cab_id ? "text-blue-100" : "text-apple-gray"}`}>
+                      {cab.cab_type} · {cab.parts.length}板件
+                    </div>
+                  </div>
+                  <ArrowLeft size={14} className={`rotate-180 opacity-0 group-hover:opacity-100 transition-opacity ${selectedCabinetId === cab.cab_id ? "opacity-100" : ""}`} />
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 2. Middle Area - 3D Viewer (Square) */}
+          <div className="w-full lg:w-[420px] shrink-0 lg:sticky lg:top-4">
+            <div className="w-full aspect-square bg-card rounded-2xl shadow-apple border border-border/30 relative overflow-hidden">
+              {cabinets.find(c => c.cab_id === selectedCabinetId) && (
+                <CabinetCanvas 
+                  cabinet={cabinets.find(c => c.cab_id === selectedCabinetId)!} 
+                  hoveredPartId={hoveredPartId}
+                  setHoveredPartId={setHoveredPartId}
+                />
+              )}
+            </div>
+          </div>
+
+          {/* 3. Right Area - Parts List (Natural Height, Page Scroll, Card Style) */}
+          <div className="flex-1 min-w-0 flex flex-col bg-card rounded-2xl shadow-apple border border-border/30 overflow-hidden">
+            <div className="p-4 border-b border-border/40 bg-black/[0.02] sticky top-0 z-10 backdrop-blur-md bg-white/95">
+              <h3 className="font-semibold text-[15px] flex items-center gap-2 text-apple-gray">
+                <Layers size={16} className="text-apple-blue" />
+                柜体零件清单
+              </h3>
+            </div>
+            <div className="p-2 space-y-1">
+              {cabinets.find(c => c.cab_id === selectedCabinetId)?.parts.map((p, idx) => (
+                <div 
+                  key={p.part_id} 
+                  className={`w-full text-left px-4 py-3 rounded-xl transition-colors flex items-center justify-between cursor-pointer ${
+                    hoveredPartId === p.part_id ? "bg-blue-50/60 shadow-sm" : "hover:bg-black/[0.02]"
+                  }`}
+                  onMouseEnter={() => setHoveredPartId(p.part_id)}
+                  onMouseLeave={() => setHoveredPartId(null)}
+                >
+                  <div>
+                    <div className={`font-medium text-[14px] leading-tight ${hoveredPartId === p.part_id ? "text-apple-blue" : "text-foreground"}`}>
+                      {p.component || "未命名部位"}
+                    </div>
+                    <div className="text-[12px] mt-1 text-apple-gray flex items-center gap-2 font-mono">
+                      <span className="inline-flex items-center gap-1"><span className="text-black/40 font-sans">H</span>{p.Height}</span>
+                      <span className="text-black/20 font-sans">×</span>
+                      <span className="inline-flex items-center gap-1"><span className="text-black/40 font-sans">W</span>{p.Width}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
         </div>
       )}
 

@@ -223,6 +223,24 @@ def run():
         else:
             print(f"❌ Error: {e}")
 
+    # Create storage bucket for order files
+    print("\n📦 Ensuring 'order-files' storage bucket exists...")
+    try:
+        supabase.storage.create_bucket(
+            "order-files",
+            options={"public": True, "allowed_mime_types": [
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.ms-excel",
+            ]},
+        )
+        print("✅ Created 'order-files' bucket")
+    except Exception as e:
+        if "already exists" in str(e).lower() or "Duplicate" in str(e):
+            print("ℹ️  'order-files' bucket already exists")
+        else:
+            print(f"⚠️  Could not create bucket: {e}")
+            print("   Please create it manually in Supabase Dashboard → Storage")
+
 
 if __name__ == "__main__":
     run()

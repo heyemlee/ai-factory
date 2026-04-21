@@ -19,7 +19,6 @@ echo "🚀 Starting AI Factory Ecosystem..."
 
 # 2. 启动后端 Cloud Controller (后台运行)
 echo "📡 Starting Backend Cloud Controller (Polling Supabase)..."
-source venv/bin/activate
 python3 -m backend.core.cloud_controller --poll > logs/cloud_controller.log 2>&1 &
 BACKEND_PID=$!
 
