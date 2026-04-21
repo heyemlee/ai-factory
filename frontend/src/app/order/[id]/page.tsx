@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowLeft, Layers, Package, BarChart3, Scissors, X, AlertTriangle, Table2, LayoutGrid, CheckCircle2, Plus, Minus, Loader2, Box } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
+import { revertCut } from "@/lib/order_actions";
 import dynamic from "next/dynamic";
 
 const CabinetCanvas = dynamic(() => import("@/components/CabinetViewer"), { ssr: false });
@@ -78,14 +79,15 @@ interface Cabinet {
 }
 
 
-/* Board size color palette — max 5 distinct colors */
+/* Simple bright color palette for 5 distinct sizes */
 const SIZE_COLORS = [
-  { bg: "#dbeafe", border: "#3b82f6", text: "#1d4ed8", light: "#eff6ff" },
-  { bg: "#f3e8ff", border: "#8b5cf6", text: "#6d28d9", light: "#faf5ff" },
-  { bg: "#d1fae5", border: "#10b981", text: "#047857", light: "#ecfdf5" },
-  { bg: "#ffedd5", border: "#f97316", text: "#c2410c", light: "#fff7ed" },
-  { bg: "#fce7f3", border: "#ec4899", text: "#be185d", light: "#fdf2f8" },
+  { bg: "#bfdbfe", border: "#3b82f6", text: "#1d4ed8", light: "#ffffff" },
+  { bg: "#e9d5ff", border: "#a855f7", text: "#6b21a8", light: "#ffffff" },
+  { bg: "#a7f3d0", border: "#10b981", text: "#047857", light: "#ffffff" },
+  { bg: "#fed7aa", border: "#f97316", text: "#c2410c", light: "#ffffff" },
+  { bg: "#fbcfe8", border: "#ec4899", text: "#be185d", light: "#ffffff" },
 ];
+
 
 /* ── Stack cutting: fingerprint a board by its cutting pattern ── */
 function boardFingerprint(board: Board): string {
@@ -104,6 +106,7 @@ export default function OrderDetail() {
   const [selectedBoard, setSelectedBoard] = useState<Board | null>(null);
   const [viewMode, setViewMode] = useState<"layout" | "table" | "cabinets">("layout");
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [isReverting, setIsReverting] = useState(false);
   const [selectedCabinetId, setSelectedCabinetId] = useState<string | null>(null);
   const [hoveredPartId, setHoveredPartId] = useState<string | null>(null);
 
@@ -113,7 +116,7 @@ export default function OrderDetail() {
       .from("orders")
       .select("*")
       .eq("job_id", id as string)
-      .single()
+      .maybeSingle()
       .then(({ data, error }) => {
         if (data) setOrder(data as Order);
         if (error) console.error("Failed to load order:", error);
@@ -255,12 +258,28 @@ export default function OrderDetail() {
       .from("orders")
       .select("*")
       .eq("job_id", id as string)
-      .single()
+      .maybeSingle()
       .then(({ data }) => {
         if (data) setOrder(data as Order);
       });
     setShowConfirmModal(false);
   }, [id]);
+
+  const handleRevertCut = async () => {
+    if (!order) return;
+    if (!confirm("确定要撤回裁切吗？这将恢复库存并删除相关裁切统计。")) return;
+    setIsReverting(true);
+    try {
+      await revertCut(order);
+      // Refetch
+      const { data } = await supabase.from("orders").select("*").eq("job_id", id as string).maybeSingle();
+      if (data) setOrder(data as Order);
+    } catch (e) {
+      alert("撤回失败: " + e);
+    } finally {
+      setIsReverting(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -320,9 +339,18 @@ export default function OrderDetail() {
 
           {/* Status / Confirm button */}
           {isCutDone ? (
-            <span className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-[13px] font-medium bg-apple-green/10 text-apple-green">
-              <CheckCircle2 size={14} /> 已确认裁切
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-[13px] font-medium bg-apple-green/10 text-apple-green">
+                <CheckCircle2 size={14} /> 已确认裁切
+              </span>
+              <button 
+                onClick={handleRevertCut}
+                disabled={isReverting}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full text-[13px] font-medium bg-apple-red/10 text-apple-red hover:bg-apple-red/20 transition-colors disabled:opacity-50"
+              >
+                {isReverting ? "处理中..." : "撤回"}
+              </button>
+            </div>
           ) : isCompleted ? (
             <button
               onClick={() => setShowConfirmModal(true)}
@@ -356,44 +384,34 @@ export default function OrderDetail() {
         </div>
       )}
 
-      {/* ── Summary Stats ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard icon={<Layers size={18} />} label="大板数量" value={String(summary?.boards_used || 0)} color="#3b82f6" />
-        <StatCard icon={<Package size={18} />} label="零件总数" value={String(summary?.total_parts_placed || 0)} color="#8b5cf6" />
-        <StatCard icon={<BarChart3 size={18} />} label="整体利用率" value={`${((summary?.overall_utilization || 0) * 100).toFixed(1)}%`} color="#10b981" />
-        <StatCard icon={<Scissors size={18} />} label="总废料" value={`${((summary?.total_waste || 0) / 1000).toFixed(1)}m`} color="#f59e0b" />
-      </div>
-
-      {/* ── Stack Cutting Optimization Banner ── */}
-      {stackGroups.saved > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-start gap-3">
-          <Layers size={20} className="text-blue-600 shrink-0 mt-0.5" />
-          <div>
-            <p className="text-[14px] font-semibold text-blue-800">
-              📦 叠切优化：可节省 {stackGroups.saved} 次裁切
-            </p>
-            <p className="text-[13px] text-blue-700 mt-1">
-              {stackGroups.totalBoards}张板材 → 叠切后仅需裁切 {stackGroups.totalCuts} 次（最多4张叠切）。
-              标记 <span className="inline-flex items-center px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px] font-bold mx-0.5">×N</span> 的板材可叠在一起切。
-            </p>
+      {/* ── Table View Data / Summary ── */}
+      {viewMode === "table" && (
+        <>
+          {/* ── Summary Stats ── */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <StatCard icon={<Layers size={18} />} label="大板数量" value={String(summary?.boards_used || 0)} color="#3b82f6" />
+            <StatCard icon={<Package size={18} />} label="零件总数" value={String(summary?.total_parts_placed || 0)} color="#8b5cf6" />
+            <StatCard icon={<BarChart3 size={18} />} label="整体利用率" value={`${((summary?.overall_utilization || 0) * 100).toFixed(1)}%`} color="#10b981" />
+            <StatCard icon={<Scissors size={18} />} label="总废料" value={`${((summary?.total_waste || 0) / 1000).toFixed(1)}m`} color="#f59e0b" />
           </div>
-        </div>
-      )}
 
-      {/* ── Board Size Legend ── */}
-      <div className="flex flex-wrap gap-2">
-        {sizeGroups.map(([size, boardList]) => {
-          const c = sizeColorMap[size];
-          return (
-            <div key={size} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-medium border" style={{
-              backgroundColor: c.light, borderColor: c.border + "40", color: c.text,
-            }}>
-              <span className="w-3 h-3 rounded" style={{ backgroundColor: c.bg, border: `1.5px solid ${c.border}` }} />
-              {size}mm · {boardList.length}张
+          {/* ── Stack Cutting Optimization Banner ── */}
+          {stackGroups.saved > 0 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-start gap-3">
+              <Layers size={20} className="text-blue-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-[14px] font-semibold text-blue-800">
+                  📦 叠切优化：可节省 {stackGroups.saved} 次裁切
+                </p>
+                <p className="text-[13px] text-blue-700 mt-1">
+                  {stackGroups.totalBoards}张板材 → 叠切后仅需裁切 {stackGroups.totalCuts} 次（最多4张叠切）。
+                  标记 <span className="inline-flex items-center px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px] font-bold mx-0.5">×N</span> 的板材可叠在一起切。
+                </p>
+              </div>
             </div>
-          );
-        })}
-      </div>
+          )}
+        </>
+      )}
 
       {/* ── Layout View: Flat tile grid ── */}
       {viewMode === "layout" && (
@@ -644,6 +662,41 @@ function BoardTile({ board, index, color, stackInfo, onClick }: {
 
   const stackOf = stackInfo?.stackOf || 1;
 
+  const tileContent = (
+    <>
+      <div className="px-2 pt-2 pb-1 flex items-center justify-between gap-1">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-[10px] font-semibold text-foreground truncate">{board.board_id}</span>
+        </div>
+        <span className="text-[10px] font-bold tabular-nums shrink-0" style={{ color: utilColor }}>{utilPct}%</span>
+      </div>
+
+      <div className="px-2 pb-2 flex justify-center">
+        <div className="relative rounded-sm overflow-hidden" style={{
+          width: `${tileW}px`, height: `${tileH}px`,
+          backgroundColor: color.light, border: `1.5px solid ${color.border}`,
+        }}>
+          {partLayout.map((p) => (
+            <div key={`${p.part_id}-${p.idx}`} className="absolute" style={{
+              top: `${p.top}%`, left: `0%`, width: `${p.width}%`, height: `${p.height}%`,
+              backgroundColor: color.bg,
+              borderBottom: `1px solid ${color.border}`,
+              borderRight: p.width < 100 ? `1px solid ${color.border}` : undefined,
+            }} />
+          ))}
+          {wasteTop < 96 && (
+            <div className="absolute left-0 w-full" style={{
+              top: `${wasteTop}%`, height: `${Math.max(100 - wasteTop, 0)}%`,
+              backgroundColor: "#ffffff",
+              backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
+              borderTop: `1.5px dashed #94a3b8`,
+            }} />
+          )}
+        </div>
+      </div>
+    </>
+  );
+
   return (
     <div
       // elevate z-index massively so the hover popout spans over adjacent items without layout shift
@@ -690,13 +743,16 @@ function BoardTile({ board, index, color, stackInfo, onClick }: {
               width: `100%`, 
               height: `100%`,
               transform: isHovered ? hoverTransform : baseTransform,
-              boxShadow: isHovered ? 'inset 0 0 0 1px rgba(0,0,0,0.12), 0 8px 30px rgba(0,0,0,0.12)' : 'inset 0 0 0 1px rgba(0,0,0,0.08)'
+              boxShadow: isHovered ? 'inset 0 0 0 1px rgba(0,0,0,0.12), 0 8px 30px rgba(0,0,0,0.12)' : 'inset 0 0 0 1px rgba(0,0,0,0.08)',
+              overflow: 'hidden'
             }}
           >
              <div 
-               className="w-full h-full rounded-xl transition-opacity duration-500" 
-               style={{ backgroundColor: color.light, opacity: isHovered ? 0.8 : 0.3 }} 
-             />
+               className="w-full h-full transition-opacity duration-500" 
+               style={{ opacity: isHovered ? 0.9 : 0.6 }} 
+             >
+               {tileContent}
+             </div>
           </div>
         );
       })}
@@ -712,37 +768,7 @@ function BoardTile({ board, index, color, stackInfo, onClick }: {
           boxShadow: isHovered ? '0 20px 40px rgba(0,0,0,0.2)' : '0 2px 8px rgba(0,0,0,0.04)'
         }}
       >
-        {/* Board title without inline badge to keep it clean */}
-        <div className="px-2 pt-2 pb-1 flex items-center justify-between gap-1">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-[10px] font-semibold text-foreground truncate">{board.board_id}</span>
-          </div>
-          <span className="text-[10px] font-bold tabular-nums shrink-0" style={{ color: utilColor }}>{utilPct}%</span>
-        </div>
-
-        {/* Board visual */}
-        <div className="px-2 pb-2 flex justify-center">
-          <div className="relative rounded-sm overflow-hidden" style={{
-            width: `${tileW}px`, height: `${tileH}px`,
-            backgroundColor: color.light, border: `1.5px solid ${color.border}50`,
-          }}>
-            {partLayout.map((p) => (
-              <div key={`${p.part_id}-${p.idx}`} className="absolute" style={{
-                top: `${p.top}%`, left: `0%`, width: `${p.width}%`, height: `${p.height}%`,
-                backgroundColor: color.bg,
-                borderBottom: `1px solid ${color.border}60`,
-                borderRight: p.width < 100 ? `1px solid ${color.border}60` : undefined,
-              }} />
-            ))}
-            {wasteTop < 96 && (
-              <div className="absolute left-0 w-full" style={{
-                top: `${wasteTop}%`, height: `${Math.max(100 - wasteTop, 0)}%`,
-                background: "repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px)",
-                borderTop: "1px dashed #ddd",
-              }} />
-            )}
-          </div>
-        </div>
+        {tileContent}
       </div>
     </div>
   );
@@ -819,7 +845,7 @@ function BoardDetailModal({ board, color, onClose }: {
             <div className="flex items-stretch gap-1.5">
               <div className="relative rounded-sm overflow-hidden" style={{
                 width: `${modalVisualW}px`, height: `${MODAL_H}px`,
-                backgroundColor: color.light, border: `2px solid ${color.border}60`,
+                backgroundColor: color.light, border: `2px solid ${color.border}`,
               }}>
                 {partLayout.map((p) => {
                   const partPxH = (p.height / 100) * MODAL_H;
@@ -830,13 +856,13 @@ function BoardDetailModal({ board, color, onClose }: {
                     <div key={`${p.part_id}-${p.idx}`} className="absolute flex items-center justify-center overflow-hidden" style={{
                       top: `${p.top}%`, left: `0%`, width: `${p.width}%`, height: `${p.height}%`,
                       backgroundColor: color.bg,
-                      borderBottom: `1px solid ${color.border}70`,
-                      borderRight: p.width < 100 ? `1px solid ${color.border}70` : undefined,
+                      borderBottom: `1px solid ${color.border}`,
+                      borderRight: p.width < 100 ? `1px solid ${color.border}` : undefined,
                     }}>
                       {showText && (
                         <div className="text-center leading-tight select-none px-0.5">
-                          <span className="text-[9px] font-bold block truncate" style={{ color: color.text }}>{p.component || p.part_id}</span>
-                          {showDims && <span className="text-[8px] block truncate" style={{ color: color.text + "80" }}>{p.Width}×{p.Height}</span>}
+                          <span className="text-[10px] font-bold block truncate" style={{ color: color.text }}>{p.component || p.part_id}</span>
+                          {showDims && <span className="text-[9px] font-medium block truncate" style={{ color: color.text }}>{p.Width}×{p.Height}</span>}
                         </div>
                       )}
                     </div>
@@ -845,10 +871,11 @@ function BoardDetailModal({ board, color, onClose }: {
                 {wasteTop < 96 && (
                   <div className="absolute left-0 w-full flex items-center justify-center" style={{
                     top: `${wasteTop}%`, height: `${Math.max(100 - wasteTop, 0)}%`,
-                    background: "repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.02) 3px, rgba(0,0,0,0.02) 6px)",
-                    borderTop: "1px dashed #ddd",
+                    backgroundColor: "#ffffff",
+                    backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
+                    borderTop: `1.5px dashed #94a3b8`,
                   }}>
-                    {(100 - wasteTop) > 6 && <span className="text-[8px] text-gray-400 font-bold">废料 {board.waste.toFixed(0)}mm</span>}
+                    {(100 - wasteTop) > 6 && <span className="text-[9px] font-bold text-slate-400">废料 {board.waste.toFixed(0)}mm</span>}
                   </div>
                 )}
               </div>

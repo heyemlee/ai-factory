@@ -67,10 +67,17 @@ def process_order(order: dict):
     print(f"  🔄 Processing Order: {job_id}")
     print(f"{'═' * 55}")
 
+    def update_progress(pct: int, msg: str):
+        supabase.table("orders").update({
+            "status": "processing",
+            "cut_result_json": {"progress": pct, "message": msg}
+        }).eq("id", order["id"]).execute()
+
     # Mark as processing
-    supabase.table("orders").update({"status": "processing"}).eq("id", order["id"]).execute()
+    update_progress(5, "开始处理订单...")
 
     try:
+        update_progress(10, "正在下载订单文件...")
         # 1. Download the order file
         order_path = download_order_file(order)
         if not order_path:
@@ -89,6 +96,7 @@ def process_order(order: dict):
                 raise FileNotFoundError("No order file available (no file_url and no local file)")
 
         # 2. Run Cabinet Calculator
+        update_progress(30, "正在拆解柜体零件...")
         print(f"\n  Step 1: Cabinet Calculator")
         # Ensure backend root is importable
         import importlib.util
@@ -122,6 +130,7 @@ def process_order(order: dict):
                 cab_summary = f"{len(order_df)} ({'/'.join(parts_list)})"
 
         # 3. Run Cutting Engine
+        update_progress(60, "正在进行 AI 智能排版裁切计算...")
         print(f"\n  Step 2: Cutting Engine")
         from agents.engine_agent import run_engine, deduct_inventory_supabase
 
@@ -131,6 +140,8 @@ def process_order(order: dict):
             inventory_path=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "t1_inventory.xlsx"),
             output_path=cut_result_path,
         )
+
+        update_progress(95, "生成最终排版报告...")
 
         # NOTE: Inventory deduction is now handled when user confirms cutting
         # is complete via the frontend (status → cut_done). This prevents
