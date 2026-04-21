@@ -94,7 +94,7 @@ export function Cabinet3DScene({ cabinet, hoveredPartId, setHoveredPartId }: {
 
   // We map the parts to 3D positions based on heuristics
   const boards3D = useMemo(() => {
-    const boards = [];
+    const boards: any[] = [];
     
     // Group parts by component type to manage indices
     const grouped: Record<string, Part[]> = {
@@ -180,7 +180,7 @@ export function Cabinet3DScene({ cabinet, hoveredPartId, setHoveredPartId }: {
       <ambientLight intensity={0.8} />
       <directionalLight position={[10, 20, 15]} intensity={1.2} castShadow />
       <directionalLight position={[-10, 10, -10]} intensity={0.6} />
-      <hemisphereLight skyColor="#ffffff" groundColor="#444444" intensity={0.5} />
+      <hemisphereLight args={['#ffffff', '#444444', 0.5]} />
       
       <group>
         {boards3D.map((b, idx) => (

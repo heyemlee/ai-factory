@@ -140,7 +140,7 @@ export default function CutStats() {
                 <Tooltip
                   cursor={{ fill: "rgba(0,0,0,0.02)" }}
                   contentStyle={{ border: "none", borderRadius: "12px", boxShadow: "0 4px 24px rgba(0,0,0,0.08)" }}
-                  formatter={(value: number) => [`${value} 块`, "零件总数"]}
+                  formatter={(value: any) => [`${value} 块`, "零件总数"]}
                 />
                 <Bar dataKey="count" radius={[0, 6, 6, 0]} barSize={20}>
                   {top10.map((_, index) => (
