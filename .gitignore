@@ -28,3 +28,9 @@ output/
 archive/
 failed_orders/
 incoming_orders/
+
+# Temporary test scripts and dumps
+test_*.py
+fetch_*.py
+dump*.json
+parts_dump.json

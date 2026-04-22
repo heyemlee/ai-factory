@@ -61,7 +61,7 @@ def build_cut_list(data):
                     "Depth(mm)":    part["Depth"],
                     "cut_length":   part["cut_length"],
                     "board_utilization": f"{board['utilization']*100:.1f}%" if idx == 0 else "",
-                    "board_waste":  f"{board['waste']}mm" if idx == 0 else "",
+                    "board_waste":  f"{board['waste']}mm²" if idx == 0 else "",
                 })
 
     return pd.DataFrame(rows)
@@ -109,7 +109,7 @@ def build_combined_summary(data):
     add_row(["用板数", summary.get("boards_used", ""),
              "整体利用率", summary.get("overall_utilization", ""),
              "总零件长度(mm)", summary.get("total_parts_length", ""),
-             "总废料(mm)", summary.get("total_waste", ""), ""])
+             "总废料(mm²)", summary.get("total_waste", ""), ""])
 
     add_row(["总扫边损耗(mm)", summary.get("total_trim_loss", ""),
              "总锯缝损耗(mm)", summary.get("total_kerf_loss", ""),
@@ -128,7 +128,7 @@ def build_combined_summary(data):
 
     # 表头
     add_row(["board_type", "board_size(Depth×Height)", "用板数", "总零件数",
-             "总切割刀数", "总零件长度(mm)", "总锯缝损耗(mm)", "总废料(mm)", "平均利用率"])
+             "总切割刀数", "总零件长度(mm)", "总锯缝损耗(mm)", "总废料(mm²)", "平均利用率"])
 
     # 数据
     groups = defaultdict(list)

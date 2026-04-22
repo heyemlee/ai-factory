@@ -2,7 +2,7 @@
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Layers, Package, BarChart3, Scissors, X, AlertTriangle, Table2, LayoutGrid, CheckCircle2, Plus, Minus, Loader2, Box, Printer } from "lucide-react";
-import { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { revertCut } from "@/lib/order_actions";
 import dynamic from "next/dynamic";
@@ -41,6 +41,15 @@ interface Board {
   waste: number;
   utilization: number;
   source?: string;
+  /* T0 sheet traceability — set when source === "T0" */
+  t0_sheet_id?: string;
+  t0_sheet_index?: number;
+  t0_strip_position?: number;
+  t0_total_strips_on_sheet?: number;
+  t0_sheet_utilization?: number;
+  t0_all_strips?: { strip_width: number; strip_index: number }[];
+  t0_remaining_width?: number;
+  actual_strip_width?: number;
 }
 
 interface InventoryShortage {
@@ -89,13 +98,58 @@ const SIZE_COLORS = [
   { bg: "#fbcfe8", border: "#ec4899", text: "#be185d", light: "#ffffff" },
 ];
 
+/* Colors for T0 strips within a single T0 sheet */
+const T0_STRIP_COLORS = [
+  { bg: "#a5f3e9", border: "#14b8a6", text: "#0d6e5e" },   // teal
+  { bg: "#f9a8d4", border: "#ec4899", text: "#9d174d" },   // pink
+  { bg: "#fdba74", border: "#f97316", text: "#9a3412" },   // orange
+  { bg: "#93c5fd", border: "#3b82f6", text: "#1d4ed8" },   // blue
+  { bg: "#c4b5fd", border: "#8b5cf6", text: "#5b21b6" },   // violet
+];
 
-/* ── Stack cutting: fingerprint a board by its cutting pattern ── */
+
+/* ── Cut-length multiset (order-independent) for stack-cut matching ── */
+function cutLengthMultisetSignature(board: Board): string {
+  const counts = new Map<number, number>();
+  for (const p of board.parts) {
+    const raw = p.cut_length ?? p.Height;
+    const len = Math.round(raw * 1000) / 1000;
+    counts.set(len, (counts.get(len) || 0) + 1);
+  }
+  const sorted = [...counts.keys()].sort((a, b) => a - b);
+  return sorted.map((k) => `${k}×${counts.get(k)!}`).join("|");
+}
+
+/* Stack cutting: same board_size + identical cut-length multiset → stackable */
 function boardFingerprint(board: Board): string {
-  const partSig = board.parts
-    .map((p) => `${p.cut_length || p.Height}x${p.Width}`)
-    .join(",");
-  return `${board.board_size}|${partSig}`;
+  return `${board.board_size}|${cutLengthMultisetSignature(board)}`;
+}
+
+/** Nominal stock width from SKU label (e.g. T0-1219x2438 → 1219). Not from board_size (often strip width). */
+function nominalStockWidthFromLabel(label: string): number | null {
+  if (!label) return null;
+  const m = label.match(/T\d+\s*-\s*([\d.]+)\s*[x×*]\s*([\d.]+)/i);
+  if (m) return parseFloat(m[1]);
+  return null;
+}
+
+function nominalStockWidthForBoard(board: Board): number | null {
+  for (const s of [board.board, board.board_type, board.board_id]) {
+    const w = nominalStockWidthFromLabel(s || "");
+    if (w != null && !Number.isNaN(w)) return w;
+  }
+  return null;
+}
+
+function formatStackCutSequence(sampleBoard: Board, stackSize: number, perCutLabel: string): string {
+  if (!sampleBoard.parts.length) return "—";
+  return sampleBoard.parts
+    .map((p) => {
+      const L = (p.cut_length || p.Height).toFixed(1);
+      if (stackSize <= 1) return L;
+      return `${L}（×${stackSize}${perCutLabel}）`;
+    })
+    .join(" → ");
 }
 
 export default function OrderDetail() {
@@ -220,19 +274,21 @@ export default function OrderDetail() {
     return Object.values(cabMap).map(cab => {
       let maxH = 0, maxW = 0, maxD = 0;
       cab.parts.forEach(p => {
+        const h = p.rotated ? p.Width : p.Height;
+        const w = p.rotated ? p.Height : p.Width;
         const c = (p.component || "").toLowerCase();
         if (c.includes("side") || c.includes("侧板")) {
           // 侧板: Height=柜高, Width=柜深
-          maxH = Math.max(maxH, p.Height);
-          maxD = Math.max(maxD, p.Width);
+          maxH = Math.max(maxH, h);
+          maxD = Math.max(maxD, w);
         } else if (c.includes("top") || c.includes("bottom") || c.includes("顶板") || c.includes("底板")) {
           // 顶板/底板: Height=柜宽-36, Width=柜深-18 → 补回扣减值
-          maxW = Math.max(maxW, p.Height + 36);
-          maxD = Math.max(maxD, p.Width + 18);
+          maxW = Math.max(maxW, h + 36);
+          maxD = Math.max(maxD, w + 18);
         } else if (c.includes("back") || c.includes("背板")) {
           // 背板: Height=柜宽-30, Width=柜高 → 注意Height和Width的含义
-          maxW = Math.max(maxW, p.Height + 30);
-          maxH = Math.max(maxH, p.Width);
+          maxW = Math.max(maxW, h + 30);
+          maxH = Math.max(maxH, w);
         }
       });
       // Fallbacks if heuristics fail
@@ -413,6 +469,25 @@ export default function OrderDetail() {
         const t1Entries = Object.entries(typeGroups).filter(([type]) => type.toUpperCase().includes("T1")).sort(([a], [b]) => b.localeCompare(a));
         const t0Entries = Object.entries(typeGroups).filter(([type]) => !type.toUpperCase().includes("T1")).sort(([a], [b]) => b.localeCompare(a));
 
+        /* Group T0 boards by t0_sheet_id for visual grouping */
+        const t0SheetGroups: Record<string, { board: Board; index: number }[]> = {};
+        const t0Ungrouped: { board: Board; index: number }[] = [];
+        for (const [, indices] of t0Entries) {
+          for (const idx of indices) {
+            const b = boards[idx];
+            if (b.t0_sheet_id) {
+              if (!t0SheetGroups[b.t0_sheet_id]) t0SheetGroups[b.t0_sheet_id] = [];
+              t0SheetGroups[b.t0_sheet_id].push({ board: b, index: idx });
+            } else {
+              t0Ungrouped.push({ board: b, index: idx });
+            }
+          }
+        }
+        // Sort strips within each sheet by position
+        for (const strips of Object.values(t0SheetGroups)) {
+          strips.sort((a, b) => (a.board.t0_sheet_index ?? 0) - (b.board.t0_sheet_index ?? 0));
+        }
+
         const renderColumn = ([type, indices]: [string, number[]]) => {
           const leaders = indices.filter((idx) => stackGroups.lookup[idx]?.isLeader);
           if (leaders.length === 0) return null;
@@ -440,7 +515,7 @@ export default function OrderDetail() {
                   {indices.length} {t("orderDetail.boardsCount")}
                 </p>
               </div>
-              <div className="flex flex-col gap-y-3 pb-8">
+              <div className="flex flex-col gap-y-3 pb-0">
                 {leaders.map((idx) => {
                   const board = boards[idx];
                   const stackInfo = stackGroups.lookup[idx];
@@ -460,20 +535,55 @@ export default function OrderDetail() {
           );
         };
 
+        /* Count total T0 boards (sheets, not strips) */
+        const t0SheetCount = Object.keys(t0SheetGroups).length + t0Ungrouped.length;
+
         return (
-          <div className="flex flex-col md:flex-row w-full pt-8 pb-12 min-h-[60vh]">
-            {/* Left Area (T1) - 3/5 width */}
-            <div className="w-full md:w-[60%] flex flex-wrap items-start gap-x-16 gap-y-12 px-6 border-b md:border-b-0 md:border-r border-border/40 pb-8 md:pb-0">
+          <div className="flex flex-col w-full pt-8 pb-12 min-h-[60vh]">
+            {/* Top Area (T1) */}
+            <div className="w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 content-start gap-x-6 gap-y-10 px-6 pb-12 border-b border-border/40">
               {t1Entries.length > 0 ? t1Entries.map(renderColumn) : (
-                <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
+                <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px] col-span-full">
                   T1 {t("orderDetail.notFound")}
                 </div>
               )}
             </div>
 
-            {/* Right Area (T0) - 2/5 width */}
-            <div className="w-full md:w-[40%] flex flex-wrap items-start gap-x-16 gap-y-12 px-6 pt-8 md:pt-0">
-              {t0Entries.length > 0 ? t0Entries.map(renderColumn) : (
+            {/* Bottom Area (T0) */}
+            <div className="w-full px-6 pt-10">
+              {t0SheetCount > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 items-start">
+                  {/* T0 Sheet Groups */}
+                  {Object.entries(t0SheetGroups).map(([sheetId, strips]) => (
+                    <T0SheetCard
+                      key={sheetId}
+                      sheetId={sheetId}
+                      strips={strips}
+                      sizeColorMap={sizeColorMap}
+                      onBoardClick={(b) => setSelectedBoard(b)}
+                    />
+                  ))}
+                  {/* Ungrouped T0 boards (no t0_sheet_id — legacy data) */}
+                  {t0Ungrouped.length > 0 && (
+                    <div className="flex flex-col gap-y-3">
+                      {t0Ungrouped.map(({ board, index: idx }) => {
+                        const stackInfo = stackGroups.lookup[idx];
+                        if (stackInfo && !stackInfo.isLeader) return null;
+                        return (
+                          <BoardTile
+                            key={`${board.board_id}-${idx}`}
+                            board={board}
+                            index={idx}
+                            color={sizeColorMap[board.board_size]}
+                            stackInfo={stackInfo}
+                            onClick={() => setSelectedBoard(board)}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ) : (
                 <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
                   T0 {t("orderDetail.notFound")}
                 </div>
@@ -529,8 +639,9 @@ export default function OrderDetail() {
                       <td className="py-2.5 px-4">
                         <div className="flex flex-wrap gap-1">
                           {board.parts.map((p, pi) => (
-                            <span key={`${p.part_id}-${pi}`} className="text-[10px] px-1.5 py-0.5 rounded bg-black/[0.03] text-apple-gray">
+                            <span key={`${p.part_id}-${pi}`} className="text-[10px] px-1.5 py-0.5 rounded bg-black/[0.03] text-apple-gray whitespace-nowrap">
                               {p.component || p.part_id}
+                              {p.rotated && <span className="ml-0.5" title="Rotated">🔄</span>}
                             </span>
                           ))}
                         </div>
@@ -615,9 +726,10 @@ export default function OrderDetail() {
                       {p.component || t("orderDetail.unnamedPart")}
                     </div>
                     <div className="text-[12px] mt-1 text-apple-gray flex items-center gap-2 font-mono">
-                      <span className="inline-flex items-center gap-1"><span className="text-black/40 font-sans">H</span>{p.Height}</span>
+                      <span className="inline-flex items-center gap-1"><span className="text-black/40 font-sans">H</span>{p.rotated ? p.Width : p.Height}</span>
                       <span className="text-black/20 font-sans">×</span>
-                      <span className="inline-flex items-center gap-1"><span className="text-black/40 font-sans">W</span>{p.Width}</span>
+                      <span className="inline-flex items-center gap-1"><span className="text-black/40 font-sans">W</span>{p.rotated ? p.Height : p.Width}</span>
+                      {p.rotated && <span className="ml-2 text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-md border border-amber-200 inline-flex items-center gap-1">🔄</span>}
                     </div>
                   </div>
                 </div>
@@ -671,13 +783,14 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
 /* ═══════════════════════════════════════════
    BoardTile — Small tile for flat grid overview
    ═══════════════════════════════════════════ */
-function BoardTile({ board, index, color, stackInfo, onClick, disableHover = false }: {
+function BoardTile({ board, index, color, stackInfo, onClick, disableHover = false, overrideUtilNum }: {
   board: Board;
   index: number;
   color: typeof SIZE_COLORS[0];
   stackInfo?: { groupSize: number; stackOf: number; isLeader: boolean };
   onClick: () => void;
   disableHover?: boolean;
+  overrideUtilNum?: number;
 }) {
   const { t } = useLanguage();
   const [isHovered, setIsHovered] = useState(false);
@@ -717,14 +830,28 @@ function BoardTile({ board, index, color, stackInfo, onClick, disableHover = fal
   const wasteLeft = useMemo(() => {
     if (!partLayout.length) return 100;
     const last = partLayout[partLayout.length - 1];
-    return last.left + last.width + 0.2;
+    return last.left + last.width;
   }, [partLayout]);
 
-  const utilPct = (board.utilization * 100).toFixed(1);
+  const utilPct = overrideUtilNum !== undefined ? (overrideUtilNum * 100).toFixed(1) : (board.utilization * 100).toFixed(1);
   const utilNum = parseFloat(utilPct);
   const utilColor = utilNum > 80 ? "#10b981" : utilNum > 60 ? "#f59e0b" : "#ef4444";
 
   const stackOf = stackInfo?.stackOf || 1;
+
+  const bottomOffset = useMemo(() => {
+    if (board.t0_strip_position !== undefined && boardDims.width) {
+      return (board.t0_strip_position / boardDims.width) * 100;
+    }
+    return 0;
+  }, [board.t0_strip_position, boardDims.width]);
+
+  const stripHeight = useMemo(() => {
+    if (board.strip_width && boardDims.width) {
+      return (board.strip_width / boardDims.width) * 100;
+    }
+    return 100; // default to full height
+  }, [board.strip_width, boardDims.width]);
 
   const tileContent = (
     <>
@@ -740,20 +867,49 @@ function BoardTile({ board, index, color, stackInfo, onClick, disableHover = fal
           width: `${tileW}px`, height: `${tileH}px`,
           backgroundColor: color.light, border: `1.5px solid ${color.border}`,
         }}>
-          {partLayout.map((p) => (
-            <div key={`${p.part_id}-${p.idx}`} className="absolute" style={{
-              left: `${p.left}%`, bottom: `0%`, width: `${p.width}%`, height: `${p.height}%`,
-              backgroundColor: color.bg,
-              borderRight: `1px solid ${color.border}`,
-              borderTop: p.height < 100 ? `1px solid ${color.border}` : undefined,
+          {/* Shaded area for previously cut strips (if this is Strip 2+) */}
+          {bottomOffset > 0 && (
+            <div className="absolute" style={{
+              left: 0, width: '100%',
+              bottom: 0, height: `${bottomOffset}%`,
+              backgroundColor: "#e2e8f0",
+              backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(0,0,0,0.06) 2px, rgba(0,0,0,0.06) 4px)",
+              borderTop: `1px dashed ${color.border}80`,
             }} />
+          )}
+
+          {/* Parts */}
+          {partLayout.map((p) => (
+            <React.Fragment key={`${p.part_id}-${p.idx}`}>
+              <div className="absolute" style={{
+                left: `${p.left}%`, bottom: `${bottomOffset}%`, width: `${p.width}%`, height: `${p.height}%`,
+                backgroundColor: color.bg,
+                borderRight: `1px solid ${color.border}`,
+                borderTop: p.height < 100 ? `1px solid ${color.border}` : undefined,
+              }} />
+              {/* Upper Waste */}
+              {p.height < stripHeight && (
+                <div className="absolute" style={{
+                  left: `${p.left}%`, bottom: `${bottomOffset + p.height}%`, width: `${p.width}%`, height: `${stripHeight - p.height}%`,
+                  backgroundColor: "#ffffff",
+                  backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
+                  borderRight: `1px dashed #94a3b8`,
+                  borderTop: `1px solid ${color.border}20`,
+                }} />
+              )}
+            </React.Fragment>
           ))}
+
+          {/* Waste area for this strip (along the length) */}
           {wasteLeft < 96 && (
-            <div className="absolute top-0 h-full" style={{
+            <div className="absolute" style={{
               left: `${wasteLeft}%`, width: `${Math.max(100 - wasteLeft, 0)}%`,
+              bottom: `${bottomOffset}%`, height: `${stripHeight}%`,
               backgroundColor: "#ffffff",
               backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
               borderLeft: `1.5px dashed #94a3b8`,
+              borderBottom: bottomOffset > 0 ? `1px solid ${color.border}40` : undefined,
+              borderTop: `1px solid ${color.border}`,
             }} />
           )}
         </div>
@@ -791,7 +947,7 @@ function BoardTile({ board, index, color, stackInfo, onClick, disableHover = fal
       {stackOf > 1 && Array.from({ length: stackOf - 1 }).map((_, domIndex) => {
         const depth = Math.min(stackOf - 1, 4) - domIndex; 
         
-        const baseTransform = `translate(${depth * 4}px, ${depth * 4}px) rotate(0deg) scale(1)`;
+        const baseTransform = `translate(${depth * 6}px, ${depth * 6}px) rotate(0deg) scale(1)`;
         // Fully spread horizontally side-by-side
         const hoverTransform = `translate(${depth * (tileW + 16)}px, 0px) rotate(0deg) scale(1)`;
         
@@ -837,6 +993,105 @@ function BoardTile({ board, index, color, stackInfo, onClick, disableHover = fal
 }
 
 /* ═══════════════════════════════════════════
+   T0SheetCard — Groups strips from the same T0 board
+   Shows a width-distribution overview bar and individual strip tiles
+   ═══════════════════════════════════════════ */
+function T0SheetCard({ sheetId, strips, sizeColorMap, onBoardClick }: {
+  sheetId: string;
+  strips: { board: Board; index: number }[];
+  sizeColorMap: Record<string, typeof SIZE_COLORS[0]>;
+  onBoardClick: (b: Board) => void;
+}) {
+  const { t } = useLanguage();
+  const T0_FULL_WIDTH = 1219.2;
+  const SAW_KERF = 5.0;
+
+  // Compute sheet-level utilization from actual parts area (not strip width coverage)
+  // The pre-computed t0_sheet_utilization can be wrong (based on strip_width * height / sheet_area)
+  // Instead, sum actual parts area across all strips on this sheet
+  const T0_BOARD_HEIGHT = 2438.4;
+  const sheetUtil = useMemo(() => {
+    const totalPartsArea = strips.reduce((sum, { board }) => sum + (board.parts_total_area || 0), 0);
+    const sheetArea = T0_FULL_WIDTH * T0_BOARD_HEIGHT;
+    return sheetArea > 0 ? totalPartsArea / sheetArea : 0;
+  }, [strips]);
+  const remainingWidth = strips[0]?.board.t0_remaining_width ?? 0;
+  const allStripsInfo = strips[0]?.board.t0_all_strips ?? strips.map((s, i) => ({ strip_width: s.board.strip_width, strip_index: i }));
+
+  // Build x positions for ALL strips on the sheet (from allStripsInfo)
+  const stripPositions = useMemo(() => {
+    let x = 0;
+    return allStripsInfo.map((info, idx) => {
+      const pos = { x, width: info.strip_width, index: info.strip_index };
+      x += info.strip_width + SAW_KERF;
+      return pos;
+    });
+  }, [allStripsInfo]);
+
+  // Total strips count
+  const totalStrips = strips.length;
+
+  return (
+    <div className="rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50/50 p-4 space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between px-1">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-slate-400" />
+          <span className="text-[14px] font-bold text-foreground">{sheetId}</span>
+          <span className="text-[11px] text-apple-gray font-medium">
+            · {totalStrips} strips · 1 T0
+          </span>
+        </div>
+        <span
+          className="text-[13px] font-bold tabular-nums"
+          style={{ color: sheetUtil > 0.8 ? "#10b981" : sheetUtil > 0.6 ? "#f59e0b" : "#ef4444" }}
+        >
+          {(sheetUtil * 100).toFixed(1)}%
+        </span>
+      </div>
+
+      {/* Individual strip BoardTiles with progressive T0 shadow overlay */}
+      <div className="flex flex-col gap-y-5 pt-2">
+        {strips.map(({ board, index: idx }, stripIdx) => {
+          // NOTE: Do NOT apply stack-cut grouping here.
+          // Each strip is a physical cut from THIS T0 board — all must be shown.
+          // Stack-cutting is a cross-board production optimization, not a layout concern.
+          const stripColor = T0_STRIP_COLORS[stripIdx % T0_STRIP_COLORS.length];
+
+          // Calculate cumulative utilization for this strip
+          let cumArea = 0;
+          for (let i = 0; i <= stripIdx; i++) {
+            cumArea += strips[i].board.parts_total_area || 0;
+          }
+          const cumUtilNum = (T0_FULL_WIDTH * T0_BOARD_HEIGHT) > 0 ? cumArea / (T0_FULL_WIDTH * T0_BOARD_HEIGHT) : 0;
+
+          return (
+            <div key={`${board.board_id}-${idx}`} className="space-y-1.5">
+              {/* Strip label */}
+              <div className="flex items-center gap-2 px-2">
+                <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: stripColor.bg, border: `1.5px solid ${stripColor.border}` }} />
+                <span className="text-[10px] font-semibold" style={{ color: stripColor.text }}>
+                  Strip {stripIdx + 1} · {board.strip_width}mm
+                </span>
+              </div>
+
+              {/* The actual BoardTile — no stackInfo since each strip is unique on this T0 sheet */}
+              <BoardTile
+                board={board}
+                index={idx}
+                color={{ ...sizeColorMap[board.board_size], bg: stripColor.bg, border: stripColor.border, text: stripColor.text }}
+                onClick={() => onBoardClick(board)}
+                overrideUtilNum={cumUtilNum}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
    BoardDetailModal
    ═══════════════════════════════════════════ */
 function BoardDetailModal({ board, color, onClose }: {
@@ -844,12 +1099,17 @@ function BoardDetailModal({ board, color, onClose }: {
 }) {
   const { t } = useLanguage();
   const boardDims = useMemo(() => {
+    if (board.board_size) {
+      const p = board.board_size.split("×").map((s) => parseFloat(s.trim()));
+      if (p.length === 2 && !isNaN(p[0]) && !isNaN(p[1])) {
+        return { width: p[0], height: p[1] };
+      }
+    }
     const match = board.board.match(/(\d+(?:\.\d+)?)[x×*](\d+(?:\.\d+)?)/i);
     if (match) {
       return { width: parseFloat(match[1]), height: parseFloat(match[2]) };
     }
-    const p = board.board_size.split("×").map((s) => parseFloat(s.trim()));
-    return { width: p[0] || 0, height: p[1] || 0 };
+    return { width: 0, height: 0 };
   }, [board.board_size, board.board]);
 
   const MODAL_W = 400;
@@ -906,10 +1166,13 @@ function BoardDetailModal({ board, color, onClose }: {
           <div className="p-5 flex flex-col items-center justify-start lg:border-b border-border/30 bg-[#fafafa] shrink-0">
             <div className="flex items-center gap-1 mb-2">
               <div className="h-px bg-apple-gray/20" style={{ width: "16px" }} />
-              <span className="text-[10px] text-apple-gray font-mono">{boardDims.height}mm</span>
+              <span className="text-[10px] text-apple-gray font-mono">{boardDims.height === 2438 ? 2438.4 : boardDims.height}mm</span>
               <div className="h-px bg-apple-gray/20" style={{ width: "16px" }} />
             </div>
-            <div className="flex flex-col items-center gap-1.5">
+            <div className="flex flex-row items-center gap-2">
+              <div className="flex items-center justify-center">
+                <div className="text-[10px] text-apple-gray font-mono -rotate-90 origin-center whitespace-nowrap">{boardDims.width === 1219 ? 1219.4 : boardDims.width}mm</div>
+              </div>
               <div className="relative rounded-sm overflow-hidden" style={{
                 width: `${MODAL_W}px`, height: `${modalVisualH}px`,
                 backgroundColor: color.light, border: `2px solid ${color.border}`,
@@ -920,16 +1183,28 @@ function BoardDetailModal({ board, color, onClose }: {
                   const showText = partPxW > 35 && partPxH > 14;
                   const showDims = partPxW > 50 && partPxH > 26;
                   return (
-                    <div key={`${p.part_id}-${p.idx}`} className="absolute flex items-center justify-center overflow-hidden" style={{
-                      left: `${p.left}%`, bottom: `0%`, width: `${p.width}%`, height: `${p.height}%`,
-                      backgroundColor: color.bg,
-                      borderRight: `1px solid ${color.border}`,
-                      borderTop: p.height < 100 ? `1px solid ${color.border}` : undefined,
-                    }}>
-                      {showText && (
-                        <div className="text-center leading-tight select-none px-0.5">
-                          <span className="text-[10px] font-bold block truncate" style={{ color: color.text }}>{p.component || p.part_id}</span>
-                          {showDims && <span className="text-[9px] font-medium block truncate" style={{ color: color.text }}>{p.Height}×{p.Width}</span>}
+                    <div key={`${p.part_id}-${p.idx}-group`} title={`Part: ${p.part_id} | Size: ${p.rotated ? `${p.Width}×${p.Height} 🔄` : `${p.Height}×${p.Width}`} | Cab: ${p.cab_id}`}>
+                      <div className="absolute flex items-center justify-center overflow-hidden" style={{
+                        left: `${p.left}%`, bottom: `0%`, width: `${p.width}%`, height: `${p.height}%`,
+                        backgroundColor: color.bg,
+                        borderRight: `1px solid ${color.border}`,
+                        borderTop: p.height < 100 ? `1px solid ${color.border}` : undefined,
+                      }}>
+                        {showText && (
+                          <div className="text-center leading-tight select-none px-0.5">
+                            <span className="text-[10px] font-bold block truncate" style={{ color: color.text }}>{p.component || p.part_id}</span>
+                            {showDims && <span className="text-[9px] font-medium block truncate" style={{ color: color.text }}>{p.Height}×{p.Width}</span>}
+                          </div>
+                        )}
+                      </div>
+                      {p.height < 100 && (
+                        <div className="absolute flex items-center justify-center overflow-hidden" style={{
+                          left: `${p.left}%`, bottom: `${p.height}%`, width: `${p.width}%`, height: `${100 - p.height}%`,
+                          backgroundColor: "#ffffff",
+                          backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
+                          borderRight: `1.5px dashed #94a3b8`,
+                          borderTop: `1px solid ${color.border}20`,
+                        }}>
                         </div>
                       )}
                     </div>
@@ -942,12 +1217,9 @@ function BoardDetailModal({ board, color, onClose }: {
                     backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
                     borderLeft: `1.5px dashed #94a3b8`,
                   }}>
-                    {(100 - wasteLeft) > 6 && <span className="text-[9px] font-bold text-slate-400">{t("orderDetail.modalWaste")} {board.waste.toFixed(0)}mm</span>}
+                    {(100 - wasteLeft) > 6 && <span className="text-[9px] font-bold text-slate-400">{t("orderDetail.modalWaste")} {(board.waste / 1000).toFixed(1)}k mm²</span>}
                   </div>
                 )}
-              </div>
-              <div className="flex items-center justify-center mt-1">
-                <div className="text-[10px] text-apple-gray font-mono">{boardDims.width}mm</div>
               </div>
             </div>
             <div className="w-full mt-3" style={{ maxWidth: `${MODAL_W + 20}px` }}>
@@ -973,18 +1245,21 @@ function BoardDetailModal({ board, color, onClose }: {
                 {board.parts.map((p, idx) => (
                   <tr key={`${p.part_id}-${idx}`} className="border-b border-border/15 hover:bg-black/[0.01]">
                     <td className="py-2 px-4 text-apple-gray">{idx + 1}</td>
-                    <td className="py-2 px-4 font-mono font-medium text-[11px]">{p.part_id}</td>
+                    <td className="py-2 px-4 font-mono font-medium text-[11px]">
+                      {p.part_id}
+                      {p.rotated && <span className="ml-1 text-[10px] inline-flex items-center text-amber-500 font-sans" title="Rotated 90°">🔄</span>}
+                    </td>
                     <td className="py-2 px-4 text-apple-gray">{p.component || "—"}</td>
                     <td className="py-2 px-4 text-apple-gray">{p.cab_id || "—"}</td>
-                    <td className="py-2 px-4 text-right font-mono">{p.Height}</td>
-                    <td className="py-2 px-4 text-right font-mono">{p.Width}</td>
+                    <td className="py-2 px-4 text-right font-mono">{p.rotated ? p.Width : p.Height}</td>
+                    <td className="py-2 px-4 text-right font-mono">{p.rotated ? p.Height : p.Width}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr className="border-t border-border/40 bg-black/[0.01]">
                   <td colSpan={4} className="py-2.5 px-4 text-[11px] text-apple-gray font-medium">
-                    {board.parts.length} {t("orderDetail.thParts")} · {board.cuts} {t("orderDetail.thCuts")} · {t("orderDetail.modalKerf")}{board.kerf_total}mm · {t("orderDetail.modalWaste")}{board.waste.toFixed(1)}mm
+                    {board.parts.length} {t("orderDetail.thParts")} · {board.cuts} {t("orderDetail.thCuts")} · {t("orderDetail.modalKerf")}{board.kerf_total}mm · {t("orderDetail.modalWaste")}{board.waste.toFixed(0)}mm²
                   </td>
                   <td colSpan={2} className="py-2.5 px-4 text-right text-[13px] font-bold" style={{ color: utilColor }}>
                     {t("orderDetail.thUtil")} {utilPct}%
@@ -1232,6 +1507,14 @@ const machineI18n: Record<string, Record<string, string>> = {
     rowNo: "序号",
     cutLength: "裁切长度 (mm)",
     pieces: "件数",
+    pieceCount: "片数（合计）",
+    pieceCountHint: "表中为同一工程组内该裁切长度的总片数。",
+    cutRowsMultiPatternHint: "本组含多种裁切组合，上表各行为全组合计。",
+    perCutPieces: "片/刀",
+    noStackReason: "各板裁切长度与片数组合不同，无法叠切；请分板按序加工。",
+    widthRipBody:
+      "板型原料宽约 {stock} mm，本工程条宽 {target} mm。除下表裁切长度方向下刀外，尚需纵裁（裁宽）至目标条宽；先长后宽或先宽后长由车间自定。",
+    widthRipBadge: "需裁宽",
     notes: "备注",
     operatorNote1: "本工程组已匹配固定板材宽度，操作员只需输入裁切长度和数量。",
     operatorNote2: "上板 → 先修边 5mm → 再按下表裁切。",
@@ -1263,6 +1546,14 @@ const machineI18n: Record<string, Record<string, string>> = {
     rowNo: "Row",
     cutLength: "Cut Length (mm)",
     pieces: "Pieces",
+    pieceCount: "Pcs (total)",
+    pieceCountHint: "Totals for this engineering group at each cut length.",
+    cutRowsMultiPatternHint: "This group has multiple cut patterns; rows are combined totals.",
+    perCutPieces: "pcs/cut",
+    noStackReason: "Boards differ in cut lengths/counts — cannot stack; cut separately.",
+    widthRipBody:
+      "Nominal stock width ≈ {stock} mm, target strip {target} mm. Besides length cuts in the table, rip to strip width; cut order is shop-specific.",
+    widthRipBadge: "Rip width",
     notes: "Notes",
     operatorNote1: "This engineering group uses a fixed board width. The operator only needs to input cut lengths and quantities.",
     operatorNote2: "Load board → Trim 5mm first → Then cut according to the table below.",
@@ -1294,6 +1585,14 @@ const machineI18n: Record<string, Record<string, string>> = {
     rowNo: "Fila",
     cutLength: "Longitud de Corte (mm)",
     pieces: "Piezas",
+    pieceCount: "Piezas (total)",
+    pieceCountHint: "Totales del grupo de ingeniería por longitud de corte.",
+    cutRowsMultiPatternHint: "Varios patrones de corte en el grupo; la tabla muestra totales combinados.",
+    perCutPieces: "pzs/corte",
+    noStackReason: "Los tableros difieren en cortes — no apilar; cortar por separado.",
+    widthRipBody:
+      "Ancho nominal de stock ≈ {stock} mm, tira objetivo {target} mm. Además de los cortes en longitud, ripado al ancho de tira; el orden lo define el taller.",
+    widthRipBadge: "Rip ancho",
     notes: "Notas",
     operatorNote1: "Este grupo de ingeniería usa un ancho fijo. El operador solo necesita ingresar longitudes y cantidades.",
     operatorNote2: "Cargar tablero → Recortar 5mm primero → Luego cortar según la tabla.",
@@ -1330,6 +1629,10 @@ interface EngineeringGroup {
   boards: Board[];
   cutRows: { cutLength: number; pieces: number }[];
   stackBatches: { batchNo: number; stackSize: number; coveredBoards: number; cutSequence: string; sampleBoard: Board }[];
+  realStackBatches: { batchNo: number; stackSize: number; coveredBoards: number; cutSequence: string; sampleBoard: Board }[];
+  needsWidthRip: boolean;
+  ripStockWidthMm: number | null;
+  distinctCutPatterns: number;
 }
 
 function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boards: Board[], orderId: string, machineLang: "zh" | "en" | "es", setMachineLang: (l: "zh" | "en" | "es") => void }) {
@@ -1352,6 +1655,8 @@ function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boar
 
   /* ── Build engineering groups: group by strip_width ── */
   const engineeringGroups = useMemo<EngineeringGroup[]>(() => {
+    const perCutLabel =
+      machineI18n[machineLang]?.perCutPieces || machineI18n.en.perCutPieces;
     // Group boards by strip_width (the actual operational width for the machine)
     const groupMap: Record<number, Board[]> = {};
     for (const b of boards) {
@@ -1392,6 +1697,8 @@ function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boar
         if (!fpMap[fp]) fpMap[fp] = [];
         fpMap[fp].push({ board: grpBoards[i], index: i });
       }
+      const distinctCutPatterns = Object.keys(fpMap).length;
+
       const stackBatches: EngineeringGroup["stackBatches"] = [];
       let batchNo = 0;
       for (const group of Object.values(fpMap)) {
@@ -1401,20 +1708,29 @@ function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boar
           const stackSize = Math.min(4, remaining);
           batchNo++;
           const sampleBoard = group[gIdx].board;
-          const seq = sampleBoard.parts
-            .map(p => (p.cut_length || p.Height).toFixed(1))
-            .join(" → ");
+          const cutSequence = formatStackCutSequence(sampleBoard, stackSize, perCutLabel);
           stackBatches.push({
             batchNo,
             stackSize,
             coveredBoards: stackSize,
-            cutSequence: seq,
+            cutSequence,
             sampleBoard,
           });
           gIdx += stackSize;
           remaining -= stackSize;
         }
       }
+
+      const realStackBatches = stackBatches.filter((b) => b.stackSize >= 2);
+
+      let ripStockWidthMm: number | null = null;
+      for (const b of grpBoards) {
+        const nw = nominalStockWidthForBoard(b);
+        if (nw != null && nw - width > 0.5) {
+          ripStockWidthMm = ripStockWidthMm === null ? nw : Math.max(ripStockWidthMm, nw);
+        }
+      }
+      const needsWidthRip = ripStockWidthMm !== null;
 
       return {
         key: `w${width}`,
@@ -1427,9 +1743,13 @@ function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boar
         boards: grpBoards,
         cutRows,
         stackBatches,
+        realStackBatches,
+        needsWidthRip,
+        ripStockWidthMm,
+        distinctCutPatterns,
       };
     });
-  }, [boards]);
+  }, [boards, machineLang]);
 
   const handlePrint = () => {
     window.print();
@@ -1525,6 +1845,28 @@ function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boar
                   <div className="font-bold">{grp.sourceBoardCount} {mt("sheetsUnit")}</div>
                 </div>
               </div>
+
+              {grp.needsWidthRip && grp.ripStockWidthMm != null && (
+                <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-[13px] text-amber-950 machine-no-print">
+                  <span className="mr-2 inline-flex items-center rounded bg-amber-600 px-2 py-0.5 text-[11px] font-bold text-white">
+                    {mt("widthRipBadge")}
+                  </span>
+                  {mt("widthRipBody")
+                    .replace("{stock}", String(grp.ripStockWidthMm))
+                    .replace("{target}", String(grp.boardWidth))}
+                </div>
+              )}
+              {grp.needsWidthRip && grp.ripStockWidthMm != null && (
+                <div
+                  className="machine-print-only mt-3 rounded border border-amber-700 bg-amber-50 px-3 py-2 text-[11px] text-black"
+                  style={{ display: "none" }}
+                >
+                  <strong>{mt("widthRipBadge")}:</strong>{" "}
+                  {mt("widthRipBody")
+                    .replace("{stock}", String(grp.ripStockWidthMm))
+                    .replace("{target}", String(grp.boardWidth))}
+                </div>
+              )}
             </div>
 
             <div className="p-5 border-b border-border/40 bg-slate-50/50 print:hidden overflow-x-auto">
@@ -1549,7 +1891,7 @@ function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boar
                   <tr className="bg-black/[0.03]">
                     <th className="text-center py-3 px-4 font-semibold text-apple-gray w-16">{mt("rowNo")}</th>
                     <th className="text-center py-3 px-4 font-semibold text-apple-gray">{mt("cutLength")}</th>
-                    <th className="text-center py-3 px-4 font-semibold text-apple-gray w-24">{mt("pieces")}</th>
+                    <th className="text-center py-3 px-4 font-semibold text-apple-gray w-28">{mt("pieceCount")}</th>
                     <th className="text-left py-3 px-4 font-semibold text-apple-gray">{mt("notes")}</th>
                   </tr>
                 </thead>
@@ -1564,14 +1906,24 @@ function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boar
                   ))}
                 </tbody>
               </table>
+              <p className="px-4 py-2 text-[11px] text-apple-gray border-t border-border/20">
+                {mt("pieceCountHint")}
+                {grp.distinctCutPatterns > 1 ? ` ${mt("cutRowsMultiPatternHint")}` : ""}
+              </p>
             </div>
 
-            {/* Stack Suggestions (always visible if >1 board) */}
-            {grp.sourceBoardCount > 1 && grp.stackBatches.length > 0 && (
+            {grp.sourceBoardCount > 1 && grp.realStackBatches.length === 0 && (
+              <div className="border-t border-border/30 bg-slate-50 px-4 py-3 text-[12px] text-slate-600 machine-no-print">
+                {mt("noStackReason")}
+              </div>
+            )}
+
+            {/* Stack suggestions only when true multi-board stacks exist */}
+            {grp.realStackBatches.length > 0 && (
               <div className="border-t border-border/30 bg-blue-50/50 p-4">
                 <h4 className="flex items-center gap-2 mb-3 text-[14px] font-bold text-blue-800 machine-no-print">
                   <span className="bg-blue-600 text-white px-2 py-0.5 rounded text-[11px]">需叠切</span>
-                  {mt("stackSuggestions")} ({grp.stackBatches.length})
+                  {mt("stackSuggestions")} ({grp.realStackBatches.length})
                 </h4>
                 <div className="overflow-x-auto">
                   <table className="w-full text-[12px]">
@@ -1584,7 +1936,7 @@ function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boar
                       </tr>
                     </thead>
                     <tbody>
-                      {grp.stackBatches.map((sb) => (
+                      {grp.realStackBatches.map((sb) => (
                         <tr key={sb.batchNo} className="border-b border-blue-100 last:border-0">
                           <td className="py-2 px-3 text-center font-medium text-blue-900">{sb.batchNo}</td>
                           <td className="py-2 px-3 text-center">
@@ -1602,20 +1954,19 @@ function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boar
               </div>
             )}
 
-            {/* Print-only Stack Suggestions (Hidden if only 1 board) */}
-            {grp.sourceBoardCount > 1 && grp.stackBatches.length > 0 && (
+            {grp.realStackBatches.length > 0 && (
               <div className="hidden print:block mt-4 px-5 pb-5 text-[11px]">
                 <h4 className="font-bold mb-2 text-black">📦 {mt("stackSuggestions")}</h4>
                 <table className="w-full text-left border-collapse border border-black">
                   <thead>
                     <tr>
-                      <th className="border border-black p-1 text-black">批次</th>
-                      <th className="border border-black p-1 text-black">张/叠</th>
-                      <th className="border border-black p-1 text-black">裁切顺序 (mm)</th>
+                      <th className="border border-black p-1 text-black">{mt("stackBatch")}</th>
+                      <th className="border border-black p-1 text-black">{mt("stackSize")}</th>
+                      <th className="border border-black p-1 text-black">{mt("stackSequence")}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {grp.stackBatches.map(b => (
+                    {grp.realStackBatches.map((b) => (
                       <tr key={b.batchNo}>
                         <td className="border border-black p-1 text-black">#{b.batchNo}</td>
                         <td className="border border-black p-1 text-black">{b.stackSize}</td>

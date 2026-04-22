@@ -129,47 +129,60 @@ export function Cabinet3DScene({ cabinet, hoveredPartId, setHoveredPartId }: {
       });
     };
 
+    // Get true dimensions, un-swapping if the part was rotated for cutting
+    const getDims = (p: Part) => {
+      const h = p.rotated ? p.Width : p.Height;
+      const w = p.rotated ? p.Height : p.Width;
+      return { h, w };
+    };
+
     // Top
     grouped.top.forEach((p) => {
-      addBoard(p, 0, sH - sT/2, 0, p.Height * SCALE, sT, p.Width * SCALE);
+      const { h, w } = getDims(p);
+      addBoard(p, 0, sH - sT/2, 0, h * SCALE, sT, w * SCALE);
     });
 
     // Bottom
     grouped.bottom.forEach((p) => {
-      addBoard(p, 0, sT/2, 0, p.Height * SCALE, sT, p.Width * SCALE);
+      const { h, w } = getDims(p);
+      addBoard(p, 0, sT/2, 0, h * SCALE, sT, w * SCALE);
     });
 
     // Sides (Left and Right): Height=柜高(Y), Width=柜深(Z)
     grouped.side.forEach((p, i) => {
+      const { h, w } = getDims(p);
       const isLeft = i % 2 === 0;
       const xPos = isLeft ? -sW/2 + sT/2 : sW/2 - sT/2;
-      addBoard(p, xPos, sH/2, 0, sT, p.Height * SCALE, p.Width * SCALE);
+      addBoard(p, xPos, sH/2, 0, sT, h * SCALE, w * SCALE);
     });
 
     // Back: Height=柜宽-30(X), Width=柜高(Y)
     grouped.back.forEach((p) => {
-      addBoard(p, 0, sH/2, -sD/2 + sT/2, p.Height * SCALE, p.Width * SCALE, sT);
+      const { h, w } = getDims(p);
+      addBoard(p, 0, sH/2, -sD/2 + sT/2, h * SCALE, w * SCALE, sT);
     });
 
     // Shelves
     const numShelves = grouped.shelf.length;
     grouped.shelf.forEach((p, i) => {
+      const { h, w } = getDims(p);
       const spacing = sH / (numShelves + 1);
-      addBoard(p, 0, spacing * (i + 1), 0, p.Height * SCALE, sT, p.Width * SCALE);
+      addBoard(p, 0, spacing * (i + 1), 0, h * SCALE, sT, w * SCALE);
     });
 
     // Stretchers (拉条): Height=柜宽-36(X), Width=101.6mm拉条深度(Z)
-    // 地柜有2个拉条：一个在前边，一个在后边，都在柜体顶部
     grouped.stretcher.forEach((p, i) => {
-      const pDepth = p.Width * SCALE; // 拉条深度 101.6mm
+      const { h, w } = getDims(p);
+      const pDepth = w * SCALE; // 拉条深度 101.6mm
       const isFront = i % 2 === 0;
       const zPos = isFront ? sD/2 - pDepth/2 : -sD/2 + pDepth/2;
-      addBoard(p, 0, sH - sT/2, zPos, p.Height * SCALE, sT, pDepth);
+      addBoard(p, 0, sH - sT/2, zPos, h * SCALE, sT, pDepth);
     });
 
     // Other (fallback for unrecognized parts)
     grouped.other.forEach((p) => {
-      addBoard(p, 0, sH - sT*2, 0, p.Height * SCALE, sT, p.Width * SCALE);
+      const { h, w } = getDims(p);
+      addBoard(p, 0, sH - sT*2, 0, h * SCALE, sT, w * SCALE);
     });
 
     return boards;

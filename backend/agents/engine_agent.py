@@ -213,14 +213,16 @@ def build_strip_demand(parts: list, inventory: dict = None) -> list:
     Strategy (优先精确匹配库存):
       1. 先查库存: 精确匹配 Width (±0.5mm 容差)
          e.g.: Width=101.6 → T1-101.6x2438.4 (库存有就用)
-      2. 没有精确匹配 → 套用默认规则:
-         - Width ≤ 304.8  → T1-304.8-INV
-         - Width ≤ 609.6  → T1-609.6-INV
-         - Width > 609.6  → T0-RAW
+      2. 旋转匹配: 零件 Height 精确匹配库存 Width (±0.5mm)
+         且旋转后原 Width 作为新 Height ≤ 可用长度 (2433.4mm)
+         e.g.: Height=304.8, Width=600 → 旋转后 Width=304.8 匹配 T1-304.8
+      3. 没有精确匹配 → T0 裁切
 
     Returns:
       list of strip demand dicts
     """
+    usable_length = BOARD_HEIGHT - TRIM_LOSS  # 2433.4mm
+
     # Build a sorted list of inventory widths for matching
     inv_widths = []  # [(width, board_type), ...]
     if inventory:
@@ -237,57 +239,41 @@ def build_strip_demand(parts: list, inventory: dict = None) -> list:
                 return inv_w, inv_bt
         return None, None
 
-    def find_best_fit_inv(part_width):
-        """Find smallest inventory board that fits this width."""
-        for inv_w, inv_bt in inv_widths:
-            if inv_w >= part_width - 0.5:
-                return inv_w, inv_bt
-        return None, None
 
     # Group parts by their required strip width
     strip_groups = defaultdict(list)
-
-    # Strategy 3: default thresholds (找库存里的标准板名字)
-    def find_inv_by_width(w):
-        best_bt = None
-        for inv_w, inv_bt in inv_widths:
-            if abs(inv_w - w) < 2.0: # 寻找接近 304.8 或 609.6 的板
-                best_bt = inv_bt
-                break
-        return best_bt
+    rotated_count = 0
 
     for p in parts:
         part_width = p["Width"]
+        part_height = p["Height"]
 
-        # Strategy 1: exact match in inventory
+        # Strategy 1: exact match Width → inventory
         exact_w, exact_bt = find_exact_inv(part_width)
         if exact_w is not None:
             strip_groups[(exact_w, exact_bt, False)].append(p)
             continue
 
-        # Strategy 2: best-fit from inventory (smallest board that fits)
-        fit_w, fit_bt = find_best_fit_inv(part_width)
-        if fit_w is not None and fit_w <= STRIP_WIDTH_WIDE:
-            strip_groups[(fit_w, fit_bt, False)].append(p)
+        # Strategy 2: rotation match — part Height matches inventory Width
+        # After rotation: new Width = original Height, new Height = original Width
+        # Condition: original Width (new Height after rotation) must fit in usable length
+        rot_w, rot_bt = find_exact_inv(part_height)
+        if rot_w is not None and part_width <= usable_length:
+            # Rotate: swap Height ↔ Width
+            rotated_part = {**p, "Height": part_width, "Width": part_height, "rotated": True}
+            strip_groups[(rot_w, rot_bt, False)].append(rotated_part)
+            rotated_count += 1
             continue
 
-        # Strategy 3: default thresholds (Width不扫边, 直接比较)
-        if part_width <= STRIP_WIDTH_NARROW:
-            bt = find_inv_by_width(STRIP_WIDTH_NARROW) or DEFAULT_BOARD_T1_NARROW
-            strip_groups[(STRIP_WIDTH_NARROW, bt, False)].append(p)
-        elif part_width <= STRIP_WIDTH_WIDE:
-            bt = find_inv_by_width(STRIP_WIDTH_WIDE) or DEFAULT_BOARD_T1_WIDE
-            strip_groups[(STRIP_WIDTH_WIDE, bt, False)].append(p)
-        else:
-            # 超宽: 精确宽度, 必须从 T0 裁切. 找库存里的 T0 名字
-            t0_name = DEFAULT_BOARD_T0
-            if inventory:
-                for bt_inv in inventory.keys():
-                    if bt_inv.startswith("T0"):
-                        t0_name = bt_inv
-                        break
-            strip_w = round(part_width, 1)
-            strip_groups[(strip_w, t0_name, True)].append(p)
+        # Strategy 3: No match → T0 custom-width cutting
+        t0_name = DEFAULT_BOARD_T0
+        if inventory:
+            for bt_inv in inventory.keys():
+                if bt_inv.startswith("T0"):
+                    t0_name = bt_inv
+                    break
+        strip_w = round(part_width, 1)
+        strip_groups[(strip_w, t0_name, True)].append(p)
 
     strip_demand = []
     for (width, btype, needs_t0), parts_list in sorted(strip_groups.items()):
@@ -299,6 +285,8 @@ def build_strip_demand(parts: list, inventory: dict = None) -> list:
         })
 
     print(f"\n── STEP 1: Strip Demand ──")
+    if rotated_count > 0:
+        print(f"  🔄 Rotated {rotated_count} parts (Height matched inventory Width)")
     for sd in strip_demand:
         t0_mark = " → T0" if sd["needs_t0"] else " (库存)"
         print(f"  {sd['board_type']} @{sd['strip_width']}mm: "
@@ -546,7 +534,7 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
         parts_total_area = sum(p["Height"] * p["Width"] for p in strip["parts"])
         k = len(strip["parts"])
         kerf_total = (k - 1) * SAW_KERF if k > 1 else 0
-        waste = usable - parts_total_len - kerf_total
+        waste_area = (usable * strip_width) - parts_total_area - (kerf_total * strip_width)
 
         utilization = parts_total_area / strip_area if strip_area > 0 else 0
 
@@ -577,7 +565,7 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
             "board_area": round(strip_area, 1),
             "kerf_total": round(kerf_total, 1),
             "usable_length": round(usable, 1),
-            "waste": round(waste, 1),
+            "waste": round(waste_area, 1),
             "utilization": round(utilization, 4),
         })
 
@@ -658,7 +646,7 @@ def ffd_bin_pack(parts_list: list, board_info: dict):
         parts_total_area = sum(p["Height"] * p["Width"] for p in board["parts"])
         k = len(board["parts"])
         kerf_total = k * SAW_KERF
-        waste = usable - parts_total - kerf_total
+        waste_area = (usable * board_width) - parts_total_area - (kerf_total * board_width)
         utilization = parts_total_area / board_area if board_area > 0 else 0
 
         results.append({
@@ -687,7 +675,7 @@ def ffd_bin_pack(parts_list: list, board_info: dict):
             "board_area": round(board_area, 1),
             "kerf_total": round(kerf_total, 1),
             "usable_length": round(usable, 1),
-            "waste": round(waste, 1),
+            "waste": round(waste_area, 1),
             "utilization": round(utilization, 4),
         })
 
@@ -743,11 +731,13 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
     oversized_parts = []
     for p in parts:
         h, w = p["Height"], p["Width"]
-        # 超板: Width超过最大板宽 或 Height超过板材可用长度
-        if w > max_board_width or h > usable_height:
-            oversized_parts.append(p)
-        else:
+        # 超板检测: 考虑旋转 — 任一方向能放下即可
+        fits_normal = (w <= max_board_width and h <= usable_height)
+        fits_rotated = (h <= max_board_width and w <= usable_height)
+        if fits_normal or fits_rotated:
             valid_parts.append(p)
+        else:
+            oversized_parts.append(p)
 
     if oversized_parts:
         print(f"\n❌ 发现 {len(oversized_parts)} 个超板零件 (板材极限: {max_board_width}×{BOARD_HEIGHT}mm):")
@@ -923,6 +913,30 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
         for sheet in t0_plan["t0_sheets"]:
             recover_leftover(sheet)
 
+    # ─── STEP 4b: Build T0 sheet → strip mapping for frontend ───
+    # Maps each strip (by width) to its parent T0 sheet position
+    t0_width_assignments = defaultdict(list)
+    if t0_plan:
+        for sheet in t0_plan["t0_sheets"]:
+            # Build full strip list for this sheet
+            all_strips_info = [
+                {"strip_width": s["strip_width"], "strip_index": si}
+                for si, s in enumerate(sheet["strips"])
+            ]
+            x_pos = 0.0
+            for s_idx, strip in enumerate(sheet["strips"]):
+                sw = strip["strip_width"]
+                t0_width_assignments[sw].append({
+                    "sheet_id": sheet["sheet_id"],
+                    "strip_index": s_idx,
+                    "x_position": round(x_pos, 1),
+                    "total_strips": len(sheet["strips"]),
+                    "sheet_utilization": sheet["utilization"],
+                    "all_strips": all_strips_info,
+                    "remaining_width": round(sheet.get("remaining_width", 0), 1),
+                })
+                x_pos += sw + SAW_KERF
+
     # ─── STEP 5: Pack parts into strips ───
     all_board_results = []
 
@@ -938,7 +952,7 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
             r["source"] = "inventory"
         all_board_results.extend(results)
 
-    # 5b. T0 strips — pack parts using T0 name
+    # 5b. T0 strips — pack parts using T0 name + attach sheet traceability
     for sw, t0_parts in t0_parts_by_width.items():
         # 寻找库存里的 T0 名字
         t0_name = DEFAULT_BOARD_T0
@@ -947,15 +961,26 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
                 if bt_inv.startswith("T0"):
                     t0_name = bt_inv
                     break
-                    
+
         results = ffd_strip_pack(
             t0_parts,
             sw,
             t0_name,
         )
-        for r in results:
+        assignments = t0_width_assignments.get(sw, [])
+        for i, r in enumerate(results):
             r["source"] = "T0"
             r["actual_strip_width"] = sw  # 保存实际裁切宽度
+            # Attach T0 sheet traceability for frontend grouping
+            if i < len(assignments):
+                a = assignments[i]
+                r["t0_sheet_id"] = a["sheet_id"]
+                r["t0_sheet_index"] = a["strip_index"]
+                r["t0_strip_position"] = a["x_position"]
+                r["t0_total_strips_on_sheet"] = a["total_strips"]
+                r["t0_sheet_utilization"] = a["sheet_utilization"]
+                r["t0_all_strips"] = a["all_strips"]
+                r["t0_remaining_width"] = a["remaining_width"]
         all_board_results.extend(results)
 
     # ─── Summary ───
@@ -966,10 +991,34 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
     total_oversized = len(oversized_parts)
     all_parts_cut = (total_parts_placed == total_parts_required) and total_oversized == 0
 
+    # Calculate total board area correctly
+    t0_sheets_used = t0_plan["t0_sheets_needed"] if t0_plan else 0
+    t0_total_area = t0_sheets_used * (1219.2 * 2438.4)
+    
+    # Area of T1 boards used from inventory
+    t1_inv_area = sum(b["board_area"] for b in all_board_results if b.get("source") == "inventory")
+    
+    total_board_area = t0_total_area + t1_inv_area
     total_parts_area = sum(b["parts_total_area"] for b in all_board_results)
-    total_board_area = sum(b["board_area"] for b in all_board_results)
-    total_waste = sum(b["waste"] for b in all_board_results)
+    
+    # Fix t0_sheet_utilization for each strip to be based on actual parts area of the sheet
+    sheet_to_parts_area = defaultdict(float)
+    for b in all_board_results:
+        if "t0_sheet_id" in b:
+            sheet_to_parts_area[b["t0_sheet_id"]] += b["parts_total_area"]
+            
+    for b in all_board_results:
+        if "t0_sheet_id" in b:
+            t0_area = 1219.2 * 2438.4
+            b["t0_sheet_utilization"] = round(sheet_to_parts_area[b["t0_sheet_id"]] / t0_area, 4)
+
+    # Calculate overall utilization
     overall_util = total_parts_area / total_board_area if total_board_area > 0 else 0
+    
+    # Calculate true total waste (Total Area - Parts Area - Kerf Area)
+    # Note: Trim loss is considered waste
+    total_kerf_area = sum((b["cuts"] * SAW_KERF) * b.get("actual_strip_width", b.get("strip_width", 1219.2)) for b in all_board_results)
+    total_waste_area = total_board_area - total_parts_area - total_kerf_area
 
     t0_sheets_used = t0_plan["t0_sheets_needed"] if t0_plan else 0
     t0_total_recovery = 0
@@ -1029,7 +1078,7 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
         "total_parts_length": round(sum(b["parts_total_length"] for b in all_board_results), 1),
         "total_trim_loss": round(sum(b["trim_loss"] for b in all_board_results), 1),
         "total_kerf_loss": round(sum(b["kerf_total"] for b in all_board_results), 1),
-        "total_waste": round(total_waste, 1),
+        "total_waste": round(total_waste_area, 1),
         "overall_utilization": round(overall_util, 4),
         "config_trim_loss_mm": TRIM_LOSS,
         "config_saw_kerf_mm": SAW_KERF,
@@ -1112,7 +1161,7 @@ def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/
     print(f"  Inventory used:  {used_inventory}")
     print(f"  Total strips:    {total_boards}")
     print(f"  Utilization:     {overall_util*100:.1f}%")
-    print(f"  Total waste:     {total_waste:.1f}mm")
+    print(f"  Total waste:     {total_waste_area:.1f}mm²")
     print(f"  Output:          {output_path}")
     print(f"{'=' * 60}")
 
