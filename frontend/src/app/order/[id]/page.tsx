@@ -401,33 +401,87 @@ export default function OrderDetail() {
         </>
       )}
 
-      {/* ── Layout View: Flat tile grid ── */}
-      {viewMode === "layout" && (
-        <div className="flex flex-wrap gap-x-12 gap-y-16 pt-8 pb-12 pl-6 pr-6 justify-center sm:justify-start">
-          {boards
-            .map((b, idx) => idx)
-            .sort((a, b) => {
-              const aStack = stackGroups.lookup[a]?.stackOf || 1;
-              const bStack = stackGroups.lookup[b]?.stackOf || 1;
-              return bStack - aStack; // Larger stacks first
-            })
-            .map((idx) => {
-              const board = boards[idx];
-              const stackInfo = stackGroups.lookup[idx];
-              if (!stackInfo?.isLeader) return null;
-              return (
-                <BoardTile
-                  key={`${board.board_id}-${idx}`}
-                  board={board}
-                  index={idx}
-                  color={sizeColorMap[board.board_size]}
-                  stackInfo={stackInfo}
-                  onClick={() => setSelectedBoard(board)}
-                />
-              );
-          })}
-        </div>
-      )}
+      {/* ── Layout View: Split layout for T1 and T0 ── */}
+      {viewMode === "layout" && (() => {
+        const typeGroups = boards.reduce((acc, b, idx) => {
+          const type = b.board || b.board_type || "Unknown";
+          if (!acc[type]) acc[type] = [];
+          acc[type].push(idx);
+          return acc;
+        }, {} as Record<string, number[]>);
+
+        const t1Entries = Object.entries(typeGroups).filter(([type]) => type.toUpperCase().includes("T1")).sort(([a], [b]) => b.localeCompare(a));
+        const t0Entries = Object.entries(typeGroups).filter(([type]) => !type.toUpperCase().includes("T1")).sort(([a], [b]) => b.localeCompare(a));
+
+        const renderColumn = ([type, indices]: [string, number[]]) => {
+          const leaders = indices.filter((idx) => stackGroups.lookup[idx]?.isLeader);
+          if (leaders.length === 0) return null;
+
+          // Sort leaders within column by group size then stack size
+          leaders.sort((a, b) => {
+            const aInfo = stackGroups.lookup[a];
+            const bInfo = stackGroups.lookup[b];
+            const aGroup = aInfo?.groupSize || 1;
+            const bGroup = bInfo?.groupSize || 1;
+            if (bGroup !== aGroup) return bGroup - aGroup;
+            
+            const aStack = aInfo?.stackOf || 1;
+            const bStack = bInfo?.stackOf || 1;
+            if (bStack !== aStack) return bStack - aStack;
+
+            return boards[b].utilization - boards[a].utilization;
+          });
+
+          return (
+            <div key={type} className="flex flex-col gap-y-3 shrink-0">
+              <div className="text-left px-2">
+                <h3 className="text-[16px] font-bold text-foreground">{type}</h3>
+                <p className="text-[13px] text-apple-gray font-medium">
+                  {indices.length} {t("orderDetail.boardsCount")}
+                </p>
+              </div>
+              <div className="flex flex-col gap-y-3 pb-8">
+                {leaders.map((idx) => {
+                  const board = boards[idx];
+                  const stackInfo = stackGroups.lookup[idx];
+                  return (
+                    <BoardTile
+                      key={`${board.board_id}-${idx}`}
+                      board={board}
+                      index={idx}
+                      color={sizeColorMap[board.board_size]}
+                      stackInfo={stackInfo}
+                      onClick={() => setSelectedBoard(board)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          );
+        };
+
+        return (
+          <div className="flex flex-col md:flex-row w-full pt-8 pb-12 min-h-[60vh]">
+            {/* Left Area (T1) - 3/5 width */}
+            <div className="w-full md:w-[60%] flex flex-wrap items-start gap-x-16 gap-y-12 px-6 border-b md:border-b-0 md:border-r border-border/40 pb-8 md:pb-0">
+              {t1Entries.length > 0 ? t1Entries.map(renderColumn) : (
+                <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
+                  T1 {t("orderDetail.notFound")}
+                </div>
+              )}
+            </div>
+
+            {/* Right Area (T0) - 2/5 width */}
+            <div className="w-full md:w-[40%] flex flex-wrap items-start gap-x-16 gap-y-12 px-6 pt-8 md:pt-0">
+              {t0Entries.length > 0 ? t0Entries.map(renderColumn) : (
+                <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
+                  T0 {t("orderDetail.notFound")}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Table View ── */}
       {viewMode === "table" && (
