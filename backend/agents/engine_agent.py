@@ -686,7 +686,7 @@ def ffd_bin_pack(parts_list: list, board_info: dict):
 # Main Pipeline (v5 — Unified Naming + T0 Mixed Packing)
 # ─────────────────────────────────────────────
 
-def run_engine(parts_path: str, inventory_path: str, output_path: str = "output/cut_result.json"):
+def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "output/cut_result.json"):
     """
     Full engine run — v5 unified naming + real factory flow:
 

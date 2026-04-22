@@ -1,67 +1,100 @@
-# 🏭 AI Factory — 橱柜智能生产系统
+# AI Factory — ABC Cabinet 橱柜智能生产系统
 
-一体化橱柜生产 Pipeline：从订单 Excel → 自动拆单 → 裁切优化 → 工单生成 → 库存管理。
+从客户 Excel 订单自动生成裁切优化方案：Dashboard 上传 → AI 排版计算 → 结果实时展示。
+
+## 架构
+
+```
+Dashboard (Vercel)
+      │  上传订单 Excel
+      ▼
+   Supabase                         本地工厂 Mac
+  ┌─────────┐   status=pending   ┌─────────────────────────┐
+  │ orders  │ ◄────────────────► │   cloud_controller.py   │
+  │inventory│                   │                         │
+  │cut_stats│   结果写回          │  cabinet_calculator.py  │
+  │bom_hist │ ◄────────────────  │  engine_agent.py        │
+  └─────────┘                   │  t0_optimizer.py        │
+                                └─────────────────────────┘
+```
+
+**前端**（Next.js / Vercel）负责订单上传、结果展示、库存管理。  
+**后端**（本地 Mac）轮询 Supabase，处理订单，结果写回 Supabase。
+
+## 快速开始
+
+```bash
+# 1. 创建并激活虚拟环境
+python3 -m venv venv
+source venv/bin/activate
+pip install -r backend/requirements.txt
+
+# 2. 配置环境变量
+cp .env.example .env
+# 编辑 .env，填入 Supabase / Telegram 密钥
+
+# 3. 一键启动（后端轮询 + 前端 Dashboard）
+bash scripts/dev.sh
+
+# 或仅启动后端
+bash scripts/start_cloud.sh
+```
 
 ## 目录结构
 
 ```
 ai-factory/
-├── main.py                 # 本地 Pipeline 入口
-├── backend/                # 后端核心引擎
-│   ├── cabinet_calculator.py   # 橱柜尺寸计算器
-│   ├── agents/                 # 各功能 Agent
-│   ├── core/                   # Pipeline 控制器
-│   ├── config/                 # 配置中心
-│   └── tools/                  # 工具模块
-├── frontend/               # Next.js Dashboard（Vercel 部署）
-├── scripts/                # 运维启动脚本
-├── tests/                  # 测试数据
-├── docs/                   # 项目文档
-├── data/                   # 运行时数据（gitignore）
-├── output/                 # 裁切输出（gitignore）
-├── archive/                # 已处理订单归档
-├── logs/                   # 日志
-└── .env                    # 环境变量（gitignore）
+├── backend/
+│   ├── cabinet_calculator.py   # 订单拆单（英制 → mm → 零件列表）
+│   ├── agents/
+│   │   ├── engine_agent.py     # FFD 裁切优化引擎
+│   │   ├── t0_optimizer.py     # T0 大板混排优化
+│   │   └── notifier_agent.py   # Telegram 通知（备用）
+│   ├── core/
+│   │   └── cloud_controller.py # Supabase 轮询 + Pipeline 入口
+│   ├── config/                 # 配置、日志、Supabase 客户端
+│   └── tools/                  # email_reader、telegram_notifier
+├── frontend/                   # Next.js Dashboard（Vercel 部署）
+├── data/
+│   └── t1_inventory.xlsx       # T1 条料本地库存参照
+├── scripts/
+│   ├── dev.sh                  # 一键启动（后端 + 前端）
+│   └── start_cloud.sh          # 仅启动后端轮询
+└── logs/                       # 运行日志
 ```
 
-## 快速开始
+## 板材体系
 
-### 环境准备
-
-```bash
-cd ~/Desktop/ai-factory
-source venv/bin/activate
-pip install -r backend/requirements.txt
-cp .env.example .env   # 编辑填入实际密钥
+```
+T0  原板   1219.2 × 2438.4 mm (48″ × 96″)
+ ↓ 沿宽度裁切
+T1  条料   304.8 mm (12″) 或 609.6 mm (24″) 宽
+ ↓ 沿长度裁切
+T2  零件   最终板件（侧板、顶板、底板…）
 ```
 
-### 🔧 本地测试模式（手动跑单个订单）
+尺寸术语：**Height**（沿 2438.4mm 轴）、**Width**（沿 1219.2mm 轴）。
 
-```bash
-source venv/bin/activate
-python3 main.py data/order.xlsx
-# 或使用测试数据
-python3 main.py tests/fixtures/test_order.xlsx
-```
+## 环境变量
 
-Pipeline 自动执行：拆单 → 裁切优化 → Excel报告 → 审核 → 库存检查 → 工单生成 → Telegram通知 → 归档
+复制 `.env.example` 为 `.env`，填入以下内容：
 
-输出在 `output/{日期_序号}/` 目录下。
+| 变量 | 说明 |
+|------|------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase 项目 URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key |
+| `SUPABASE_SERVICE_KEY` | Supabase service role key（后端用） |
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot Token（可选） |
+| `TELEGRAM_CHAT_ID` | Telegram Chat ID（可选） |
+| `EMAIL_USER` | Gmail 地址（可选） |
+| `EMAIL_PASS` | Gmail 应用密码（可选） |
 
-### 🚀 生产环境模式（Cloud + Dashboard）
+## 技术栈
 
-```bash
-# 方式1: 一键启动（后端 + 前端）
-bash scripts/dev.sh
-
-# 方式2: 仅启动后端轮询
-bash scripts/start_cloud.sh
-```
-
-生产模式下，系统自动从 Supabase 拉取 Dashboard 上传的订单并处理。
-
-## 文档
-
-- [开发者技术文档](docs/developer_guide.md) — 系统设计、Pipeline 详解、开发指南
-- [操作指南](docs/operation_guide.md) — 日常操作详细说明
-- [架构说明](docs/architecture.md) — 系统架构与数据流
+| 层 | 技术 |
+|----|------|
+| 前端 | Next.js 16 / React 19 / TailwindCSS / TypeScript |
+| 数据库 | Supabase（PostgreSQL + Storage + Realtime） |
+| 后端 | Python 3.14 / pandas / openpyxl |
+| 部署 | Vercel（前端）/ 本地 Mac（后端轮询） |
+| 通知 | Telegram Bot（备用） |

@@ -7,21 +7,11 @@
 import logging
 import sys
 from datetime import datetime
-from config.settings import LOGS_DIR, ensure_directories
+from config.settings import LOGS_DIR
 
 
 def setup_logger(name: str = "ai-factory", level=logging.INFO) -> logging.Logger:
-    """
-    创建并配置 Logger。
-
-    Args:
-        name: Logger 名称（通常用模块名如 'brain_agent'）
-        level: 日志级别
-
-    Returns:
-        配置好的 Logger 实例
-    """
-    ensure_directories()
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
     logger = logging.getLogger(name)
 

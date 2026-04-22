@@ -137,7 +137,6 @@ def process_order(order: dict):
         cut_result_path = os.path.join(tempfile.gettempdir(), f"{job_id}_cut_result.json")
         result = run_engine(
             parts_path=parts_path,
-            inventory_path=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "t1_inventory.xlsx"),
             output_path=cut_result_path,
         )
 
