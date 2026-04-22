@@ -23,6 +23,7 @@ interface Part {
   component: string;
   cab_id: string;
   cab_type: string;
+  rotated?: boolean;
 }
 
 interface Cabinet {
