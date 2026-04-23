@@ -98,30 +98,34 @@ def optimize_t0_from_strips(strip_items: list) -> dict:
     # Filter out oversized
     valid_items = [x for x in sorted_items if x["strip_width"] <= usable_width]
 
-    # FFD bin packing along T0_WIDTH
+    # Group items by strip_width so we don't mix different widths on the same T0 board
+    from collections import defaultdict
+    width_groups = defaultdict(list)
+    for item in valid_items:
+        width_groups[item["strip_width"]].append(item)
+
     open_sheets = []  # each: {remaining, strips, cut_count}
 
-    for item in valid_items:
-        sw = item["strip_width"]
-        placed = False
-
-        # Try to fit on existing sheets (subsequent strip: needs kerf)
-        for sheet in open_sheets:
-            needed = sw + SAW_KERF
-            if sheet["remaining"] >= needed:
-                sheet["strips"].append(item)
-                sheet["remaining"] -= needed
-                sheet["cut_count"] += 1
-                placed = True
-                break
-
-        if not placed:
-            # Open new T0 sheet — first strip: no kerf
-            open_sheets.append({
-                "remaining": usable_width - sw,
-                "strips": [item],
-                "cut_count": 1,
-            })
+    # Pack each group independently
+    for sw, items in sorted(width_groups.items(), key=lambda x: x[0], reverse=True):
+        group_sheets = []
+        for item in items:
+            placed = False
+            for sheet in group_sheets:
+                needed = sw + SAW_KERF
+                if sheet["remaining"] >= needed:
+                    sheet["strips"].append(item)
+                    sheet["remaining"] -= needed
+                    sheet["cut_count"] += 1
+                    placed = True
+                    break
+            if not placed:
+                group_sheets.append({
+                    "remaining": usable_width - sw,
+                    "strips": [item],
+                    "cut_count": 1,
+                })
+        open_sheets.extend(group_sheets)
 
     # Build results
     t0_sheets = []
@@ -199,79 +203,141 @@ def optimize_t0_from_strips(strip_items: list) -> dict:
 # STEP 4: T0 Leftover Recovery
 # ─────────────────────────────────────────────
 
-def recover_leftover(sheet: dict) -> list:
+def _best_recovery_combo(width: float, candidates: list, kerf: float = SAW_KERF) -> list:
     """
-    Recover usable strips from T0 sheet leftover width.
+    Find combination of candidate widths (repetition allowed) that maximizes
+    total recovered width within `width` budget, accounting for kerf between cuts.
 
-    Rules (greedy, biggest first):
-      - remaining ≥ 609.6 → recover T1-609.6-INV
-      - remaining ≥ 304.8 → recover T1-304.8-INV
-      - remaining ≥ 200   → recover STRIP-RECOVERED (拉条)
-      - remaining < 200   → waste (废料)
+    Constraint: Σwᵢ + (n − 1) × kerf ≤ width
 
-    Modifies sheet in-place: adds "recovered_strips" list.
-    Returns the list of recovered strips.
+    Args:
+        width:      leftover budget (mm)
+        candidates: list of dicts with at least {"board_type": str, "width": float}
+        kerf:       saw kerf (mm) between adjacent cuts
+
+    Returns:
+        Ordered list of chosen candidate dicts (widest first).
     """
-    remaining = float(sheet.get("remaining_width", sheet.get("waste_width", 0)))
+    if width <= 0 or not candidates:
+        return []
+
+    # Sort by width descending so DP explores bigger pieces first (prunes faster).
+    opts = sorted(
+        ({"board_type": c["board_type"], "width": float(c["width"])} for c in candidates),
+        key=lambda x: -x["width"],
+    )
+
+    # Memoize on (rounded budget, is_first_cut).
+    cache: dict = {}
+
+    def solve(budget: float, is_first: bool):
+        # Round key to 0.1mm to keep the cache finite.
+        key = (round(budget, 1), is_first)
+        if key in cache:
+            return cache[key]
+
+        best_sum = 0.0
+        best_combo: list = []
+        for opt in opts:
+            cost = opt["width"] + (0.0 if is_first else kerf)
+            if cost - 1e-6 > budget:
+                continue
+            sub_sum, sub_combo = solve(budget - cost, False)
+            total = opt["width"] + sub_sum
+            if total > best_sum + 1e-6:
+                best_sum = total
+                best_combo = [opt] + sub_combo
+
+        cache[key] = (best_sum, best_combo)
+        return cache[key]
+
+    _, combo = solve(width, True)
+    return combo
+
+
+def _legacy_recover(remaining: float) -> tuple:
+    """
+    Original hardcoded recovery rules — used as fallback when no inventory
+    widths are provided (offline tests, older callers).
+
+    Returns: (recovered_list, final_remaining)
+    """
     recovered = []
-
     while remaining >= RECOVERY_RAIL:
         if remaining >= RECOVERY_WIDE + SAW_KERF:
-            # Recover 609.6 strip (need kerf for the cut)
-            recovered.append({
-                "width": RECOVERY_WIDE,
-                "board_type": BOARD_T1_WIDE,
-                "type": BOARD_T1_WIDE,
-                "label": f"回收{BOARD_T1_WIDE}",
-            })
+            recovered.append({"width": RECOVERY_WIDE, "board_type": BOARD_T1_WIDE,
+                              "type": BOARD_T1_WIDE, "label": f"回收{BOARD_T1_WIDE}"})
             remaining -= (RECOVERY_WIDE + SAW_KERF)
         elif remaining >= RECOVERY_WIDE:
-            # Exactly enough for 609.6 (last cut, no kerf needed after)
-            recovered.append({
-                "width": RECOVERY_WIDE,
-                "board_type": BOARD_T1_WIDE,
-                "type": BOARD_T1_WIDE,
-                "label": f"回收{BOARD_T1_WIDE}",
-            })
+            recovered.append({"width": RECOVERY_WIDE, "board_type": BOARD_T1_WIDE,
+                              "type": BOARD_T1_WIDE, "label": f"回收{BOARD_T1_WIDE}"})
             remaining -= RECOVERY_WIDE
         elif remaining >= RECOVERY_NARROW + SAW_KERF:
-            # Recover 304.8 strip
-            recovered.append({
-                "width": RECOVERY_NARROW,
-                "board_type": BOARD_T1_NARROW,
-                "type": BOARD_T1_NARROW,
-                "label": f"回收{BOARD_T1_NARROW}",
-            })
+            recovered.append({"width": RECOVERY_NARROW, "board_type": BOARD_T1_NARROW,
+                              "type": BOARD_T1_NARROW, "label": f"回收{BOARD_T1_NARROW}"})
             remaining -= (RECOVERY_NARROW + SAW_KERF)
         elif remaining >= RECOVERY_NARROW:
-            # Exactly enough for 304.8
-            recovered.append({
-                "width": RECOVERY_NARROW,
-                "board_type": BOARD_T1_NARROW,
-                "type": BOARD_T1_NARROW,
-                "label": f"回收{BOARD_T1_NARROW}",
-            })
+            recovered.append({"width": RECOVERY_NARROW, "board_type": BOARD_T1_NARROW,
+                              "type": BOARD_T1_NARROW, "label": f"回收{BOARD_T1_NARROW}"})
             remaining -= RECOVERY_NARROW
         elif remaining >= RECOVERY_RAIL:
-            # Rail stock (拉条)
-            recovered.append({
-                "width": round(remaining, 1),
-                "board_type": BOARD_STRIP_RECOV,
-                "type": BOARD_STRIP_RECOV,
-                "label": f"拉条({round(remaining, 1)}mm)",
-            })
+            recovered.append({"width": round(remaining, 1), "board_type": BOARD_STRIP_RECOV,
+                              "type": BOARD_STRIP_RECOV, "label": f"拉条({round(remaining, 1)}mm)"})
             remaining = 0
         else:
             break
+    return recovered, remaining
+
+
+def recover_leftover(sheet: dict, inventory_widths: list | None = None) -> list:
+    """
+    Recover usable strips from a T0 sheet's leftover width by matching it
+    against actual inventory widths via a multi-cut DP that maximizes the
+    total recovered width.
+
+    Args:
+        sheet:            sheet dict; reads `remaining_width` / `waste_width`
+        inventory_widths: candidate list [{"board_type": str, "width": float}, ...]
+                          (e.g. T1 rows from Supabase `inventory`).
+                          If None or empty → fall back to legacy hardcoded rules.
+
+    Modifies `sheet` in-place: sets `recovered_strips`, `remaining_width`,
+    `waste_final`. Returns the list of recovered strips.
+    """
+    remaining = float(sheet.get("remaining_width", sheet.get("waste_width", 0)))
+
+    if inventory_widths:
+        combo = _best_recovery_combo(remaining, inventory_widths, kerf=SAW_KERF)
+        recovered = []
+        used = 0.0
+        for i, opt in enumerate(combo):
+            kerf_cost = 0.0 if i == 0 else SAW_KERF
+            used += opt["width"] + kerf_cost
+            recovered.append({
+                "width": round(opt["width"], 1),
+                "board_type": opt["board_type"],
+                "type": opt["board_type"],
+                "label": f"回收{opt['board_type']}",
+            })
+        final_remaining = max(0.0, remaining - used)
+    else:
+        recovered, final_remaining = _legacy_recover(remaining)
 
     sheet["recovered_strips"] = recovered
-    sheet["remaining_width"] = round(remaining, 1)
-    sheet["waste_final"] = round(remaining, 1)
+    sheet["remaining_width"] = round(final_remaining, 1)
+    sheet["waste_final"] = round(final_remaining, 1)
+
+    # Update sheet utilization to include recovered strips
+    if recovered:
+        recovered_area = sum(r["width"] * T0_HEIGHT for r in recovered)
+        parts_area = sum(s["strip_width"] * T0_HEIGHT for s in sheet.get("strips", []))
+        t0_area = T0_WIDTH * T0_HEIGHT
+        sheet["utilization"] = round((parts_area + recovered_area) / t0_area, 4)
 
     if recovered:
         desc = ", ".join(f"{r['label']}({r['width']}mm)" for r in recovered)
         print(f"  ♻️  {sheet['sheet_id']}: recovered [{desc}], "
-              f"final waste: {remaining:.1f}mm")
+              f"final waste: {final_remaining:.1f}mm")
 
     return recovered
 

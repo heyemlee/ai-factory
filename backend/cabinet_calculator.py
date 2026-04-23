@@ -192,7 +192,7 @@ def calculate_panels(
     return parts
 
 
-def process_order(order_path: str, output_path: str = None) -> pd.DataFrame:
+def process_order(order_path: str, output_path: str = None):
     """
     Read an order Excel, calculate all panels for every cabinet,
     and output a flat parts list.
@@ -202,7 +202,8 @@ def process_order(order_path: str, output_path: str = None) -> pd.DataFrame:
         output_path: Where to save parts.xlsx. If None, saves next to order file.
 
     Returns:
-        DataFrame with all parts.
+        Tuple of (DataFrame with all parts, cabinet_breakdown dict).
+        cabinet_breakdown maps cab_id -> {cab_type, count, parts:[{part_id,component,Height,Width}]}
     """
     df = pd.read_excel(order_path)
 
@@ -302,17 +303,32 @@ def process_order(order_path: str, output_path: str = None) -> pd.DataFrame:
 
     # ── Build output DataFrame ──
     records = []
+    cabinet_breakdown: dict = {}
     part_counter = 1
     for p in all_parts:
         for _ in range(p["qty"]):
-            records.append({
-                "part_id": f"P{part_counter:04d}",
+            pid = f"P{part_counter:04d}"
+            rec = {
+                "part_id": pid,
                 "cab_id": p["cab_id"],
                 "cab_type": p["cab_type"],
                 "component": p["component"],
                 "Height": p["length"],    # Length direction (along board)
                 "Width": p["width"],      # Width direction
                 "qty": 1,
+            }
+            records.append(rec)
+            cb = cabinet_breakdown.setdefault(p["cab_id"], {
+                "cab_type": p["cab_type"],
+                "count": 0,
+                "parts": [],
+            })
+            cb["count"] += 1
+            cb["parts"].append({
+                "part_id": pid,
+                "component": p["component"],
+                "Height": p["length"],
+                "Width": p["width"],
             })
             part_counter += 1
 
@@ -351,7 +367,7 @@ def process_order(order_path: str, output_path: str = None) -> pd.DataFrame:
 
     print(f"{'═' * 60}\n")
 
-    return result_df
+    return result_df, cabinet_breakdown
 
 
 # ─── CLI Entry Point ────────────────────────────────────

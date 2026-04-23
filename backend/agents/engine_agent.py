@@ -237,6 +237,14 @@ def build_strip_demand(parts: list, inventory: dict = None) -> list:
         for inv_w, inv_bt in inv_widths:
             if abs(inv_w - part_width) < 0.5:
                 return inv_w, inv_bt
+        
+        # Hard fallback for standard widths!
+        # Even if the database is missing these widths, they must NEVER go to T0.
+        if abs(STRIP_WIDTH_NARROW - part_width) < 0.5:
+            return float(STRIP_WIDTH_NARROW), DEFAULT_BOARD_T1_NARROW
+        if abs(STRIP_WIDTH_WIDE - part_width) < 0.5:
+            return float(STRIP_WIDTH_WIDE), DEFAULT_BOARD_T1_WIDE
+
         return None, None
 
 
@@ -344,56 +352,33 @@ def apply_inventory(strip_demand: list, inventory: dict) -> dict:
 
         # T1 standard strips: check inventory
         bt, board_info = find_matching_board(sw)
-        if bt is None or board_info["qty"] <= 0:
-            # No inventory → all go to T0
-            t0_pool.append({
-                "strip_width": sw,
-                "parts": parts_for_strip,
-            })
-            continue
-
-        available_stock = board_info["qty"] - used_inventory.get(bt, 0)
-
-        # How many strips do we need?
-        needed_strips = _count_strips_needed(parts_for_strip, sw)
-
-        if available_stock <= 0:
-            t0_pool.append({
-                "strip_width": sw,
-                "parts": parts_for_strip,
-            })
-            continue
-
-        # How many strips can we cover from inventory?
-        covered = min(needed_strips, available_stock)
-        used_inventory[bt] = used_inventory.get(bt, 0) + covered
-
-        if covered >= needed_strips:
-            # All parts served from inventory
-            inventory_strips.append({
-                "strip_width": sw,
-                "board_type": sd["board_type"],
-                "parts": parts_for_strip,
-                "source": "inventory",
-                "strips_used": covered,
-            })
-        else:
-            # Partial inventory coverage — split parts
-            inv_parts, t0_parts = _split_parts_for_strips(parts_for_strip, sw, covered)
-
-            if inv_parts:
-                inventory_strips.append({
-                    "strip_width": sw,
-                    "board_type": sd["board_type"],
-                    "parts": inv_parts,
-                    "source": "inventory",
-                    "strips_used": covered,
-                })
-            if t0_parts:
+        if bt is None:
+            # Hard fallback for standard widths in case database is missing them
+            if abs(sw - STRIP_WIDTH_NARROW) < 0.5:
+                bt = DEFAULT_BOARD_T1_NARROW
+            elif abs(sw - STRIP_WIDTH_WIDE) < 0.5:
+                bt = DEFAULT_BOARD_T1_WIDE
+            else:
+                # Truly non-standard width → all go to T0
                 t0_pool.append({
                     "strip_width": sw,
-                    "parts": t0_parts,
+                    "parts": parts_for_strip,
                 })
+                continue
+
+        # Ignore inventory quantity limits! If it's a standard T1 width, we ALWAYS cut it from T1 stock.
+        # This matches the factory workflow: T1 parts are always cut from T1 stock, and T0 is only for custom widths.
+        needed_strips = _count_strips_needed(parts_for_strip, sw)
+        used_inventory[bt] = used_inventory.get(bt, 0) + needed_strips
+
+        # All parts served from inventory (unlimited stock assumption)
+        inventory_strips.append({
+            "strip_width": sw,
+            "board_type": sd["board_type"],
+            "parts": parts_for_strip,
+            "source": "inventory",
+            "strips_used": needed_strips,
+        })
 
     print(f"\n── STEP 2: Inventory Applied ──")
     for bt, cnt in used_inventory.items():
@@ -554,6 +539,7 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
                     "cab_id": p.get("cab_id", ""),
                     "cab_type": p.get("cab_type", ""),
                     "rotated": p.get("rotated", False),
+                    "auto_swapped": p.get("auto_swapped", False),
                 }
                 for p in strip["parts"]
             ],
@@ -664,6 +650,7 @@ def ffd_bin_pack(parts_list: list, board_info: dict):
                     "cab_id": p.get("cab_id", ""),
                     "cab_type": p.get("cab_type", ""),
                     "rotated": p.get("rotated", False),
+                    "auto_swapped": p.get("auto_swapped", False),
                 }
                 for p in board["parts"]
             ],
@@ -686,7 +673,185 @@ def ffd_bin_pack(parts_list: list, board_info: dict):
 # Main Pipeline (v5 — Unified Naming + T0 Mixed Packing)
 # ─────────────────────────────────────────────
 
-def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "output/cut_result.json"):
+def _validate_cut_result(output: dict, cabinet_breakdown: dict, total_parts_required: int, oversized_parts: list):
+    """
+    Append integrity issues to output["issues"]["integrity"]. Never raises.
+
+    Checks:
+      - PART_COUNT_MISMATCH     placed + oversized + unmatched != required
+      - DUPLICATE_PART_ID       same part_id on multiple boards
+      - INVALID_PART_DIM        Height <= 0 or Width <= 0
+      - INVALID_BOARD_SIZE      board_size unparsable
+      - T0_STRIP_OVERFLOW       t0_strip_position + strip_width > 1219.2
+      - STRIP_LENGTH_OVERFLOW   trim + parts + kerf > usable_height
+      - CABINET_PART_MISSING    expected part_id not rendered on any board
+      - CABINET_PART_EXTRA      rendered part_id not in cabinet_breakdown
+      - CABINET_DIM_MISMATCH    dims differ from breakdown (allow H↔W swap if auto_swapped)
+      - CABINET_COUNT_MISMATCH  cab_id rendered count != breakdown count
+    """
+    import re
+    issues = output.setdefault("issues", {})
+    integrity: list = []
+
+    boards = output.get("boards", [])
+
+    # ── Part-level checks ──
+    seen_ids: dict = {}
+    rendered_by_cab: dict = {}
+    rendered_by_id: dict = {}
+    for b in boards:
+        bid = b.get("board_id", "?")
+        # board_size parsability
+        bs = b.get("board_size", "")
+        if not re.search(r"(\d+(?:\.\d+)?)\s*[×x*]\s*(\d+(?:\.\d+)?)", str(bs), re.IGNORECASE):
+            integrity.append({
+                "code": "INVALID_BOARD_SIZE",
+                "severity": "warn",
+                "msg": f"board_size unparsable on {bid}: {bs!r}",
+                "ref": {"board_id": bid},
+            })
+
+        # T0 strip overflow
+        tsp = b.get("t0_strip_position")
+        sw = b.get("strip_width", 0) or 0
+        if tsp is not None and (tsp + sw) > (1219.2 + 0.5):
+            integrity.append({
+                "code": "T0_STRIP_OVERFLOW",
+                "severity": "error",
+                "msg": f"{bid}: strip_position {tsp} + width {sw} exceeds T0 1219.2mm",
+                "ref": {"board_id": bid, "t0_strip_position": tsp, "strip_width": sw},
+            })
+
+        # Strip length overflow
+        tl = b.get("trim_loss", 0) or 0
+        sk = b.get("saw_kerf", 0) or 0
+        parts_sum = 0.0
+        for p in b.get("parts", []):
+            parts_sum += (p.get("cut_length") or p.get("Height") or 0)
+        kerf_sum = max(0, (len(b.get("parts", [])) - 1)) * sk
+        usable_len = (b.get("usable_length") or 0) or (BOARD_HEIGHT - tl)
+        if tl + parts_sum + kerf_sum > usable_len + 0.5:
+            integrity.append({
+                "code": "STRIP_LENGTH_OVERFLOW",
+                "severity": "error",
+                "msg": f"{bid}: trim+parts+kerf = {tl + parts_sum + kerf_sum:.1f} exceeds usable {usable_len:.1f}",
+                "ref": {"board_id": bid},
+            })
+
+        for p in b.get("parts", []):
+            pid = p.get("part_id", "?")
+            h = p.get("Height", 0) or 0
+            w = p.get("Width", 0) or 0
+            if h <= 0 or w <= 0:
+                integrity.append({
+                    "code": "INVALID_PART_DIM",
+                    "severity": "error",
+                    "msg": f"part {pid} on {bid}: Height={h}, Width={w}",
+                    "ref": {"board_id": bid, "part_id": pid},
+                })
+            if pid in seen_ids:
+                integrity.append({
+                    "code": "DUPLICATE_PART_ID",
+                    "severity": "error",
+                    "msg": f"part_id {pid} appears on both {seen_ids[pid]} and {bid}",
+                    "ref": {"part_id": pid, "boards": [seen_ids[pid], bid]},
+                })
+            else:
+                seen_ids[pid] = bid
+            rendered_by_id[pid] = {
+                "Height": h, "Width": w,
+                "auto_swapped": bool(p.get("auto_swapped") or p.get("rotated")),
+                "cab_id": p.get("cab_id"),
+            }
+            cab = p.get("cab_id")
+            if cab:
+                rendered_by_cab.setdefault(cab, []).append(pid)
+
+    # ── Part count conservation ──
+    placed = sum(len(b.get("parts", [])) for b in boards)
+    oversized_n = len(oversized_parts or [])
+    unmatched_n = len(output.get("issues", {}).get("unmatched_parts", []))
+    expected = total_parts_required + oversized_n
+    actual = placed + oversized_n + unmatched_n
+    if actual != expected:
+        integrity.append({
+            "code": "PART_COUNT_MISMATCH",
+            "severity": "error",
+            "msg": f"expected {expected} parts (required {total_parts_required} + oversized {oversized_n}), got placed {placed} + unmatched {unmatched_n} + oversized {oversized_n} = {actual}",
+            "ref": {"placed": placed, "unmatched": unmatched_n, "oversized": oversized_n, "required": total_parts_required},
+        })
+
+    # ── Cabinet-level reconciliation ──
+    if cabinet_breakdown:
+        for cab_id, cb in cabinet_breakdown.items():
+            expected_parts = {pp["part_id"]: pp for pp in cb.get("parts", [])}
+            rendered_ids = set(rendered_by_cab.get(cab_id, []))
+            missing = set(expected_parts.keys()) - rendered_ids
+            extra = rendered_ids - set(expected_parts.keys())
+
+            for pid in sorted(missing):
+                # Skip if this part is in oversized_parts (legitimately not placed)
+                if any(o.get("part_id") == pid for o in (oversized_parts or [])):
+                    continue
+                integrity.append({
+                    "code": "CABINET_PART_MISSING",
+                    "severity": "error",
+                    "msg": f"cab {cab_id}: part {pid} expected but not rendered",
+                    "ref": {"cab_id": cab_id, "part_id": pid},
+                })
+            for pid in sorted(extra):
+                integrity.append({
+                    "code": "CABINET_PART_EXTRA",
+                    "severity": "warn",
+                    "msg": f"cab {cab_id}: part {pid} rendered but not in cabinet_breakdown",
+                    "ref": {"cab_id": cab_id, "part_id": pid},
+                })
+
+            # Count check
+            if cb.get("count", 0) != len(rendered_ids) and not missing and not extra:
+                integrity.append({
+                    "code": "CABINET_COUNT_MISMATCH",
+                    "severity": "warn",
+                    "msg": f"cab {cab_id}: breakdown count {cb.get('count')} != rendered {len(rendered_ids)}",
+                    "ref": {"cab_id": cab_id},
+                })
+
+            # Dim check (allow H↔W swap for auto_swapped)
+            for pid in rendered_ids & set(expected_parts.keys()):
+                exp = expected_parts[pid]
+                got = rendered_by_id.get(pid, {})
+                if not got:
+                    continue
+                eh, ew = exp.get("Height", 0), exp.get("Width", 0)
+                gh, gw = got.get("Height", 0), got.get("Width", 0)
+                match_direct = abs(eh - gh) < 0.5 and abs(ew - gw) < 0.5
+                match_swapped = abs(eh - gw) < 0.5 and abs(ew - gh) < 0.5
+                if match_direct:
+                    continue
+                if match_swapped and got.get("auto_swapped"):
+                    continue
+                integrity.append({
+                    "code": "CABINET_DIM_MISMATCH",
+                    "severity": "error",
+                    "msg": f"cab {cab_id} part {pid}: expected {eh}×{ew}, got {gh}×{gw}",
+                    "ref": {"cab_id": cab_id, "part_id": pid,
+                            "expected": {"Height": eh, "Width": ew},
+                            "actual": {"Height": gh, "Width": gw,
+                                       "auto_swapped": got.get("auto_swapped", False)}},
+                })
+
+    if integrity:
+        issues["integrity"] = integrity
+        print(f"\n⚠️  Integrity validator: {len(integrity)} issue(s) detected")
+        # Print a short digest
+        codes = {}
+        for it in integrity:
+            codes[it["code"]] = codes.get(it["code"], 0) + 1
+        for c, n in codes.items():
+            print(f"   • {c}: {n}")
+
+
+def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "output/cut_result.json", cabinet_breakdown: dict = None):
     """
     Full engine run — v5 unified naming + real factory flow:
 
@@ -734,7 +899,14 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
         # 超板检测: 考虑旋转 — 任一方向能放下即可
         fits_normal = (w <= max_board_width and h <= usable_height)
         fits_rotated = (h <= max_board_width and w <= usable_height)
-        if fits_normal or fits_rotated:
+        if fits_normal:
+            valid_parts.append(p)
+        elif fits_rotated:
+            # Auto-correct swapped dimensions (e.g. user input W=2362.2, H=732)
+            # We permanently swap them so it fits the T0 board logic.
+            p["Height"] = w
+            p["Width"] = h
+            p["auto_swapped"] = True
             valid_parts.append(p)
         else:
             oversized_parts.append(p)
@@ -790,128 +962,32 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
                 "strip_type": "T0",
             })
 
-    # ─── STEP 3b: T0 Gap-Filling Optimization ───
-    # 计算 T0 板上剩余空间, 从库存拉入窄条料填充缝隙
-    # e.g.: 876.3mm 独占一张 T0 → 337.9mm 空隙 → 可填 304.8mm!
-    if t0_strip_items:
-        T0_USABLE = 1219.2 - 5.0  # = 1214.2mm
-        # Simulate FFD to find gaps
-        simulated_sheets = []
-        for item in sorted(t0_strip_items, key=lambda x: x["strip_width"], reverse=True):
-            sw = item["strip_width"]
-            placed = False
-            for sheet in simulated_sheets:
-                needed = sw + SAW_KERF
-                if sheet["remaining"] >= needed:
-                    sheet["remaining"] -= needed
-                    sheet["count"] += 1
-                    placed = True
-                    break
-            if not placed:
-                simulated_sheets.append({"remaining": T0_USABLE - sw, "count": 1})
 
-        # Count how many narrow/wide fills we can add
-        fill_narrow = 0  # 304.8mm fills
-        fill_wide = 0    # 609.6mm fills
-
-        for sheet in simulated_sheets:
-            rem = sheet["remaining"]
-            # Try to fill with as many strips as possible
-            while rem >= STRIP_WIDTH_NARROW + SAW_KERF:
-                if rem >= STRIP_WIDTH_WIDE + SAW_KERF:
-                    fill_wide += 1
-                    rem -= (STRIP_WIDTH_WIDE + SAW_KERF)
-                elif rem >= STRIP_WIDTH_NARROW + SAW_KERF:
-                    fill_narrow += 1
-                    rem -= (STRIP_WIDTH_NARROW + SAW_KERF)
-                else:
-                    break
-            # Last strip on sheet: no kerf needed after it
-            if rem >= STRIP_WIDTH_WIDE:
-                fill_wide += 1
-                rem -= STRIP_WIDTH_WIDE
-            elif rem >= STRIP_WIDTH_NARROW:
-                fill_narrow += 1
-                rem -= STRIP_WIDTH_NARROW
-
-        # Pull strips from inventory into T0 pool
-        if fill_narrow > 0 or fill_wide > 0:
-            print(f"\n── STEP 3b: T0 Gap-Fill Optimization ──")
-            print(f"  Gaps found: can fill {fill_narrow}×304.8 + {fill_wide}×609.6")
-
-            # Pull narrow strips from inventory
-            for inv_strip in inventory_strips[:]:
-                if fill_narrow <= 0:
-                    break
-                if abs(inv_strip["strip_width"] - STRIP_WIDTH_NARROW) < 0.5:
-                    can_pull = min(fill_narrow, inv_strip["strips_used"])
-                    if can_pull > 0:
-                        # Split: some strips stay in inventory, some go to T0
-                        pull_parts, keep_parts = _split_parts_for_strips(
-                            inv_strip["parts"], STRIP_WIDTH_NARROW, 
-                            inv_strip["strips_used"] - can_pull
-                        )
-                        # keep_parts go to T0, pull_parts stay in inventory
-                        # (reversed because _split returns in-strips first)
-                        if keep_parts:
-                            # Add pulled parts to T0 pool
-                            if STRIP_WIDTH_NARROW not in t0_parts_by_width:
-                                t0_parts_by_width[STRIP_WIDTH_NARROW] = []
-                            t0_parts_by_width[STRIP_WIDTH_NARROW].extend(keep_parts)
-                            for _ in range(can_pull):
-                                t0_strip_items.append({
-                                    "strip_width": STRIP_WIDTH_NARROW,
-                                    "strip_label": t0_name,
-                                    "strip_type": "T0",
-                                })
-                            # Update inventory strip
-                            inv_strip["parts"] = pull_parts
-                            inv_strip["strips_used"] -= can_pull
-                            # Refund inventory usage
-                            bt = inv_strip["board_type"]
-                            used_inventory[bt] = max(0, used_inventory.get(bt, 0) - can_pull)
-                            fill_narrow -= can_pull
-                            print(f"  ✅ Pulled {can_pull}×304.8 from inventory → T0 gap-fill")
-                            if not pull_parts:
-                                inventory_strips.remove(inv_strip)
-
-            # Pull wide strips from inventory  
-            for inv_strip in inventory_strips[:]:
-                if fill_wide <= 0:
-                    break
-                if abs(inv_strip["strip_width"] - STRIP_WIDTH_WIDE) < 0.5:
-                    can_pull = min(fill_wide, inv_strip["strips_used"])
-                    if can_pull > 0:
-                        pull_parts, keep_parts = _split_parts_for_strips(
-                            inv_strip["parts"], STRIP_WIDTH_WIDE,
-                            inv_strip["strips_used"] - can_pull
-                        )
-                        if keep_parts:
-                            if STRIP_WIDTH_WIDE not in t0_parts_by_width:
-                                t0_parts_by_width[STRIP_WIDTH_WIDE] = []
-                            t0_parts_by_width[STRIP_WIDTH_WIDE].extend(keep_parts)
-                            for _ in range(can_pull):
-                                t0_strip_items.append({
-                                    "strip_width": STRIP_WIDTH_WIDE,
-                                    "strip_label": t0_name,
-                                    "strip_type": "T0",
-                                })
-                            inv_strip["parts"] = pull_parts
-                            inv_strip["strips_used"] -= can_pull
-                            bt = inv_strip["board_type"]
-                            used_inventory[bt] = max(0, used_inventory.get(bt, 0) - can_pull)
-                            fill_wide -= can_pull
-                            print(f"  ✅ Pulled {can_pull}×609.6 from inventory → T0 gap-fill")
-                            if not pull_parts:
-                                inventory_strips.remove(inv_strip)
 
     t0_plan = None
     if t0_strip_items:
         t0_plan = optimize_t0_from_strips(t0_strip_items)
 
         # ─── STEP 4: Recover leftover from T0 sheets ───
+        # Build inventory-width candidates for DP matching: any non-T0 main
+        # material whose height covers a full T0 sheet length (≥ 2438.4mm).
+        recovery_candidates = []
+        for bt, info in inventory.items():
+            if bt.startswith("T0"):
+                continue
+            if info.get("Height", 0) + 1e-3 < BOARD_HEIGHT:
+                continue
+            w = float(info.get("Width", 0))
+            if w <= 0:
+                continue
+            recovery_candidates.append({"board_type": bt, "width": w})
+        recovery_candidates.sort(key=lambda c: -c["width"])
+        if recovery_candidates:
+            cand_desc = ", ".join(f"{c['board_type']}={c['width']}mm" for c in recovery_candidates)
+            print(f"  ♻️  Recovery candidates (from inventory): {cand_desc}")
+
         for sheet in t0_plan["t0_sheets"]:
-            recover_leftover(sheet)
+            recover_leftover(sheet, recovery_candidates)
 
     # ─── STEP 4b: Build T0 sheet → strip mapping for frontend ───
     # Maps each strip (by width) to its parent T0 sheet position
@@ -1001,8 +1077,24 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
     total_board_area = t0_total_area + t1_inv_area
     total_parts_area = sum(b["parts_total_area"] for b in all_board_results)
     
-    # Fix t0_sheet_utilization for each strip to be based on actual parts area of the sheet
+    t0_sheets_used = t0_plan["t0_sheets_needed"] if t0_plan else 0
+    t0_total_recovery = 0
+    recovered_inventory = []
+    total_recovered_area = 0
+    if t0_plan:
+        for sheet in t0_plan["t0_sheets"]:
+            for r in sheet.get("recovered_strips", []):
+                t0_total_recovery += 1
+                recovered_inventory.append(r)
+                total_recovered_area += r["width"] * 2438.4
+
+    # Fix t0_sheet_utilization for each strip to be based on actual parts area + recovered area
     sheet_to_parts_area = defaultdict(float)
+    sheet_to_recovered_area = defaultdict(float)
+    if t0_plan:
+        for sheet in t0_plan["t0_sheets"]:
+            sheet_to_recovered_area[sheet["sheet_id"]] = sum(r["width"] * 2438.4 for r in sheet.get("recovered_strips", []))
+            
     for b in all_board_results:
         if "t0_sheet_id" in b:
             sheet_to_parts_area[b["t0_sheet_id"]] += b["parts_total_area"]
@@ -1010,24 +1102,17 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
     for b in all_board_results:
         if "t0_sheet_id" in b:
             t0_area = 1219.2 * 2438.4
-            b["t0_sheet_utilization"] = round(sheet_to_parts_area[b["t0_sheet_id"]] / t0_area, 4)
+            b["t0_sheet_utilization"] = round((sheet_to_parts_area[b["t0_sheet_id"]] + sheet_to_recovered_area[b["t0_sheet_id"]]) / t0_area, 4)
 
-    # Calculate overall utilization
-    overall_util = total_parts_area / total_board_area if total_board_area > 0 else 0
+    # Calculate overall utilization (Parts + Recovered)
+    overall_useful_area = total_parts_area + total_recovered_area
+    overall_util = overall_useful_area / total_board_area if total_board_area > 0 else 0
     
-    # Calculate true total waste (Total Area - Parts Area - Kerf Area)
+    # Calculate true total waste (Total Area - Useful Area - Kerf Area)
     # Note: Trim loss is considered waste
     total_kerf_area = sum((b["cuts"] * SAW_KERF) * b.get("actual_strip_width", b.get("strip_width", 1219.2)) for b in all_board_results)
-    total_waste_area = total_board_area - total_parts_area - total_kerf_area
+    total_waste_area = total_board_area - overall_useful_area - total_kerf_area
 
-    t0_sheets_used = t0_plan["t0_sheets_needed"] if t0_plan else 0
-    t0_total_recovery = 0
-    recovered_inventory = []
-    if t0_plan:
-        for sheet in t0_plan["t0_sheets"]:
-            for r in sheet.get("recovered_strips", []):
-                t0_total_recovery += 1
-                recovered_inventory.append(r)
 
     # Board type breakdown
     board_type_counts = defaultdict(int)
@@ -1130,6 +1215,13 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
     # Add recovered inventory
     if recovered_inventory:
         output["recovered_inventory"] = recovered_inventory
+
+    # Attach cabinet breakdown for downstream reconciliation
+    if cabinet_breakdown:
+        output["cabinet_breakdown"] = cabinet_breakdown
+
+    # Integrity validation — appends to issues, never raises
+    _validate_cut_result(output, cabinet_breakdown, total_parts_required, oversized_parts)
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)

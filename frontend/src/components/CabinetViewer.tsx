@@ -157,10 +157,18 @@ export function Cabinet3DScene({ cabinet, hoveredPartId, setHoveredPartId }: {
       addBoard(p, xPos, sH/2, 0, sT, h * SCALE, w * SCALE);
     });
 
-    // Back: Height=柜宽-30(X), Width=柜高(Y)
+    // Back: Height/Width 智能匹配 (哪个更接近柜高，哪个就是柜高Y)
     grouped.back.forEach((p) => {
       const { h, w } = getDims(p);
-      addBoard(p, 0, sH/2, -sD/2 + sT/2, h * SCALE, w * SCALE, sT);
+      let pX, pY;
+      if (Math.abs(h - cabH) < Math.abs(w - cabH)) {
+        pY = h;
+        pX = w;
+      } else {
+        pY = w;
+        pX = h;
+      }
+      addBoard(p, 0, sH/2, -sD/2 + sT/2, pX * SCALE, pY * SCALE, sT);
     });
 
     // Shelves

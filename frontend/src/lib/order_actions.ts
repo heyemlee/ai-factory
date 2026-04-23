@@ -35,10 +35,32 @@ export async function revertCut(order: any) {
     }
   }
 
-  // 3. Delete from cutting_stats
+  // 3. Decrement inventory for previously-added recovered scrap (symmetric to ConfirmCutModal)
+  const recovered = cutResult.recovered_inventory || [];
+  if (recovered.length > 0) {
+    const recoveredCounts: Record<string, number> = {};
+    for (const r of recovered) {
+      recoveredCounts[r.board_type] = (recoveredCounts[r.board_type] || 0) + 1;
+    }
+    for (const [bt, count] of Object.entries(recoveredCounts)) {
+      const { data: invData } = await supabase
+        .from("inventory")
+        .select("stock")
+        .eq("board_type", bt)
+        .single();
+      if (invData) {
+        await supabase
+          .from("inventory")
+          .update({ stock: Math.max(0, invData.stock - count) })
+          .eq("board_type", bt);
+      }
+    }
+  }
+
+  // 4. Delete from cutting_stats
   await supabase.from("cutting_stats").delete().eq("job_id", order.job_id);
 
-  // 4. Revert order status
+  // 5. Revert order status
   await supabase
     .from("orders")
     .update({

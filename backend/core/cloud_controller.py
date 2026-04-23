@@ -28,6 +28,68 @@ from config.supabase_client import supabase
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL_SECONDS", "30"))
 
 
+def _shape_check_cut_result(result: dict) -> list:
+    """
+    Lightweight schema/invariant check before writing to Supabase.
+    Returns a list of error message strings. Empty list = OK.
+    """
+    errs = []
+    if not isinstance(result, dict):
+        return ["result is not a dict"]
+
+    boards = result.get("boards")
+    if not isinstance(boards, list):
+        errs.append("boards is missing or not a list")
+        boards = []
+
+    summary = result.get("summary")
+    if not isinstance(summary, dict):
+        errs.append("summary is missing or not a dict")
+        summary = {}
+
+    for key in ("boards_used", "overall_utilization", "total_parts_placed"):
+        v = summary.get(key)
+        if not isinstance(v, (int, float)):
+            errs.append(f"summary.{key} missing or not numeric (got {type(v).__name__})")
+
+    ou = summary.get("overall_utilization")
+    if isinstance(ou, (int, float)) and not (0 <= ou <= 1.0001):
+        errs.append(f"summary.overall_utilization out of [0,1]: {ou}")
+
+    if isinstance(summary.get("boards_used"), int) and summary["boards_used"] != len(boards):
+        errs.append(f"summary.boards_used ({summary['boards_used']}) != len(boards) ({len(boards)})")
+
+    for i, b in enumerate(boards):
+        if not isinstance(b, dict):
+            errs.append(f"boards[{i}] not a dict")
+            continue
+        for k in ("board_id", "board", "board_size"):
+            if not isinstance(b.get(k), str):
+                errs.append(f"boards[{i}].{k} missing or not a string")
+        if not isinstance(b.get("parts"), list):
+            errs.append(f"boards[{i}].parts missing or not a list")
+        for k in ("strip_width", "trim_loss", "saw_kerf"):
+            if not isinstance(b.get(k), (int, float)):
+                errs.append(f"boards[{i}].{k} missing or not numeric")
+        util = b.get("utilization")
+        if not isinstance(util, (int, float)) or not (0 <= util <= 1.0001):
+            errs.append(f"boards[{i}].utilization out of [0,1] or missing")
+
+        for j, p in enumerate(b.get("parts") or []):
+            if not isinstance(p, dict):
+                errs.append(f"boards[{i}].parts[{j}] not a dict")
+                continue
+            if not isinstance(p.get("part_id"), str):
+                errs.append(f"boards[{i}].parts[{j}].part_id missing/not str")
+            h, w = p.get("Height"), p.get("Width")
+            if not isinstance(h, (int, float)) or h <= 0:
+                errs.append(f"boards[{i}].parts[{j}].Height invalid: {h}")
+            if not isinstance(w, (int, float)) or w <= 0:
+                errs.append(f"boards[{i}].parts[{j}].Width invalid: {w}")
+
+    return errs
+
+
 def fetch_pending_orders():
     """Get all pending orders from Supabase."""
     result = supabase.table("orders").select("*").eq("status", "pending").order("created_at").execute()
@@ -107,7 +169,7 @@ def process_order(order: dict):
         calc_order = cab_mod.process_order
 
         parts_path = os.path.join(tempfile.gettempdir(), f"{job_id}_parts.xlsx")
-        parts_df = calc_order(order_path, parts_path)
+        parts_df, cabinet_breakdown = calc_order(order_path, parts_path)
 
         # Count cabinet types for summary
         import pandas as pd
@@ -138,6 +200,7 @@ def process_order(order: dict):
         result = run_engine(
             parts_path=parts_path,
             output_path=cut_result_path,
+            cabinet_breakdown=cabinet_breakdown,
         )
 
         update_progress(95, "生成最终排版报告...")
@@ -149,8 +212,22 @@ def process_order(order: dict):
 
         # 5. Update order in Supabase
         summary = result["summary"]
+
+        # Schema / invariant guard: surface bad data, but still write so user can see.
+        shape_errs = _shape_check_cut_result(result)
+        if shape_errs:
+            print(f"\n⚠️  Schema contract violated ({len(shape_errs)} issue(s)) for job {job_id}:")
+            for e in shape_errs[:10]:
+                print(f"   • {e}")
+            issues = result.setdefault("issues", {})
+            schema_list = issues.setdefault("schema", [])
+            for e in shape_errs:
+                schema_list.append({"code": "SCHEMA_VIOLATION", "severity": "error", "msg": e})
+
+        status_value = "completed_with_warnings" if shape_errs else "completed"
+
         supabase.table("orders").update({
-            "status": "completed",
+            "status": status_value,
             "utilization": summary["overall_utilization"],
             "boards_used": summary["boards_used"],
             "total_parts": summary["total_parts_placed"],
