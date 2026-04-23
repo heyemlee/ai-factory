@@ -16,26 +16,18 @@ export function T0SheetCard({ sheetId, strips, sizeColorMap, onBoardClick, recov
 }) {
   const { t } = useLanguage();
   const T0_FULL_WIDTH = 1219.2;
-  const SAW_KERF = 5.0;
-
-  // Compute sheet-level utilization from actual parts area (not strip width coverage)
   const T0_BOARD_HEIGHT = 2438.4;
+  const recoveredArea = useMemo(
+    () => recoveredStrips.reduce((sum, rs) => sum + (rs.width || 0) * T0_BOARD_HEIGHT, 0),
+    [recoveredStrips]
+  );
+
+  // Compute sheet-level utilization from useful area: placed parts + recovered stock
   const sheetUtil = useMemo(() => {
     const totalPartsArea = strips.reduce((sum, { board }) => sum + (board.parts_total_area || 0), 0);
     const sheetArea = T0_FULL_WIDTH * T0_BOARD_HEIGHT;
-    return sheetArea > 0 ? totalPartsArea / sheetArea : 0;
-  }, [strips]);
-  const allStripsInfo = strips[0]?.board.t0_all_strips ?? strips.map((s, i) => ({ strip_width: s.board.strip_width, strip_index: i }));
-
-  // Build x positions for ALL strips on the sheet (from allStripsInfo)
-  const stripPositions = useMemo(() => {
-    let x = 0;
-    return allStripsInfo.map((info) => {
-      const pos = { x, width: info.strip_width, index: info.strip_index };
-      x += info.strip_width + SAW_KERF;
-      return pos;
-    });
-  }, [allStripsInfo]);
+    return sheetArea > 0 ? (totalPartsArea + recoveredArea) / sheetArea : 0;
+  }, [recoveredArea, strips]);
 
   // Total strips count
   const totalStrips = strips.length;
@@ -64,16 +56,18 @@ export function T0SheetCard({ sheetId, strips, sizeColorMap, onBoardClick, recov
         {strips.map(({ board, index: idx }, stripIdx) => {
           const stripColor = T0_STRIP_COLORS[stripIdx % T0_STRIP_COLORS.length];
 
-          // Calculate cumulative utilization for this strip
+          // Keep the strip cards progressive, but let the final strip reflect recovered stock too.
           let cumArea = 0;
           for (let i = 0; i <= stripIdx; i++) {
             cumArea += strips[i].board.parts_total_area || 0;
           }
+          if (stripIdx === strips.length - 1) {
+            cumArea += recoveredArea;
+          }
           const cumUtilNum = (T0_FULL_WIDTH * T0_BOARD_HEIGHT) > 0 ? cumArea / (T0_FULL_WIDTH * T0_BOARD_HEIGHT) : 0;
 
-          const pNo = patternNumbering.byIndex[idx];
           return (
-            <div key={`${board.board_id}-${idx}`} className="space-y-1.5">
+            <div key={`${board.board_id}-${idx}`} className="space-y-1.5" data-pattern-no={patternNumbering.byIndex[idx] ?? undefined}>
               {/* Strip label */}
               <div className="flex items-center gap-2 px-2">
                 <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: stripColor.bg, border: `1.5px solid ${stripColor.border}` }} />
@@ -101,7 +95,7 @@ export function T0SheetCard({ sheetId, strips, sizeColorMap, onBoardClick, recov
             <div className="flex items-center gap-2 px-2">
               <div className="w-2.5 h-2.5 rounded-sm bg-apple-green/50 border-[1.5px] border-apple-green" />
               <span className="text-[10px] font-semibold text-apple-green">
-                {t("orderDetail.modalThRecovered" as any)} · {rs.width}mm
+                {t("orderDetail.modalThRecovered")} · {rs.width}mm
               </span>
             </div>
             

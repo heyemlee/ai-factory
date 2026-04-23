@@ -55,6 +55,11 @@ export default function OrderDetail() {
   const boards = cutResult?.boards || [];
   const summary = cutResult?.summary;
   const shortages = summary?.inventory_shortage || [];
+  const orderDisplayName = order?.filename?.replace(/\.(xlsx|xls)$/i, "") || (id as string);
+
+  useEffect(() => {
+    document.title = `${t("orderDetail.title")} #${orderDisplayName}`;
+  }, [orderDisplayName, t]);
 
   /* Build stable size → color map */
   const sizeColorMap = useMemo(() => {
@@ -322,7 +327,7 @@ export default function OrderDetail() {
             <ArrowLeft size={20} className="text-foreground" />
           </Link>
           <div>
-            <h1 className="text-[26px] font-semibold tracking-tight">{t("orderDetail.title")} #{id as string}</h1>
+            <h1 className="text-[26px] font-semibold tracking-tight">{t("orderDetail.title")} #{orderDisplayName}</h1>
           </div>
         </div>
           <div className="flex items-center gap-3">
@@ -698,7 +703,7 @@ export default function OrderDetail() {
           <div className="mb-3">
             <CabinetReconciliation cutResult={cutResult} />
           </div>
-          <MachineCutPlan boards={boards} orderId={id as string} machineLang={machineLang} setMachineLang={setMachineLang} patternNumbering={patternNumbering} cutResult={cutResult} />
+          <MachineCutPlan boards={boards} orderLabel={orderDisplayName} machineLang={machineLang} setMachineLang={setMachineLang} patternNumbering={patternNumbering} cutResult={cutResult} />
         </>
       )}
 

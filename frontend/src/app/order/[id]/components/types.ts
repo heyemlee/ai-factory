@@ -102,6 +102,7 @@ export interface CutResult {
 export interface Order {
   id: string;
   job_id: string;
+  filename?: string | null;
   status: string;
   cut_result_json: CutResult | null;
   cabinets_summary: string;

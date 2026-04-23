@@ -187,7 +187,7 @@ const PRINT_FONT_STACK = [
   "sans-serif",
 ].join(", ");
 
-export function MachineCutPlan({ boards, orderId, machineLang, setMachineLang, patternNumbering, cutResult }: { boards: Board[], orderId: string, machineLang: "zh" | "en" | "es", setMachineLang: (l: "zh" | "en" | "es") => void, patternNumbering: { byIndex: Record<number, number>; byFingerprint: Record<string, number>; total: number }, cutResult?: CutResult | null }) {
+export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang, patternNumbering, cutResult }: { boards: Board[], orderLabel: string, machineLang: "zh" | "en" | "es", setMachineLang: (l: "zh" | "en" | "es") => void, patternNumbering: { byIndex: Record<number, number>; byFingerprint: Record<string, number>; total: number }, cutResult?: CutResult | null }) {
   const sizeColorMap = useMemo(() => {
     const map: Record<string, typeof SIZE_COLORS[0]> = {};
     const uniqueSizes = Array.from(new Set(boards.map((b) => b.board_size)));
@@ -328,79 +328,42 @@ export function MachineCutPlan({ boards, orderId, machineLang, setMachineLang, p
     const styleSheets = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
       .map((el) => el.cloneNode(true) as HTMLElement);
 
-    /* 2. Build a page for each pattern by cloning actual rendered DOM */
+    /* 2. Build one page per engineering group by cloning the rendered group DOM */
     const pageContainer = document.createElement("div");
 
-    for (const grp of engineeringGroups) {
-      const setupEl = document.querySelector(`[data-print-setup="${grp.engNo}"]`);
-      grp.patterns.forEach((pattern, pIdx) => {
-        const tileEl = document.querySelector(`[data-print-tile="${grp.engNo}-${pIdx}"]`);
-        const stepEl = document.querySelector(`[data-print-step="${grp.engNo}-${pIdx}"]`);
+    const totalPages = engineeringGroups.length;
 
-        if (!tileEl && !stepEl) return; // safety
+    for (const [pageIdx, grp] of engineeringGroups.entries()) {
+      const groupEl = document.querySelector(`[data-print-group="${grp.engNo}"]`);
+      if (!groupEl) continue;
 
-        const numLabel = indexToNumberStr(pIdx);
-        const stepNum = pIdx + 2;
-        const boardLabel = `${mt("boardWord")} ${numLabel}`;
-        const badgeText = pattern.boardCount === 1
-          ? mt("singleSheet")
-          : mt("stackBadge").replace("{n}", String(pattern.boardCount));
+      const page = document.createElement("div");
+      page.className = "print-page";
 
-        /* ── Compose one A4 page ── */
-        const page = document.createElement("div");
-        page.className = "print-page";
+      const header = document.createElement("div");
+      header.className = "print-page-header";
+      header.innerHTML = `
+        <div style="font-size:16px;font-weight:700;color:#1d1d1f;">${mt("printTitle")}</div>
+        <div style="font-size:11px;color:#64748b;">${mt("orderNo")}: ${orderLabel}</div>`;
+      page.appendChild(header);
 
-        // Header
-        const header = document.createElement("div");
-        header.style.cssText = "text-align:center;margin-bottom:12px;";
-        header.innerHTML = `
-          <h1 style="font-size:20px;font-weight:700;margin:0;color:#1d1d1f;">${mt("printTitle")}</h1>
-          <div style="font-size:12px;color:#64748b;margin-top:2px;">${mt("orderNo")}: ${orderId}</div>`;
-        page.appendChild(header);
+      const groupClone = groupEl.cloneNode(true) as HTMLElement;
+      groupClone.classList.add("print-group-clone");
+      page.appendChild(groupClone);
 
-        // Sub-header: engineering + step + badge
-        const subHeader = document.createElement("div");
-        subHeader.style.cssText = "display:flex;align-items:baseline;gap:10px;margin-bottom:10px;border-bottom:2px solid #1e293b;padding-bottom:6px;";
-        subHeader.innerHTML = `
-          <h2 style="font-size:17px;font-weight:700;margin:0;color:#1d1d1f;">
-            ${mt("engineeringNo")} ${grp.engNo} — ${mt("stepCutTitle").replace("{stepNum}", String(stepNum)).replace("{patternNo}", boardLabel)}
-          </h2>
-          <span style="background:#fee2e2;color:#dc2626;padding:2px 10px;border-radius:4px;font-size:13px;font-weight:600;border:1px solid #fecaca;">
-            ${badgeText}
-          </span>`;
-        page.appendChild(subHeader);
+      const footer = document.createElement("div");
+      footer.className = "print-page-footer";
+      footer.textContent = `${pageIdx + 1}/${totalPages}`;
+      page.appendChild(footer);
 
-        // Machine setup (cloned from screen)
-        if (setupEl) {
-          const setupClone = setupEl.cloneNode(true) as HTMLElement;
-          setupClone.style.marginBottom = "14px";
-          page.appendChild(setupClone);
-        }
-
-        // Board tile diagram (cloned from screen — preserves exact colors & layout)
-        if (tileEl) {
-          const tileClone = tileEl.cloneNode(true) as HTMLElement;
-          const tileWrapper = document.createElement("div");
-          tileWrapper.style.cssText = "display:flex;justify-content:center;margin-bottom:16px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;";
-          tileWrapper.appendChild(tileClone);
-          page.appendChild(tileWrapper);
-        }
-
-        // Cut table (cloned from screen)
-        if (stepEl) {
-          const stepClone = stepEl.cloneNode(true) as HTMLElement;
-          page.appendChild(stepClone);
-        }
-
-        pageContainer.appendChild(page);
-      });
+      pageContainer.appendChild(page);
     }
 
     /* 3. Write the document shell */
     pw.document.open();
     pw.document.write(`<!DOCTYPE html><html lang="${printLang}"><head><meta charset="utf-8">
       <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-      <title>${mt("printTitle")} — ${orderId}</title></head><body></body></html>`);
+      <title>${mt("printTitle")} — ${orderLabel}</title></head><body></body></html>`);
     pw.document.close();
 
     /* 4. Inject all copied stylesheets (Tailwind utility CSS for layout + visuals) */
@@ -446,14 +409,46 @@ export function MachineCutPlan({ boards, orderId, machineLang, setMachineLang, p
       .print-page {
         width: 100%;
         min-height: 100vh;
-        padding: 18mm 14mm 14mm;
+        padding: 8mm 8mm 6mm;
         display: flex;
         flex-direction: column;
         page-break-after: always;
         break-after: page;
+        box-sizing: border-box;
       }
       .print-page:last-child { page-break-after: auto; break-after: auto; }
       table { page-break-inside: avoid; }
+
+      .print-page-header {
+        text-align: center;
+        margin-bottom: 6mm;
+      }
+
+      .print-group-clone {
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        overflow: visible !important;
+        flex: 1 1 auto;
+      }
+
+      .print-group-clone [data-print-tiles-wrap] {
+        overflow: visible !important;
+      }
+
+      .print-group-clone [data-print-tiles-row] {
+        min-width: 0 !important;
+        flex-wrap: wrap !important;
+        gap: 14px !important;
+        padding-bottom: 0 !important;
+      }
+
+      .print-page-footer {
+        margin-top: auto;
+        padding-top: 3mm;
+        text-align: center;
+        font-size: 11px;
+        color: #64748b;
+      }
 
       /* Disable hover & transition animations in print */
       * {
@@ -552,7 +547,7 @@ export function MachineCutPlan({ boards, orderId, machineLang, setMachineLang, p
 
         {(engineeringGroups as (EngineeringGroup & { inconsistent?: boolean })[]).map((grp) => (
           <MachineCutErrorBoundary key={grp.key} label={`group ${grp.engNo}`}>
-          <div className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
+          <div data-print-group={grp.engNo} className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
 
             <div className="bg-white text-slate-800 p-5 border-b border-border/60">
               <h3 className="text-xl font-bold flex items-center gap-2">
@@ -566,8 +561,8 @@ export function MachineCutPlan({ boards, orderId, machineLang, setMachineLang, p
             </div>
 
             {/* TOP ROW: Cut Layout Images ONLY */}
-            <div className="p-5 border-b border-border/40 bg-slate-50/50 overflow-x-auto">
-              <div className="flex gap-6 min-w-max pb-2">
+            <div data-print-tiles-wrap={grp.engNo} className="p-5 border-b border-border/40 bg-slate-50/50 overflow-x-auto">
+              <div data-print-tiles-row={grp.engNo} className="flex gap-6 min-w-max pb-2">
                 {grp.patterns.map((pattern, pIdx) => {
                   const numLabel = indexToNumberStr(pIdx);
                   const nw = nominalStockWidthForBoard(pattern.sampleBoard);
