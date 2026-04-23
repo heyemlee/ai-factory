@@ -783,7 +783,7 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
 /* ═══════════════════════════════════════════
    BoardTile — Small tile for flat grid overview
    ═══════════════════════════════════════════ */
-function BoardTile({ board, index, color, stackInfo, onClick, disableHover = false, overrideUtilNum }: {
+function BoardTile({ board, index, color, stackInfo, onClick, disableHover = false, overrideUtilNum, hideWidthWaste = false, isRotated = false, hideUtilization = false, showDimensions = false, hideStackBadge = false }: {
   board: Board;
   index: number;
   color: typeof SIZE_COLORS[0];
@@ -791,6 +791,11 @@ function BoardTile({ board, index, color, stackInfo, onClick, disableHover = fal
   onClick: () => void;
   disableHover?: boolean;
   overrideUtilNum?: number;
+  hideWidthWaste?: boolean;
+  isRotated?: boolean;
+  hideUtilization?: boolean;
+  showDimensions?: boolean;
+  hideStackBadge?: boolean;
 }) {
   const { t } = useLanguage();
   const [isHovered, setIsHovered] = useState(false);
@@ -798,12 +803,22 @@ function BoardTile({ board, index, color, stackInfo, onClick, disableHover = fal
 
   const boardDims = useMemo(() => {
     const match = board.board.match(/(\d+(?:\.\d+)?)[x×*](\d+(?:\.\d+)?)/i);
+    let parsedWidth = 0;
+    let parsedHeight = 0;
     if (match) {
-      return { width: parseFloat(match[1]), height: parseFloat(match[2]) };
+      parsedWidth = parseFloat(match[1]);
+      parsedHeight = parseFloat(match[2]);
+    } else {
+      const p = board.board_size.split("×").map((s) => parseFloat(s.trim()));
+      parsedWidth = p[0] || 0;
+      parsedHeight = p[1] || 0;
     }
-    const p = board.board_size.split("×").map((s) => parseFloat(s.trim()));
-    return { width: p[0] || 0, height: p[1] || 0 };
-  }, [board.board_size, board.board]);
+    
+    if (hideWidthWaste && board.strip_width) {
+      parsedWidth = board.strip_width;
+    }
+    return { width: parsedWidth, height: parsedHeight };
+  }, [board.board_size, board.board, hideWidthWaste, board.strip_width]);
 
   const TILE_BASE_W = 200;
   const heightRatio = boardDims.width / boardDims.height;
@@ -859,75 +874,111 @@ function BoardTile({ board, index, color, stackInfo, onClick, disableHover = fal
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="text-[10px] font-semibold text-foreground truncate">{board.board_id}</span>
         </div>
-        <span className="text-[10px] font-bold tabular-nums shrink-0" style={{ color: utilColor }}>{utilPct}%</span>
+        {!hideUtilization && <span className="text-[10px] font-bold tabular-nums shrink-0" style={{ color: utilColor }}>{utilPct}%</span>}
       </div>
 
-      <div className="px-2 pb-2 flex justify-center">
-        <div className="relative rounded-sm overflow-hidden" style={{
-          width: `${tileW}px`, height: `${tileH}px`,
-          backgroundColor: color.light, border: `1.5px solid ${color.border}`,
+      <div className={`px-2 pb-2 flex justify-center ${showDimensions ? (isRotated ? 'mt-3 mb-3 mr-6' : 'mt-2 mb-4 ml-6') : ''}`}>
+        <div className="relative rounded-sm overflow-visible" style={{
+          width: isRotated ? `${tileH}px` : `${tileW}px`,
+          height: isRotated ? `${tileW}px` : `${tileH}px`,
         }}>
-          {/* Shaded area for previously cut strips (if this is Strip 2+) */}
-          {bottomOffset > 0 && (
-            <div className="absolute" style={{
-              left: 0, width: '100%',
-              bottom: 0, height: `${bottomOffset}%`,
-              backgroundColor: "#e2e8f0",
-              backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(0,0,0,0.06) 2px, rgba(0,0,0,0.06) 4px)",
-              borderTop: `1px dashed ${color.border}80`,
-            }} />
+          {showDimensions && (
+            <>
+              {/* Length label */}
+              <div 
+                className={`absolute text-[10px] text-gray-500 font-mono whitespace-nowrap ${isRotated ? 'top-1/2 -right-[30px] -translate-y-1/2' : 'bottom-[-16px] left-1/2 -translate-x-1/2'}`}
+                style={isRotated ? { writingMode: 'vertical-rl' } : {}}
+              >
+                {boardDims.height}
+              </div>
+              {/* Width label */}
+              <div 
+                className={`absolute text-[10px] text-gray-500 font-mono whitespace-nowrap ${isRotated ? 'top-[-16px] left-1/2 -translate-x-1/2' : 'left-[-30px] top-1/2 -translate-y-1/2'}`}
+                style={!isRotated ? { writingMode: 'vertical-rl', transform: 'rotate(180deg)' } : {}}
+              >
+                {boardDims.width}
+              </div>
+            </>
           )}
 
-          {/* Parts */}
-          {partLayout.map((p) => (
-            <React.Fragment key={`${p.part_id}-${p.idx}`}>
+          <div className="absolute overflow-hidden rounded-sm" style={{
+            ...(isRotated ? {
+                width: `${tileW}px`, height: `${tileH}px`,
+                transform: 'rotate(90deg)',
+                transformOrigin: 'top left',
+                left: `${tileH}px`,
+                top: 0
+            } : {
+                width: '100%', height: '100%',
+                left: 0, top: 0
+            }),
+            backgroundColor: color.light, border: `1.5px solid ${color.border}`,
+          }}>
+            {/* Shaded area for previously cut strips (if this is Strip 2+) */}
+            {bottomOffset > 0 && (
               <div className="absolute" style={{
-                left: `${p.left}%`, bottom: `${bottomOffset}%`, width: `${p.width}%`, height: `${p.height}%`,
-                backgroundColor: color.bg,
-                borderRight: `1px solid ${color.border}`,
-                borderTop: p.height < 100 ? `1px solid ${color.border}` : undefined,
+                left: 0, width: '100%',
+                bottom: 0, height: `${bottomOffset}%`,
+                backgroundColor: "#e2e8f0",
+                backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(0,0,0,0.06) 2px, rgba(0,0,0,0.06) 4px)",
+                borderTop: `1px dashed ${color.border}80`,
               }} />
-              {/* Upper Waste */}
-              {p.height < stripHeight && (
-                <div className="absolute" style={{
-                  left: `${p.left}%`, bottom: `${bottomOffset + p.height}%`, width: `${p.width}%`, height: `${stripHeight - p.height}%`,
-                  backgroundColor: "#ffffff",
-                  backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
-                  borderRight: `1px dashed #94a3b8`,
-                  borderTop: `1px solid ${color.border}20`,
-                }} />
-              )}
-            </React.Fragment>
-          ))}
+            )}
 
-          {/* Waste area for this strip (along the length) */}
-          {wasteLeft < 96 && (
-            <div className="absolute" style={{
-              left: `${wasteLeft}%`, width: `${Math.max(100 - wasteLeft, 0)}%`,
-              bottom: `${bottomOffset}%`, height: `${stripHeight}%`,
-              backgroundColor: "#ffffff",
-              backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
-              borderLeft: `1.5px dashed #94a3b8`,
-              borderBottom: bottomOffset > 0 ? `1px solid ${color.border}40` : undefined,
-              borderTop: `1px solid ${color.border}`,
-            }} />
-          )}
+            {/* Parts */}
+            {partLayout.map((p) => (
+              <React.Fragment key={`${p.part_id}-${p.idx}`}>
+                <div className="absolute" style={{
+                  left: `${p.left}%`, bottom: `${bottomOffset}%`, width: `${p.width}%`, height: `${p.height}%`,
+                  backgroundColor: color.bg,
+                  borderRight: `1px solid ${color.border}`,
+                  borderTop: p.height < 100 ? `1px solid ${color.border}` : undefined,
+                }} />
+                {/* Upper Waste */}
+                {p.height < stripHeight && (
+                  <div className="absolute" style={{
+                    left: `${p.left}%`, bottom: `${bottomOffset + p.height}%`, width: `${p.width}%`, height: `${stripHeight - p.height}%`,
+                    backgroundColor: "#ffffff",
+                    backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
+                    borderRight: `1px dashed #94a3b8`,
+                    borderTop: `1px solid ${color.border}20`,
+                  }} />
+                )}
+              </React.Fragment>
+            ))}
+
+            {/* Waste area for this strip (along the length) */}
+            {wasteLeft < 96 && (
+              <div className="absolute" style={{
+                left: `${wasteLeft}%`, width: `${Math.max(100 - wasteLeft, 0)}%`,
+                bottom: `${bottomOffset}%`, height: `${stripHeight}%`,
+                backgroundColor: "#ffffff",
+                backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
+                borderLeft: `1.5px dashed #94a3b8`,
+                borderBottom: bottomOffset > 0 ? `1px solid ${color.border}40` : undefined,
+                borderTop: `1px solid ${color.border}`,
+              }} />
+            )}
+          </div>
         </div>
       </div>
     </>
   );
 
-  return (
+  const containerW = isRotated ? tileH : tileW;
+  const containerH = isRotated ? tileW : tileH;
+
+  const cardContainer = (
     <div
       // elevate z-index massively so the hover popout spans over adjacent items without layout shift
       className={`relative transition-all duration-300 ${activeHover ? 'z-50' : 'z-0'} ${onClick.toString() === "() => {}" ? "" : "cursor-pointer"}`}
-      style={{ width: `${tileW + 24}px`, height: `${tileH + 46}px` }}
+      style={{ width: `${containerW + (showDimensions && !isRotated ? 30 : 24)}px`, height: `${containerH + (showDimensions ? 50 : 46)}px` }}
       onClick={onClick.toString() === "() => {}" ? undefined : onClick}
       onMouseEnter={() => !disableHover && setIsHovered(true)}
       onMouseLeave={() => !disableHover && setIsHovered(false)}
     >
       {/* Floating Badge above the card */}
-      {stackOf > 1 && (
+      {!hideStackBadge && stackOf > 1 && (
         <div 
           className="absolute left-1/2 -translate-x-1/2 transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] z-50 rounded-full px-2 py-0.5 pointer-events-none flex items-center shadow-lg border"
           style={{
@@ -990,6 +1041,7 @@ function BoardTile({ board, index, color, stackInfo, onClick, disableHover = fal
       </div>
     </div>
   );
+  return cardContainer;
 }
 
 /* ═══════════════════════════════════════════
@@ -1497,17 +1549,17 @@ function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
 const machineI18n: Record<string, Record<string, string>> = {
   zh: {
     tabLabel: "机台裁切方案",
-    engineeringNo: "工程",
+    engineeringNo: "图纸",
     boardType: "板材型号",
-    boardWidth: "板材宽度",
+    boardWidth: "宽度",
     totalLength: "总长度",
     trimSetting: "修边设置",
-    sourceBoardCount: "来源板数",
+    sourceBoardCount: "板数",
     suggestedStack: "建议叠切",
-    rowNo: "序号",
+    rowNo: "工程",
     cutLength: "裁切长度 (mm)",
     pieces: "件数",
-    pieceCount: "片数（合计）",
+    pieceCount: "片数",
     pieceCountHint: "表中为同一工程组内该裁切长度的总片数。",
     cutRowsMultiPatternHint: "本组含多种裁切组合，上表各行为全组合计。",
     perCutPieces: "片/刀",
@@ -1533,20 +1585,31 @@ const machineI18n: Record<string, Record<string, string>> = {
     noData: "暂无裁切数据。",
     sheetsUnit: "张",
     mm: "mm",
+    step1Title: "Step 1：机器设定",
+    step1Desc1: "请确认板材型号为",
+    step1Desc2: "，并在机器上输入总长度",
+    step1Desc3: "，宽度",
+    step1Desc4: "，修边设置",
+    stepCutTitle: "Step {stepNum}：{patternNo}",
+    stepCutDescFirst: "请取 {count} 张板材进行裁切。单次裁切数量已按单板生成（人工叠切时，机器端只需按此表输入，机器就会自动切出对应倍数的成品）：",
+    stepCutDescNext: "请继续取 {count} 张板材进行 {patternNo} 的裁切。机器的总长度和宽度无需更改，请清除之前数据，重新从序号 1 开始输入：",
+    boardWord: "板材",
+    singleSheet: "1 张",
+    stackBadge: "叠切 x{n}",
   },
   en: {
     tabLabel: "Machine Cut Plan",
-    engineeringNo: "Engineering",
+    engineeringNo: "Pattern",
     boardType: "Board Type",
-    boardWidth: "Board Width",
+    boardWidth: "Width",
     totalLength: "Total Length",
     trimSetting: "Trim Setting",
-    sourceBoardCount: "Source Boards",
+    sourceBoardCount: "Boards",
     suggestedStack: "Suggested Stack",
-    rowNo: "Row",
+    rowNo: "Engineering",
     cutLength: "Cut Length (mm)",
     pieces: "Pieces",
-    pieceCount: "Pcs (total)",
+    pieceCount: "Pieces",
     pieceCountHint: "Totals for this engineering group at each cut length.",
     cutRowsMultiPatternHint: "This group has multiple cut patterns; rows are combined totals.",
     perCutPieces: "pcs/cut",
@@ -1572,20 +1635,31 @@ const machineI18n: Record<string, Record<string, string>> = {
     noData: "No cut data available.",
     sheetsUnit: "sheets",
     mm: "mm",
+    step1Title: "Step 1: Machine Setup",
+    step1Desc1: "Please confirm board type is",
+    step1Desc2: ", and input Total Length",
+    step1Desc3: ", Width",
+    step1Desc4: ", Trim Setting",
+    stepCutTitle: "Step {stepNum}: {patternNo}",
+    stepCutDescFirst: "Take {count} board(s) for cutting. Piece counts below are for a single board (if you stack boards manually, input these exact numbers into the machine):",
+    stepCutDescNext: "Take the next {count} board(s) for {patternNo}. Total Length and Width do not need to be changed. Clear previous data and restart from Row 1:",
+    boardWord: "Board",
+    singleSheet: "1 Sheet",
+    stackBadge: "Stack x{n}",
   },
   es: {
     tabLabel: "Plan de Corte de Máquina",
-    engineeringNo: "Ingeniería",
+    engineeringNo: "Patrón",
     boardType: "Tipo de Tablero",
-    boardWidth: "Ancho del Tablero",
+    boardWidth: "Ancho",
     totalLength: "Longitud Total",
     trimSetting: "Ajuste de Recorte",
-    sourceBoardCount: "Tableros Fuente",
+    sourceBoardCount: "Tableros",
     suggestedStack: "Apilado Sugerido",
-    rowNo: "Fila",
+    rowNo: "Ingeniería",
     cutLength: "Longitud de Corte (mm)",
     pieces: "Piezas",
-    pieceCount: "Piezas (total)",
+    pieceCount: "Piezas",
     pieceCountHint: "Totales del grupo de ingeniería por longitud de corte.",
     cutRowsMultiPatternHint: "Varios patrones de corte en el grupo; la tabla muestra totales combinados.",
     perCutPieces: "pzs/corte",
@@ -1611,6 +1685,17 @@ const machineI18n: Record<string, Record<string, string>> = {
     noData: "No hay datos de corte.",
     sheetsUnit: "hojas",
     mm: "mm",
+    step1Title: "Paso 1: Configuración de Máquina",
+    step1Desc1: "Confirme el tipo de tablero",
+    step1Desc2: ", e ingrese Longitud Total",
+    step1Desc3: ", Ancho",
+    step1Desc4: ", Ajuste Recorte",
+    stepCutTitle: "Paso {stepNum}: {patternNo}",
+    stepCutDescFirst: "Tome {count} tablero(s). Las cantidades son por tablero único (si apila, ingrese estos mismos números):",
+    stepCutDescNext: "Tome {count} tablero(s) para {patternNo}. Longitud y Ancho no cambian. Limpie datos y reinicie de Fila 1:",
+    boardWord: "Tablero",
+    singleSheet: "1 Hoja",
+    stackBadge: "Apilado x{n}",
   },
 };
 
@@ -1627,9 +1712,11 @@ interface EngineeringGroup {
   trimSetting: number;
   sourceBoardCount: number;
   boards: Board[];
-  cutRows: { cutLength: number; pieces: number }[];
-  stackBatches: { batchNo: number; stackSize: number; coveredBoards: number; cutSequence: string; sampleBoard: Board }[];
-  realStackBatches: { batchNo: number; stackSize: number; coveredBoards: number; cutSequence: string; sampleBoard: Board }[];
+  patterns: {
+    sampleBoard: Board;
+    boardCount: number;
+    cutRows: { cutLength: number; pieces: number }[];
+  }[];
   needsWidthRip: boolean;
   ripStockWidthMm: number | null;
   distinctCutPatterns: number;
@@ -1653,75 +1740,62 @@ function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boar
     return 2438.4;
   };
 
-  /* ── Build engineering groups: group by strip_width ── */
+  /* ── Build engineering groups: group by strip_width AND board type ── */
   const engineeringGroups = useMemo<EngineeringGroup[]>(() => {
-    const perCutLabel =
-      machineI18n[machineLang]?.perCutPieces || machineI18n.en.perCutPieces;
-    // Group boards by strip_width (the actual operational width for the machine)
-    const groupMap: Record<number, Board[]> = {};
+    // Group boards by strip_width AND their source board type (to separate T0 rips from T1 native matches)
+    const groupMap: Record<string, Board[]> = {};
     for (const b of boards) {
       const w = b.strip_width || 0;
-      if (!groupMap[w]) groupMap[w] = [];
-      groupMap[w].push(b);
+      const bType = b.board || "Unknown";
+      const key = `${w}_${bType}`;
+      if (!groupMap[key]) groupMap[key] = [];
+      groupMap[key].push(b);
     }
 
-    // Sort by width descending so wider groups appear first
+    // Sort by width descending so wider groups appear first, then by board type
     return Object.entries(groupMap)
-      .sort(([a], [b]) => parseFloat(b) - parseFloat(a))
-      .map(([widthStr, grpBoards], idx) => {
-      const width = parseFloat(widthStr);
+      .sort(([keyA], [keyB]) => {
+        const wA = parseFloat(keyA.split("_")[0]);
+        const wB = parseFloat(keyB.split("_")[0]);
+        if (Math.abs(wB - wA) > 0.01) return wB - wA;
+        return keyA.localeCompare(keyB);
+      })
+      .map(([key, grpBoards], idx) => {
+      const width = parseFloat(key.split("_")[0]);
       const sample = grpBoards[0];
       const totalLength = parseTotalLength(sample.board_size);
       const trimSetting = 5;
 
-      // Collect all distinct board type names for the header
+      // Collect all distinct board type names for the header (should just be one now)
       const boardTypes = [...new Set(grpBoards.map(b => b.board))];
       const boardType = boardTypes.join(" / ");
 
-      // Aggregate cut rows by cut_length
-      const cutMap: Record<number, number> = {};
+      // Group boards by cut patterns
+      const fpMap: Record<string, Board[]> = {};
       for (const b of grpBoards) {
-        for (const p of b.parts) {
+        const fp = boardFingerprint(b);
+        if (!fpMap[fp]) fpMap[fp] = [];
+        fpMap[fp].push(b);
+      }
+      
+      const patterns = Object.values(fpMap).map((boardsOfPattern) => {
+        const sampleBoard = boardsOfPattern[0];
+        const cutMap: Record<number, number> = {};
+        for (const p of sampleBoard.parts) {
           const cl = p.cut_length || p.Height;
           cutMap[cl] = (cutMap[cl] || 0) + 1;
         }
-      }
-      const cutRows = Object.entries(cutMap)
-        .map(([len, qty]) => ({ cutLength: parseFloat(len), pieces: qty }))
-        .sort((a, b) => a.cutLength - b.cutLength);
+        const cutRows = Object.entries(cutMap)
+          .map(([len, qty]) => ({ cutLength: parseFloat(len), pieces: qty }))
+          .sort((a, b) => a.cutLength - b.cutLength);
 
-      // Stack batches: reuse boardFingerprint logic
-      const fpMap: Record<string, { board: Board; index: number }[]> = {};
-      for (let i = 0; i < grpBoards.length; i++) {
-        const fp = boardFingerprint(grpBoards[i]);
-        if (!fpMap[fp]) fpMap[fp] = [];
-        fpMap[fp].push({ board: grpBoards[i], index: i });
-      }
-      const distinctCutPatterns = Object.keys(fpMap).length;
-
-      const stackBatches: EngineeringGroup["stackBatches"] = [];
-      let batchNo = 0;
-      for (const group of Object.values(fpMap)) {
-        let remaining = group.length;
-        let gIdx = 0;
-        while (remaining > 0) {
-          const stackSize = Math.min(4, remaining);
-          batchNo++;
-          const sampleBoard = group[gIdx].board;
-          const cutSequence = formatStackCutSequence(sampleBoard, stackSize, perCutLabel);
-          stackBatches.push({
-            batchNo,
-            stackSize,
-            coveredBoards: stackSize,
-            cutSequence,
-            sampleBoard,
-          });
-          gIdx += stackSize;
-          remaining -= stackSize;
-        }
-      }
-
-      const realStackBatches = stackBatches.filter((b) => b.stackSize >= 2);
+        return {
+          sampleBoard,
+          boardCount: boardsOfPattern.length,
+          cutRows,
+        };
+      });
+      const distinctCutPatterns = patterns.length;
 
       let ripStockWidthMm: number | null = null;
       for (const b of grpBoards) {
@@ -1741,9 +1815,7 @@ function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boar
         trimSetting,
         sourceBoardCount: grpBoards.length,
         boards: grpBoards,
-        cutRows,
-        stackBatches,
-        realStackBatches,
+        patterns,
         needsWidthRip,
         ripStockWidthMm,
         distinctCutPatterns,
@@ -1818,165 +1890,185 @@ function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boar
         {engineeringGroups.map((grp) => (
           <div key={grp.key} className="bg-white rounded-xl shadow-sm border border-border overflow-hidden print:shadow-none print:border-none print:mb-12 print:break-after-page">
             
-            <div className="bg-white text-slate-800 p-5 border-b border-border/60 print:p-0 print:border-b-2 print:border-black print:mb-6">
-              <div className="flex items-center justify-between mb-4 print:mb-2">
-                <h3 className="text-xl font-bold">{mt("engineeringNo")} {grp.engNo}</h3>
-              </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <div>
-                  <div className="text-[11px] text-apple-gray uppercase font-semibold mb-1">{mt("boardWidth")}</div>
-                  <div className="font-bold text-lg">{grp.boardWidth} mm</div>
-                </div>
-                <div>
-                  <div className="text-[11px] text-apple-gray uppercase font-semibold mb-1">{mt("totalLength")}</div>
-                  <div className="font-medium">{grp.totalLength} mm</div>
-                </div>
-                <div>
-                  <div className="text-[11px] text-apple-gray uppercase font-semibold mb-1">{mt("trimSetting")}</div>
-                  <div className="font-medium">{grp.trimSetting} mm</div>
-                </div>
-                <div>
-                  <div className="text-[11px] text-apple-gray uppercase font-semibold mb-1">{mt("boardType")}</div>
-                  <div className="font-medium truncate" title={grp.boardType}>{grp.boardType}</div>
-                </div>
-                <div>
-                  <div className="text-[11px] text-apple-gray uppercase font-semibold mb-1">{mt("sourceBoardCount")}</div>
-                  <div className="font-bold">{grp.sourceBoardCount} {mt("sheetsUnit")}</div>
-                </div>
-              </div>
-
-              {grp.needsWidthRip && grp.ripStockWidthMm != null && (
-                <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-[13px] text-amber-950 machine-no-print">
-                  <span className="mr-2 inline-flex items-center rounded bg-amber-600 px-2 py-0.5 text-[11px] font-bold text-white">
-                    {mt("widthRipBadge")}
-                  </span>
-                  {mt("widthRipBody")
-                    .replace("{stock}", String(grp.ripStockWidthMm))
-                    .replace("{target}", String(grp.boardWidth))}
-                </div>
-              )}
-              {grp.needsWidthRip && grp.ripStockWidthMm != null && (
-                <div
-                  className="machine-print-only mt-3 rounded border border-amber-700 bg-amber-50 px-3 py-2 text-[11px] text-black"
-                  style={{ display: "none" }}
-                >
-                  <strong>{mt("widthRipBadge")}:</strong>{" "}
-                  {mt("widthRipBody")
-                    .replace("{stock}", String(grp.ripStockWidthMm))
-                    .replace("{target}", String(grp.boardWidth))}
-                </div>
-              )}
+            <div className="bg-white text-slate-800 p-5 border-b border-border/60 print:p-0 print:border-b-2 print:border-black print:mb-4">
+              <h3 className="text-xl font-bold">{mt("engineeringNo")} {grp.engNo}</h3>
             </div>
 
+            {/* TOP ROW: Cut Layout Images ONLY */}
             <div className="p-5 border-b border-border/40 bg-slate-50/50 print:hidden overflow-x-auto">
-              <div className="flex gap-4 min-w-max pb-2">
-                {grp.stackBatches.map((batch, bIdx) => (
-                  <BoardTile 
-                    key={bIdx}
-                    board={batch.sampleBoard}
-                    index={bIdx}
-                    color={sizeColorMap[batch.sampleBoard.board_size] || SIZE_COLORS[0]}
-                    stackInfo={{ groupSize: batch.stackSize, stackOf: batch.stackSize, isLeader: true }}
-                    onClick={() => {}}
-                    disableHover={true}
-                  />
-                ))}
+              <div className="flex gap-6 min-w-max pb-2">
+                {grp.patterns.flatMap((pattern, pIdx) => {
+                  const letter = String.fromCharCode(65 + pIdx); // A, B, C...
+                  const nw = nominalStockWidthForBoard(pattern.sampleBoard);
+                  const patternNeedsRip = nw != null && (nw - grp.boardWidth > 0.5);
+                  
+                  const stackBadge = pattern.boardCount > 1 && (
+                    <span className="ml-2 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700 border border-blue-200">
+                      ×{pattern.boardCount} {mt("stackBadge") ? mt("stackBadge").replace(" x{n}", "").replace(" x {n}", "").replace("x{n}", "") : "Stack"}
+                    </span>
+                  );
+
+                  if (patternNeedsRip) {
+                    return [
+                      // Step 1: The width rip image (rotated, showing full board)
+                      <div key={`${pIdx}-orig`} className="flex flex-col items-center gap-2">
+                        <div className="flex items-center">
+                          <span className="text-[13px] font-bold text-slate-700">{mt("boardWord")} {letter}-1</span>
+                          {stackBadge}
+                        </div>
+                        <BoardTile 
+                          board={pattern.sampleBoard}
+                          index={pIdx}
+                          color={sizeColorMap[pattern.sampleBoard.board_size] || SIZE_COLORS[0]}
+                          stackInfo={{ groupSize: pattern.boardCount, stackOf: pattern.boardCount, isLeader: true }}
+                          onClick={() => {}}
+                          disableHover={true}
+                          isRotated={true}
+                          hideUtilization={true}
+                          showDimensions={true}
+                          hideStackBadge={true}
+                        />
+                      </div>,
+                      // Step 2: The cross-cut image (not rotated, width waste removed)
+                      <div key={`${pIdx}-final`} className="flex flex-col items-center gap-2">
+                        <div className="flex items-center">
+                          <span className="text-[13px] font-bold text-slate-700">{mt("boardWord")} {letter}-2</span>
+                          {stackBadge}
+                        </div>
+                        <BoardTile 
+                          board={pattern.sampleBoard}
+                          index={pIdx}
+                          color={sizeColorMap[pattern.sampleBoard.board_size] || SIZE_COLORS[0]}
+                          stackInfo={{ groupSize: pattern.boardCount, stackOf: pattern.boardCount, isLeader: true }}
+                          onClick={() => {}}
+                          disableHover={true}
+                          hideWidthWaste={true}
+                          isRotated={false}
+                          hideUtilization={true}
+                          showDimensions={true}
+                          hideStackBadge={true}
+                        />
+                      </div>
+                    ];
+                  } else {
+                    return [
+                      // Standard board: not rotated, full board shown
+                      <div key={`${pIdx}-final`} className="flex flex-col items-center gap-2">
+                        <div className="flex items-center">
+                          <span className="text-[13px] font-bold text-slate-700">{mt("boardWord")} {letter}</span>
+                          {stackBadge}
+                        </div>
+                        <BoardTile 
+                          board={pattern.sampleBoard}
+                          index={pIdx}
+                          color={sizeColorMap[pattern.sampleBoard.board_size] || SIZE_COLORS[0]}
+                          stackInfo={{ groupSize: pattern.boardCount, stackOf: pattern.boardCount, isLeader: true }}
+                          onClick={() => {}}
+                          disableHover={true}
+                          hideWidthWaste={false}
+                          isRotated={false}
+                          hideUtilization={true}
+                          showDimensions={true}
+                          hideStackBadge={true}
+                        />
+                      </div>
+                    ];
+                  }
+                })}
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-[13px]">
-                <thead>
-                  <tr className="bg-black/[0.03]">
-                    <th className="text-center py-3 px-4 font-semibold text-apple-gray w-16">{mt("rowNo")}</th>
-                    <th className="text-center py-3 px-4 font-semibold text-apple-gray">{mt("cutLength")}</th>
-                    <th className="text-center py-3 px-4 font-semibold text-apple-gray w-28">{mt("pieceCount")}</th>
-                    <th className="text-left py-3 px-4 font-semibold text-apple-gray">{mt("notes")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {grp.cutRows.map((row, ri) => (
-                    <tr key={ri} className="border-b border-border/20 hover:bg-black/[0.01]">
-                      <td className="py-2.5 px-4 text-center text-apple-gray">{ri + 1}</td>
-                      <td className="py-2.5 px-4 text-center font-mono font-bold text-[15px]">{row.cutLength}</td>
-                      <td className="py-2.5 px-4 text-center font-bold text-[15px]">{row.pieces}</td>
-                      <td className="py-2.5 px-4 text-apple-gray">—</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="px-4 py-2 text-[11px] text-apple-gray border-t border-border/20">
-                {mt("pieceCountHint")}
-                {grp.distinctCutPatterns > 1 ? ` ${mt("cutRowsMultiPatternHint")}` : ""}
-              </p>
-            </div>
-
-            {grp.sourceBoardCount > 1 && grp.realStackBatches.length === 0 && (
-              <div className="border-t border-border/30 bg-slate-50 px-4 py-3 text-[12px] text-slate-600 machine-no-print">
-                {mt("noStackReason")}
-              </div>
-            )}
-
-            {/* Stack suggestions only when true multi-board stacks exist */}
-            {grp.realStackBatches.length > 0 && (
-              <div className="border-t border-border/30 bg-blue-50/50 p-4">
-                <h4 className="flex items-center gap-2 mb-3 text-[14px] font-bold text-blue-800 machine-no-print">
-                  <span className="bg-blue-600 text-white px-2 py-0.5 rounded text-[11px]">需叠切</span>
-                  {mt("stackSuggestions")} ({grp.realStackBatches.length})
-                </h4>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-[12px]">
-                    <thead>
-                      <tr className="bg-white/50 border-b border-blue-200">
-                        <th className="text-center py-2 px-3 font-semibold text-blue-900">{mt("stackBatch")}</th>
-                        <th className="text-center py-2 px-3 font-semibold text-blue-900">{mt("suggestedStack")}</th>
-                        <th className="text-center py-2 px-3 font-semibold text-blue-900">{mt("stackBoards")}</th>
-                        <th className="text-left py-2 px-3 font-semibold text-blue-900">{mt("stackSequence")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {grp.realStackBatches.map((sb) => (
-                        <tr key={sb.batchNo} className="border-b border-blue-100 last:border-0">
-                          <td className="py-2 px-3 text-center font-medium text-blue-900">{sb.batchNo}</td>
-                          <td className="py-2 px-3 text-center">
-                            <span className="px-2 py-0.5 rounded bg-blue-200 text-blue-800 text-[11px] font-bold shadow-sm">
-                              {sb.stackSize} {mt("stackSize")}
-                            </span>
-                          </td>
-                          <td className="py-2 px-3 text-center font-medium text-blue-900">{sb.coveredBoards} {mt("sheetsUnit")}</td>
-                          <td className="py-2 px-3 font-mono text-[11px] text-blue-800">{sb.cutSequence}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+            {/* CONTENT SECTION */}
+            <div className="p-5 space-y-6">
+              {/* Step 1: Machine Setup */}
+              <div>
+                <h4 className="text-[15px] font-bold text-slate-800 mb-2">{mt("step1Title")}</h4>
+                <div className="text-[13px] text-slate-600 bg-black/[0.02] p-4 rounded-xl border border-black/[0.05]">
+                  <p>
+                    {mt("step1Desc1")} <strong className="text-black font-semibold">{grp.boardType}</strong>{mt("step1Desc2")} <strong className="text-black font-semibold">{grp.totalLength} mm</strong>{mt("step1Desc3")} <strong className="text-black font-semibold">{grp.boardWidth} mm</strong>{mt("step1Desc4")} <strong className="text-black font-semibold">{grp.trimSetting} mm</strong>。
+                  </p>
+                  {grp.needsWidthRip && grp.ripStockWidthMm != null && (
+                    <div className="mt-3 bg-white p-3 rounded-xl border border-border/60">
+                      <p className="text-[13px] font-bold text-slate-800 mb-2">
+                        {machineLang === "zh" ? "先将板材送入机器进行裁宽（长边向内）：" : machineLang === "en" ? "First, feed the board to rip width:" : "Primero, recorte el ancho del tablero:"}
+                      </p>
+                      <table className="w-full text-[13px] rounded-lg overflow-hidden border border-border/40">
+                        <thead>
+                          <tr className="bg-black/[0.03] border-b border-border/40">
+                            <th className="text-center py-2 px-4 font-semibold text-apple-gray w-24">{mt("rowNo")}</th>
+                            <th className="text-center py-2 px-4 font-semibold text-apple-gray w-48">{mt("cutLength")}</th>
+                            <th className="text-center py-2 px-4 font-semibold text-apple-gray w-36">{mt("pieceCount")}</th>
+                            <th className="py-2 px-4"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr className="hover:bg-black/[0.01]">
+                            <td className="text-center py-2.5 px-4 text-apple-gray">1</td>
+                            <td className="text-center py-2.5 px-4 font-mono text-[15px]">{grp.boardWidth}</td>
+                            <td className="text-center py-2.5 px-4 text-[15px]">1</td>
+                            <td className="py-2.5 px-4"></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               </div>
-            )}
 
-            {grp.realStackBatches.length > 0 && (
-              <div className="hidden print:block mt-4 px-5 pb-5 text-[11px]">
-                <h4 className="font-bold mb-2 text-black">📦 {mt("stackSuggestions")}</h4>
-                <table className="w-full text-left border-collapse border border-black">
-                  <thead>
-                    <tr>
-                      <th className="border border-black p-1 text-black">{mt("stackBatch")}</th>
-                      <th className="border border-black p-1 text-black">{mt("stackSize")}</th>
-                      <th className="border border-black p-1 text-black">{mt("stackSequence")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {grp.realStackBatches.map((b) => (
-                      <tr key={b.batchNo}>
-                        <td className="border border-black p-1 text-black">#{b.batchNo}</td>
-                        <td className="border border-black p-1 text-black">{b.stackSize}</td>
-                        <td className="border border-black p-1 font-mono text-black">{b.cutSequence}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+              {/* Step 2+: Cutting steps */}
+              {grp.patterns.map((pattern, pIdx) => {
+                const stepNum = pIdx + 2;
+                const isFirst = pIdx === 0;
+                
+                const letter = String.fromCharCode(65 + pIdx); // A, B, C...
+                const nw = nominalStockWidthForBoard(pattern.sampleBoard);
+                const patternNeedsRip = nw != null && (nw - grp.boardWidth > 0.5);
+                
+                const boardLabel = patternNeedsRip ? `${mt("boardWord")} ${letter}-2` : `${mt("boardWord")} ${letter}`;
+                
+                const badgeText = pattern.boardCount === 1 
+                  ? mt("singleSheet") 
+                  : mt("stackBadge").replace("{n}", String(pattern.boardCount));
+
+                return (
+                  <div key={pIdx}>
+                    <div className="flex items-center gap-3 mb-2">
+                      <h4 className="text-[15px] font-bold text-slate-800">
+                        {mt("stepCutTitle").replace("{stepNum}", String(stepNum)).replace("{patternNo}", boardLabel)}
+                      </h4>
+                      <span className="px-2.5 py-0.5 rounded-md text-[14px] font-medium bg-red-100 text-red-600 border border-red-200 shadow-sm">
+                        {badgeText}
+                      </span>
+                    </div>
+                    <div className="bg-blue-50/40 p-4 rounded-xl border border-blue-100">
+                      
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-[13px] bg-white rounded-lg overflow-hidden border border-border/40">
+                          <thead>
+                            <tr className="bg-black/[0.03] border-b border-border/40">
+                              <th className="text-center py-3 px-4 font-semibold text-apple-gray w-24">{mt("rowNo")}</th>
+                              <th className="text-center py-3 px-4 font-semibold text-apple-gray w-48">{mt("cutLength")}</th>
+                              <th className="text-center py-3 px-4 font-semibold text-apple-gray w-36">{mt("pieceCount")}</th>
+                              <th className="py-3 px-4"></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pattern.cutRows.map((row, ri) => (
+                              <tr key={ri} className="border-b border-border/10 last:border-0 hover:bg-black/[0.01]">
+                                <td className="text-center py-2.5 px-4 text-apple-gray">{ri + 1}</td>
+                                <td className="text-center py-2.5 px-4 font-mono text-[15px]">{row.cutLength}</td>
+                                <td className="text-center py-2.5 px-4 text-[15px]">{row.pieces}</td>
+                                <td className="py-2.5 px-4"></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
 
 
             {/* Print-only: Operator fields */}
