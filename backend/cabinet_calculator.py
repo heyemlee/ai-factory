@@ -152,8 +152,8 @@ def calculate_panels(
     # ── Back Panel (背板) ── all types, +6mm for grooves
     parts.append({
         "component": "Back Panel",
-        "length": r1(W - t * 2 + g * 2),       # W - 30
-        "width": r1(H),
+        "length": r1(H),
+        "width": r1(W - t * 2 + g * 2),        # W - 30
         "qty": 1,
     })
 

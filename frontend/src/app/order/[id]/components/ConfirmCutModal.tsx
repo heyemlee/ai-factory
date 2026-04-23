@@ -158,14 +158,14 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/25 backdrop-blur-sm" />
       <div
-        className="relative bg-white w-full max-w-lg rounded-2xl shadow-[0_8px_40px_rgba(0,0,0,0.15)] border border-black/5 overflow-hidden"
+        className="relative bg-white w-full max-w-lg rounded-2xl shadow-[0_8px_40px_rgba(0,0,0,0.15)] border border-black/5 overflow-hidden flex flex-col max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
         style={{ animation: "modalIn 0.22s cubic-bezier(0.16, 1, 0.3, 1)" }}
       >
         <style>{`@keyframes modalIn { from { opacity: 0; transform: scale(0.95) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }`}</style>
 
         {/* Header */}
-        <div className="p-6 border-b border-border/40">
+        <div className="p-6 border-b border-border/40 shrink-0">
           <div className="flex items-center gap-3 mb-2">
             <div className="w-10 h-10 rounded-full bg-apple-blue/10 text-apple-blue flex items-center justify-center">
               <CheckCircle2 size={22} />
@@ -177,8 +177,10 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
           </p>
         </div>
 
-        {/* Board usage table */}
-        <div className="p-6">
+        {/* Scrollable Content */}
+        <div className="overflow-y-auto flex-1 min-h-0 custom-scrollbar">
+          {/* Board usage table */}
+          <div className="p-6">
           <table className="w-full text-[13px]">
             <thead>
               <tr className="border-b border-border/40">
@@ -254,14 +256,15 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
             </div>
           </div>
         )}
+        </div>
 
         {/* Error */}
         {error && (
-          <div className="mx-6 mb-4 p-3 rounded-xl bg-red-50 text-red-600 text-[13px] font-medium">{error}</div>
+          <div className="mx-6 mt-4 p-3 rounded-xl bg-red-50 text-red-600 text-[13px] font-medium shrink-0">{error}</div>
         )}
 
         {/* Actions */}
-        <div className="p-6 border-t border-border/40 flex gap-3">
+        <div className="p-6 border-t border-border/40 flex gap-3 shrink-0">
           <button
             onClick={onClose}
             disabled={confirming}

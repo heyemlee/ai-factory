@@ -816,7 +816,10 @@ def _validate_cut_result(output: dict, cabinet_breakdown: dict, total_parts_requ
                     "ref": {"cab_id": cab_id},
                 })
 
-            # Dim check (allow H↔W swap for auto_swapped)
+            # Dim check:
+            # cabinet reconciliation cares about the final panel size, not the
+            # cutting orientation. If Height/Width are an exact swap, treat it
+            # as the same physical part and do not flag an integrity error.
             for pid in rendered_ids & set(expected_parts.keys()):
                 exp = expected_parts[pid]
                 got = rendered_by_id.get(pid, {})
@@ -828,7 +831,7 @@ def _validate_cut_result(output: dict, cabinet_breakdown: dict, total_parts_requ
                 match_swapped = abs(eh - gw) < 0.5 and abs(ew - gh) < 0.5
                 if match_direct:
                     continue
-                if match_swapped and got.get("auto_swapped"):
+                if match_swapped:
                     continue
                 integrity.append({
                     "code": "CABINET_DIM_MISMATCH",

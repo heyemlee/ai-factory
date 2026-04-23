@@ -480,7 +480,25 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     if (!ii) return list;
     if (Array.isArray(ii.integrity)) list.push(...ii.integrity);
     if (Array.isArray(ii.schema)) list.push(...ii.schema);
-    return list;
+    return list.filter((issue) => {
+      if (issue.code !== "CABINET_DIM_MISMATCH") return true;
+      const ref = issue.ref as
+        | {
+            expected?: { Height?: number; Width?: number };
+            actual?: { Height?: number; Width?: number };
+          }
+        | undefined;
+      const eh = ref?.expected?.Height;
+      const ew = ref?.expected?.Width;
+      const ah = ref?.actual?.Height;
+      const aw = ref?.actual?.Width;
+      if ([eh, ew, ah, aw].every((v) => typeof v === "number")) {
+        const direct = Math.abs((eh as number) - (ah as number)) < 0.5 && Math.abs((ew as number) - (aw as number)) < 0.5;
+        const swapped = Math.abs((eh as number) - (aw as number)) < 0.5 && Math.abs((ew as number) - (ah as number)) < 0.5;
+        if (!direct && swapped) return false;
+      }
+      return true;
+    });
   }, [cutResult]);
   const [issuesOpen, setIssuesOpen] = useState(false);
 
