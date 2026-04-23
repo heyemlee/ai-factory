@@ -508,14 +508,14 @@ export default function OrderDetail() {
           });
 
           return (
-            <div key={type} className="flex flex-col gap-y-3 shrink-0">
+            <div key={type} className="flex flex-col gap-y-5 shrink-0">
               <div className="text-left px-2">
                 <h3 className="text-[16px] font-bold text-foreground">{type}</h3>
                 <p className="text-[13px] text-apple-gray font-medium">
                   {indices.length} {t("orderDetail.boardsCount")}
                 </p>
               </div>
-              <div className="flex flex-col gap-y-3 pb-0">
+              <div className="flex flex-col gap-y-6 pb-0">
                 {leaders.map((idx) => {
                   const board = boards[idx];
                   const stackInfo = stackGroups.lookup[idx];
@@ -541,7 +541,7 @@ export default function OrderDetail() {
         return (
           <div className="flex flex-col w-full pt-8 pb-12 min-h-[60vh]">
             {/* Top Area (T1) */}
-            <div className="w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 content-start gap-x-6 gap-y-10 px-6 pb-12 border-b border-border/40">
+            <div className="w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 content-start gap-x-10 gap-y-10 px-6 pb-12 border-b border-border/40">
               {t1Entries.length > 0 ? t1Entries.map(renderColumn) : (
                 <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px] col-span-full">
                   T1 {t("orderDetail.notFound")}
@@ -982,7 +982,7 @@ function BoardTile({ board, index, color, stackInfo, onClick, disableHover = fal
         <div 
           className="absolute left-1/2 -translate-x-1/2 transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] z-50 rounded-full px-2 py-0.5 pointer-events-none flex items-center shadow-lg border"
           style={{
-             top: activeHover ? '-40px' : '-20px',
+             top: activeHover ? '-36px' : '-12px',
              background: color.bg, // Matches the size legend background color
              borderColor: color.border,
              color: color.text,
@@ -1895,8 +1895,8 @@ function MachineCutPlan({ boards, orderId, machineLang, setMachineLang }: { boar
             </div>
 
             {/* TOP ROW: Cut Layout Images ONLY */}
-            <div className="p-5 border-b border-border/40 bg-slate-50/50 print:hidden overflow-x-auto">
-              <div className="flex gap-6 min-w-max pb-2">
+            <div className="p-5 border-b border-border/40 bg-slate-50/50 overflow-x-auto print:overflow-visible print:whitespace-normal">
+              <div className="flex print:flex-wrap gap-6 min-w-max print:min-w-0 pb-2">
                 {grp.patterns.flatMap((pattern, pIdx) => {
                   const letter = String.fromCharCode(65 + pIdx); // A, B, C...
                   const nw = nominalStockWidthForBoard(pattern.sampleBoard);
