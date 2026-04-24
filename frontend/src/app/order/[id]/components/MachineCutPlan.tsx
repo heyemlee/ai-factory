@@ -12,6 +12,11 @@ function indexToNumberStr(idx: number): string {
   return String(idx + 1);
 }
 
+function formatOrderInlineLabel(lang: "zh" | "en" | "es", orderNoLabel: string, orderLabel: string): string {
+  if (!orderLabel) return "";
+  return lang === "zh" ? `(${orderNoLabel}${orderLabel})` : `(${orderNoLabel} ${orderLabel})`;
+}
+
 /* ═══════════════════════════════════════════
    Machine Cut Plan i18n lookup (independent of app locale)
    ═══════════════════════════════════════════ */
@@ -322,6 +327,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     const printLang = machineLang === "zh" ? "zh-CN" : machineLang === "es" ? "es" : "en";
     const pw = window.open("", "_blank", "width=900,height=1100");
     if (!pw) { alert("Popup blocked — please allow popups for printing."); return; }
+    const printOrderInline = formatOrderInlineLabel(machineLang, mt("orderNo"), orderLabel);
 
     /* 1. Copy ALL stylesheets from the current page so Tailwind classes resolve
        for BOTH layout (display, flex, padding, etc.) AND visuals (color, bg, etc.) */
@@ -340,15 +346,12 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       const page = document.createElement("div");
       page.className = "print-page";
 
-      const header = document.createElement("div");
-      header.className = "print-page-header";
-      header.innerHTML = `
-        <div style="font-size:16px;font-weight:700;color:#1d1d1f;">${mt("printTitle")}</div>
-        <div style="font-size:11px;color:#64748b;">${mt("orderNo")}: ${orderLabel}</div>`;
-      page.appendChild(header);
-
       const groupClone = groupEl.cloneNode(true) as HTMLElement;
       groupClone.classList.add("print-group-clone");
+      const titleEl = groupClone.querySelector("[data-print-group-title]");
+      if (titleEl) {
+        titleEl.textContent = `${mt("engineeringNo")} ${grp.engNo}${printOrderInline}`;
+      }
       page.appendChild(groupClone);
 
       const footer = document.createElement("div");
@@ -409,7 +412,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       .print-page {
         width: 100%;
         min-height: 100vh;
-        padding: 8mm 8mm 6mm;
+        padding: 4mm 5mm 3mm;
         display: flex;
         flex-direction: column;
         page-break-after: always;
@@ -418,11 +421,6 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       }
       .print-page:last-child { page-break-after: auto; break-after: auto; }
       table { page-break-inside: avoid; }
-
-      .print-page-header {
-        text-align: center;
-        margin-bottom: 6mm;
-      }
 
       .print-group-clone {
         box-shadow: none !important;
@@ -433,20 +431,48 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
 
       .print-group-clone [data-print-tiles-wrap] {
         overflow: visible !important;
+        padding: 8px 12px !important;
+      }
+
+      .print-group-clone [data-print-group-header] {
+        padding: 8px 12px !important;
+      }
+
+      .print-group-clone [data-print-content] {
+        padding: 10px 12px !important;
+      }
+
+      .print-group-clone [data-print-content] > * + * {
+        margin-top: 10px !important;
+      }
+
+      .print-group-clone [data-print-setup] h4,
+      .print-group-clone [data-print-step-title] {
+        margin-bottom: 4px !important;
+      }
+
+      .print-group-clone [data-print-setup-box],
+      .print-group-clone [data-print-step-box] {
+        padding: 10px 12px !important;
+        border-radius: 10px !important;
+      }
+
+      .print-group-clone [data-print-step-header] {
+        margin-bottom: 4px !important;
       }
 
       .print-group-clone [data-print-tiles-row] {
         min-width: 0 !important;
         flex-wrap: wrap !important;
-        gap: 14px !important;
+        gap: 10px !important;
         padding-bottom: 0 !important;
       }
 
       .print-page-footer {
         margin-top: auto;
-        padding-top: 3mm;
-        text-align: center;
-        font-size: 11px;
+        padding-top: 2mm;
+        text-align: right;
+        font-size: 10px;
         color: #64748b;
       }
 
@@ -460,7 +486,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       }
 
       @media print {
-        @page { size: A4; margin: 10mm 8mm; }
+        @page { size: A4; margin: 6mm 5mm; }
         .print-page { padding: 0; min-height: auto; }
       }
     `;
@@ -567,9 +593,9 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
           <MachineCutErrorBoundary key={grp.key} label={`group ${grp.engNo}`}>
           <div data-print-group={grp.engNo} className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
 
-            <div className="bg-white text-slate-800 p-5 border-b border-border/60">
+            <div data-print-group-header className="bg-white text-slate-800 p-5 border-b border-border/60">
               <h3 className="text-xl font-bold flex items-center gap-2">
-                {`${mt("engineeringNo")} ${grp.engNo}`}
+                <span data-print-group-title>{`${mt("engineeringNo")} ${grp.engNo}`}</span>
                 {grp.inconsistent && (
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-300 machine-no-print">
                     ⚠ Inconsistent group
@@ -587,8 +613,8 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                   const patternNeedsRip = nw != null && (nw - grp.boardWidth > 0.5);
                   
                   const stackBadge = pattern.boardCount > 1 && (
-                    <span className="ml-2 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700 border border-blue-200">
-                      ×{pattern.boardCount} {mt("stackBadge") ? mt("stackBadge").replace(" x{n}", "").replace(" x {n}", "").replace("x{n}", "") : "Stack"}
+                    <span data-print-board-count className="ml-2 text-[11px] font-semibold text-blue-700">
+                      ×{pattern.boardCount}
                     </span>
                   );
 
@@ -610,7 +636,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                             <BoardTile 
                               board={pattern.sampleBoard}
                               index={pIdx}
-                              color={sizeColorMap[pattern.sampleBoard.board_size] || SIZE_COLORS[0]}
+                              color={{ bg: "#fad2a4", border: "#f47820", text: "#c2410c", light: "#ffffff" }}
                               stackInfo={{ groupSize: pattern.boardCount, stackOf: pattern.boardCount, isLeader: true }}
                               onClick={() => {}}
                               disableHover={true}
@@ -630,7 +656,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                             <BoardTile 
                               board={pattern.sampleBoard}
                               index={pIdx}
-                              color={sizeColorMap[pattern.sampleBoard.board_size] || SIZE_COLORS[0]}
+                              color={{ bg: "#fad2a4", border: "#f47820", text: "#c2410c", light: "#ffffff" }}
                               stackInfo={{ groupSize: pattern.boardCount, stackOf: pattern.boardCount, isLeader: true }}
                               onClick={() => {}}
                               disableHover={true}
@@ -654,7 +680,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                         <BoardTile 
                           board={pattern.sampleBoard}
                           index={pIdx}
-                          color={sizeColorMap[pattern.sampleBoard.board_size] || SIZE_COLORS[0]}
+                          color={{ bg: "#fad2a4", border: "#f47820", text: "#c2410c", light: "#ffffff" }}
                           stackInfo={{ groupSize: pattern.boardCount, stackOf: pattern.boardCount, isLeader: true }}
                           onClick={() => {}}
                           disableHover={true}
@@ -672,11 +698,11 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
             </div>
 
             {/* CONTENT SECTION */}
-            <div className="p-5 space-y-6">
+            <div data-print-content className="p-5 space-y-6">
               {/* Step 1: Machine Setup */}
               <div data-print-setup={grp.engNo}>
-                <h4 className="text-[15px] font-bold text-slate-800 mb-2">{mt("step1Title")}</h4>
-                <div className="text-[13px] text-slate-600 bg-black/[0.02] p-4 rounded-xl border border-black/[0.05]">
+                <h4 data-print-step-title className="text-[15px] font-bold text-slate-800 mb-2">{mt("step1Title")}</h4>
+                <div data-print-setup-box className="text-[13px] text-slate-600 bg-black/[0.02] p-4 rounded-xl border border-black/[0.05]">
                   <p>
                     {mt("step1Desc1")} <strong className="text-black font-semibold">{grp.boardType}</strong>{mt("step1Desc2")} <strong className="text-black font-semibold">{grp.totalLength} mm</strong>{mt("step1Desc3")} <strong className="text-black font-semibold">{grp.boardWidth} mm</strong>{mt("step1Desc4")} <strong className="text-black font-semibold">{grp.trimSetting} mm</strong>。
                   </p>
@@ -716,21 +742,21 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                 
                 const boardLabel = `${mt("boardWord")} ${numLabel}`;
                 
-                const badgeText = pattern.boardCount === 1 
-                  ? mt("singleSheet") 
-                  : mt("stackBadge").replace("{n}", String(pattern.boardCount));
+                const badgeText = pattern.boardCount === 1
+                  ? mt("singleSheet")
+                  : `${pattern.boardCount} ${mt("sheetsUnit")}`;
 
                 return (
                   <div key={pIdx} data-print-step={`${grp.engNo}-${pIdx}`}>
-                    <div className="flex items-center gap-3 mb-2">
-                      <h4 className="text-[15px] font-bold text-slate-800">
+                    <div data-print-step-header className="flex items-center gap-3 mb-2">
+                      <h4 data-print-step-title className="text-[15px] font-bold text-slate-800">
                         {mt("stepCutTitle").replace("{stepNum}", String(stepNum)).replace("{patternNo}", boardLabel)}
                       </h4>
-                      <span className="px-2.5 py-0.5 rounded-md text-[14px] font-medium bg-red-100 text-red-600 border border-red-200 shadow-sm">
+                      <span data-print-board-count className="text-[14px] font-semibold text-red-600">
                         {badgeText}
                       </span>
                     </div>
-                    <div className="bg-blue-50/40 p-4 rounded-xl border border-blue-100">
+                    <div data-print-step-box className="bg-blue-50/40 p-4 rounded-xl border border-blue-100">
                       
                       <div className="overflow-x-auto">
                         <table className="w-full text-[13px] bg-white rounded-lg overflow-hidden border border-border/40">

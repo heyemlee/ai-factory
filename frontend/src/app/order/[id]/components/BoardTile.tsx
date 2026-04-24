@@ -194,8 +194,8 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
                 {p.height < stripHeight && (
                   <div className="absolute" style={{
                     left: `${p.left}%`, bottom: `${bottomOffset + p.height}%`, width: `${p.width}%`, height: `${stripHeight - p.height}%`,
-                    backgroundColor: "#ffffff",
-                    backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
+                    backgroundColor: "#f8fafc",
+                    backgroundImage: "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 4px, rgba(0,0,0,0.2) 4px, rgba(0,0,0,0.2) 5.5px)",
                     borderRight: `1px dashed #94a3b8`,
                     borderTop: `1px solid ${color.border}20`,
                   }} />
@@ -203,18 +203,41 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
               </React.Fragment>
             ))}
 
-            {/* Waste area for this strip (along the length) */}
+            {/* Length Leftover area (ALWAYS Waste) */}
             {wasteLeft < 96 && (
               <div className="absolute" style={{
                 left: `${wasteLeft}%`, width: `${Math.max(100 - wasteLeft, 0)}%`,
                 bottom: `${bottomOffset}%`, height: `${stripHeight}%`,
-                backgroundColor: "#ffffff",
-                backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
+                backgroundColor: "#f8fafc",
+                backgroundImage: "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 4px, rgba(0,0,0,0.2) 4px, rgba(0,0,0,0.2) 5.5px)",
                 borderLeft: `1.5px dashed #94a3b8`,
                 borderBottom: bottomOffset > 0 ? `1px solid ${color.border}40` : undefined,
                 borderTop: `1px solid ${color.border}`,
               }} />
             )}
+
+            {/* Width Leftover area (Waste or Recovered) */}
+            {stripHeight < 100 && (() => {
+              const remainingWidthMm = ((100 - stripHeight) / 100) * boardDims.width;
+              // Only leftovers that maintain the full 2438.4 length (width rips) can be recovered
+              const isRecovered = remainingWidthMm >= 200;
+              return (
+                <div className="absolute" style={{
+                  left: 0, width: '100%',
+                  bottom: `${bottomOffset + stripHeight}%`, height: `${100 - (bottomOffset + stripHeight)}%`,
+                  ...(isRecovered 
+                    ? {
+                        backgroundColor: "#dcfce3",
+                        borderBottom: `1.5px dashed #4ade80`,
+                      }
+                    : {
+                        backgroundColor: "#f8fafc",
+                        backgroundImage: "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 4px, rgba(0,0,0,0.2) 4px, rgba(0,0,0,0.2) 5.5px)",
+                        borderBottom: `1.5px dashed #94a3b8`,
+                      })
+                }} />
+              );
+            })()}
           </div>
         </div>
       </div>
