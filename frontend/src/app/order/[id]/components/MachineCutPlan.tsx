@@ -264,7 +264,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         fpMap[fp].push(b);
       }
       
-      const patterns = Object.values(fpMap).map((boardsOfPattern) => {
+      const patterns = Object.values(fpMap).flatMap((boardsOfPattern) => {
         const sampleBoard = boardsOfPattern[0];
         const cutMap: Record<number, number> = {};
         for (const p of sampleBoard.parts) {
@@ -275,11 +275,15 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
           .map(([len, qty]) => ({ cutLength: parseFloat(len), pieces: qty }))
           .sort((a, b) => a.cutLength - b.cutLength);
 
-        return {
-          sampleBoard,
-          boardCount: boardsOfPattern.length,
-          cutRows,
-        };
+        const chunks = [];
+        for (let i = 0; i < boardsOfPattern.length; i += 4) {
+          chunks.push({
+            sampleBoard,
+            boardCount: boardsOfPattern.slice(i, i + 4).length,
+            cutRows,
+          });
+        }
+        return chunks;
       });
       const distinctCutPatterns = patterns.length;
 
@@ -606,8 +610,8 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
             </div>
 
             {/* TOP ROW: Cut Layout Images ONLY */}
-            <div data-print-tiles-wrap={grp.engNo} className="p-5 border-b border-border/40 bg-slate-50/50 overflow-x-auto">
-              <div data-print-tiles-row={grp.engNo} className="flex gap-6 min-w-max pb-2">
+            <div data-print-tiles-wrap={grp.engNo} className="p-5 border-b border-border/40 bg-slate-50/50">
+              <div data-print-tiles-row={grp.engNo} className="flex flex-wrap gap-6 pb-2">
                 {grp.patterns.map((pattern, pIdx) => {
                   const numLabel = indexToNumberStr(pIdx);
                   const nw = nominalStockWidthForBoard(pattern.sampleBoard);
