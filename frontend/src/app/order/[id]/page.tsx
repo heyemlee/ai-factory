@@ -444,7 +444,8 @@ export default function OrderDetail() {
           strips.sort((a, b) => (a.board.t0_sheet_index ?? 0) - (b.board.t0_sheet_index ?? 0));
         }
 
-        const renderColumn = ([type, indices]: [string, number[]]) => {
+        const MAX_BOARDS_PER_COL = 4;
+        const renderColumns = ([type, indices]: [string, number[]]) => {
           const leaders = indices.filter((idx) => stackGroups.lookup[idx]?.isLeader);
           if (leaders.length === 0) return null;
 
@@ -455,35 +456,40 @@ export default function OrderDetail() {
             return aPNo - bPNo;
           });
 
-          return (
-            <div key={type} className="flex flex-col gap-y-5 shrink-0">
-              <div className="text-left px-2">
-                <h3 className="text-[16px] font-bold text-foreground">{type}</h3>
-                <p className="text-[13px] text-apple-gray font-medium">
-                  {indices.length} {t("orderDetail.boardsCount")}
-                </p>
-              </div>
-              <div className="flex flex-col gap-y-6 pb-0">
-                {leaders.map((idx) => {
-                  const board = boards[idx];
-                  const stackInfo = stackGroups.lookup[idx];
-                  const pNo = patternNumbering.byIndex[idx];
-                  return (
-                    <div key={`${board.board_id}-${idx}`} className="space-y-1">
+          const cols = [];
+          for (let i = 0; i < leaders.length; i += MAX_BOARDS_PER_COL) {
+            const chunk = leaders.slice(i, i + MAX_BOARDS_PER_COL);
+            const isFirstCol = i === 0;
 
-                      <BoardTile
-                        board={board}
-                        index={idx}
-                        color={sizeColorMap[board.board_size]}
-                        stackInfo={stackInfo}
-                        onClick={() => setSelectedBoard(board)}
-                      />
-                    </div>
-                  );
-                })}
+            cols.push(
+              <div key={`${type}-${i}`} className="flex flex-col gap-y-5 shrink-0">
+                <div className="text-left px-2" style={{ visibility: isFirstCol ? 'visible' : 'hidden' }}>
+                  <h3 className="text-[16px] font-bold text-foreground">{isFirstCol ? type : "\u00A0"}</h3>
+                  <p className="text-[13px] text-apple-gray font-medium">
+                    {isFirstCol ? `${indices.length} ${t("orderDetail.boardsCount")}` : "\u00A0"}
+                  </p>
+                </div>
+                <div className="flex flex-col gap-y-6 pb-0">
+                  {chunk.map((idx) => {
+                    const board = boards[idx];
+                    const stackInfo = stackGroups.lookup[idx];
+                    return (
+                      <div key={`${board.board_id}-${idx}`} className="space-y-1">
+                        <BoardTile
+                          board={board}
+                          index={idx}
+                          color={sizeColorMap[board.board_size]}
+                          stackInfo={stackInfo}
+                          onClick={() => setSelectedBoard(board)}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          );
+            );
+          }
+          return cols;
         };
 
         /* Count total T0 boards (sheets, not strips) */
@@ -493,7 +499,7 @@ export default function OrderDetail() {
           <div className="flex flex-col w-full pt-8 pb-12 min-h-[60vh]">
             {/* Top Area (T1) */}
             <div className="w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 content-start gap-x-10 gap-y-10 px-6 pb-12 border-b border-border/40">
-              {t1Entries.length > 0 ? t1Entries.map(renderColumn) : (
+              {t1Entries.length > 0 ? t1Entries.flatMap(renderColumns) : (
                 <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px] col-span-full">
                   T1 {t("orderDetail.notFound")}
                 </div>
@@ -569,14 +575,19 @@ export default function OrderDetail() {
                 </tr>
               </thead>
               <tbody>
-                {boards.map((board, idx) => {
+                {boards.map((board, idx) => ({ board, idx }))
+                  .filter(({ idx }) => {
+                    const si = stackGroups.lookup[idx];
+                    return !si || si.isLeader;
+                  })
+                  .map(({ board, idx }, mappedIdx) => {
                   const c = sizeColorMap[board.board_size];
                   const utilPct = (board.utilization * 100).toFixed(1);
                   const utilNum = parseFloat(utilPct);
                   const si = stackGroups.lookup[idx];
                   return (
                     <tr key={`${board.board_id}-${idx}`} className="border-b border-border/20 hover:bg-black/[0.01]">
-                      <td className="py-2.5 px-4 text-apple-gray">{idx + 1}</td>
+                      <td className="py-2.5 px-4 text-apple-gray">{mappedIdx + 1}</td>
                       <td className="py-2.5 px-4 font-medium">
                         <span className="inline-flex items-center gap-1.5">
                           <span className="w-2.5 h-2.5 rounded" style={{ backgroundColor: c.bg, border: `1.5px solid ${c.border}` }} />
@@ -595,12 +606,24 @@ export default function OrderDetail() {
                       </td>
                       <td className="py-2.5 px-4">
                         <div className="flex flex-wrap gap-1">
-                          {board.parts.map((p, pi) => (
-                            <span key={`${p.part_id}-${pi}`} className="text-[10px] px-1.5 py-0.5 rounded bg-black/[0.03] text-apple-gray whitespace-nowrap">
-                              {p.component || p.part_id}
-                              {p.rotated && <span className="ml-0.5" title="Rotated">🔄</span>}
-                            </span>
-                          ))}
+                          {(() => {
+                            const partGroups: Record<string, { label: string; rotated: boolean; count: number }> = {};
+                            for (const p of board.parts) {
+                              const label = p.component || p.part_id;
+                              const key = `${label}_${p.rotated ? 'rot' : 'norm'}`;
+                              if (!partGroups[key]) {
+                                partGroups[key] = { label, rotated: !!p.rotated, count: 0 };
+                              }
+                              partGroups[key].count++;
+                            }
+                            return Object.values(partGroups).map((g, gi) => (
+                              <span key={gi} className="text-[10px] px-1.5 py-0.5 rounded bg-black/[0.03] text-apple-gray whitespace-nowrap">
+                                {g.label}
+                                {g.rotated && <span className="ml-0.5" title="Rotated">🔄</span>}
+                                {g.count > 1 && <span className="ml-1 text-black/40 font-bold">×{g.count}</span>}
+                              </span>
+                            ));
+                          })()}
                         </div>
                       </td>
                     </tr>
