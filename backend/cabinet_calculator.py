@@ -195,7 +195,7 @@ def calculate_panels(
     return parts
 
 
-def process_order(order_path: str, output_path: str = None):
+def process_order(order_path: str, output_path: str = None, include_skipped_items: bool = False):
     """
     Read an order Excel, calculate all panels for every cabinet,
     and output a flat parts list.
@@ -203,9 +203,12 @@ def process_order(order_path: str, output_path: str = None):
     Args:
         order_path: Path to the order .xlsx file.
         output_path: Where to save parts.xlsx. If None, saves next to order file.
+        include_skipped_items: When True, also return skipped rows with unsupported cabinet types.
 
     Returns:
         Tuple of (DataFrame with all parts, cabinet_breakdown dict).
+        When include_skipped_items=True, returns
+        (DataFrame, cabinet_breakdown dict, skipped_items list).
         cabinet_breakdown maps cab_id -> {cab_type, count, parts:[{part_id,component,Height,Width}]}
     """
     df = pd.read_excel(order_path)
@@ -383,7 +386,10 @@ def process_order(order_path: str, output_path: str = None):
 
     print(f"{'═' * 60}\n")
 
-    return result_df, cabinet_breakdown, skipped_items
+    if include_skipped_items:
+        return result_df, cabinet_breakdown, skipped_items
+
+    return result_df, cabinet_breakdown
 
 
 # ─── CLI Entry Point ────────────────────────────────────

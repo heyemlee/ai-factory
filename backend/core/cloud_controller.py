@@ -13,6 +13,7 @@ import os
 import sys
 import json
 import time
+import inspect
 import traceback
 import tempfile
 from datetime import datetime
@@ -169,7 +170,20 @@ def process_order(order: dict):
         calc_order = cab_mod.process_order
 
         parts_path = os.path.join(tempfile.gettempdir(), f"{job_id}_parts.xlsx")
-        parts_df, cabinet_breakdown, skipped_items = calc_order(order_path, parts_path)
+        calc_kwargs = {}
+        if "include_skipped_items" in inspect.signature(calc_order).parameters:
+            calc_kwargs["include_skipped_items"] = True
+
+        calc_result = calc_order(order_path, parts_path, **calc_kwargs)
+        if len(calc_result) == 3:
+            parts_df, cabinet_breakdown, skipped_items = calc_result
+        elif len(calc_result) == 2:
+            parts_df, cabinet_breakdown = calc_result
+            skipped_items = []
+        else:
+            raise ValueError(
+                f"Unexpected cabinet_calculator.process_order return shape: {len(calc_result)} values"
+            )
 
         # Count cabinet types for summary
         import pandas as pd
@@ -237,7 +251,9 @@ def process_order(order: dict):
             for e in shape_errs:
                 schema_list.append({"code": "SCHEMA_VIOLATION", "severity": "error", "msg": e})
 
-        status_value = "completed_with_warnings" if (shape_errs or skipped_items) else "completed"
+        # Keep warnings inside cut_result_json/issues while using the stable
+        # completed status already supported by the DB constraint and frontend.
+        status_value = "completed"
 
         supabase.table("orders").update({
             "status": status_value,
