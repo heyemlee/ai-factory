@@ -5,7 +5,7 @@ import type { Board, SizeColor } from "./types";
 import { SIZE_COLORS } from "./constants";
 import { parseBoardDims, safeNum, clamp } from "./utils";
 
-export function BoardTile({ board, index, color, stackInfo, onClick, disableHover = false, overrideUtilNum, hideWidthWaste = false, isRotated = false, hideUtilization = false, showDimensions = false, hideStackBadge = false }: {
+export function BoardTile({ board, index, color, stackInfo, onClick, disableHover = false, overrideUtilNum, hideWidthWaste = false, isRotated = false, hideUtilization = false, showDimensions = false, hideStackBadge = false, hidePreviousStripShade = false }: {
   board: Board;
   index: number;
   color: SizeColor;
@@ -18,6 +18,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
   hideUtilization?: boolean;
   showDimensions?: boolean;
   hideStackBadge?: boolean;
+  hidePreviousStripShade?: boolean;
 }) {
   const { t } = useLanguage();
   const [isHovered, setIsHovered] = useState(false);
@@ -68,6 +69,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
     const last = partLayout[partLayout.length - 1];
     return last.left + last.width;
   }, [partLayout]);
+  const lengthWasteWidth = Math.max(100 - wasteLeft, 0);
 
   const utilPct = overrideUtilNum !== undefined ? (overrideUtilNum * 100).toFixed(1) : (board.utilization * 100).toFixed(1);
   const utilNum = parseFloat(utilPct);
@@ -91,6 +93,11 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
     }
     return 100;
   }, [board.strip_width, boardDims.width]);
+  const sideLeftoverHeight = useMemo(() => {
+    if (!isRotated) return 0;
+    return Math.max(100 - (bottomOffset + stripHeight), 0);
+  }, [bottomOffset, isRotated, stripHeight]);
+  const visualBottomOffset = bottomOffset + sideLeftoverHeight;
 
   // ── Diagnostic fallback: if dims cannot be parsed, render a red card instead of crashing
   if (!boardDims.ok) {
@@ -164,10 +171,10 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
             backgroundColor: color.light, border: `1.5px solid ${color.border}`,
           }}>
             {/* Shaded area for previously cut strips (if this is Strip 2+) */}
-            {bottomOffset > 0 && (
+            {bottomOffset > 0 && !hidePreviousStripShade && (
               <div className="absolute" style={{
                 left: 0, width: '100%',
-                bottom: 0, height: `${bottomOffset}%`,
+                bottom: `${sideLeftoverHeight}%`, height: `${bottomOffset}%`,
                 backgroundColor: "#e2e8f0",
                 backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(0,0,0,0.06) 2px, rgba(0,0,0,0.06) 4px)",
                 borderTop: `1px dashed ${color.border}80`,
@@ -184,7 +191,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
                   data-part-h={p.Height}
                   data-part-w={p.Width}
                   style={{
-                    left: `${p.left}%`, bottom: `${bottomOffset}%`, width: `${p.width}%`, height: `${p.height}%`,
+                    left: `${lengthWasteWidth + p.left}%`, bottom: `${visualBottomOffset}%`, width: `${p.width}%`, height: `${p.height}%`,
                     backgroundColor: color.bg,
                     borderRight: `1px solid ${color.border}`,
                     borderTop: p.height < 100 ? `1px solid ${color.border}` : undefined,
@@ -193,7 +200,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
                 {/* Upper Waste */}
                 {p.height < stripHeight && (
                   <div className="absolute" style={{
-                    left: `${p.left}%`, bottom: `${bottomOffset + p.height}%`, width: `${p.width}%`, height: `${stripHeight - p.height}%`,
+                    left: `${lengthWasteWidth + p.left}%`, bottom: `${visualBottomOffset + p.height}%`, width: `${p.width}%`, height: `${stripHeight - p.height}%`,
                     backgroundColor: "#f8fafc",
                     backgroundImage: "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 4px, rgba(0,0,0,0.2) 4px, rgba(0,0,0,0.2) 5.5px)",
                     borderRight: `1px dashed #94a3b8`,
@@ -204,14 +211,14 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
             ))}
 
             {/* Length Leftover area (ALWAYS Waste) */}
-            {wasteLeft < 96 && (
+            {lengthWasteWidth > 0.5 && (
               <div className="absolute" style={{
-                left: `${wasteLeft}%`, width: `${Math.max(100 - wasteLeft, 0)}%`,
-                bottom: `${bottomOffset}%`, height: `${stripHeight}%`,
+                left: 0, width: `${lengthWasteWidth}%`,
+                bottom: `${visualBottomOffset}%`, height: `${stripHeight}%`,
                 backgroundColor: "#f8fafc",
                 backgroundImage: "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 4px, rgba(0,0,0,0.2) 4px, rgba(0,0,0,0.2) 5.5px)",
-                borderLeft: `1.5px dashed #94a3b8`,
-                borderBottom: bottomOffset > 0 ? `1px solid ${color.border}40` : undefined,
+                borderRight: `1.5px dashed #94a3b8`,
+                borderBottom: visualBottomOffset > 0 ? `1px solid ${color.border}40` : undefined,
                 borderTop: `1px solid ${color.border}`,
               }} />
             )}
@@ -224,16 +231,17 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
               return (
                 <div className="absolute" style={{
                   left: 0, width: '100%',
-                  bottom: `${bottomOffset + stripHeight}%`, height: `${100 - (bottomOffset + stripHeight)}%`,
+                  bottom: isRotated ? 0 : `${bottomOffset + stripHeight}%`,
+                  height: `${100 - (bottomOffset + stripHeight)}%`,
                   ...(isRecovered 
                     ? {
-                        backgroundColor: "#dcfce3",
-                        borderBottom: `1.5px dashed #4ade80`,
+                        backgroundColor: "#a1f2c6",
+                        ...(isRotated ? { borderTop: `1.5px dashed #10b981` } : { borderBottom: `1.5px dashed #10b981` }),
                       }
                     : {
                         backgroundColor: "#f8fafc",
                         backgroundImage: "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 4px, rgba(0,0,0,0.2) 4px, rgba(0,0,0,0.2) 5.5px)",
-                        borderBottom: `1.5px dashed #94a3b8`,
+                        ...(isRotated ? { borderTop: `1.5px dashed #94a3b8` } : { borderBottom: `1.5px dashed #94a3b8` }),
                       })
                 }} />
               );

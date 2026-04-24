@@ -86,6 +86,9 @@ def r1(val: float) -> float:
     return round(val, 1)
 
 
+VALID_CABINET_TYPES = ("wall", "base", "tall")
+
+
 def detect_cabinet_type(abc_item: str) -> str:
     """
     Auto-detect cabinet type from ABC Item code prefix.
@@ -236,6 +239,7 @@ def process_order(order_path: str, output_path: str = None):
     has_type_col = "Type" in col_map
 
     all_parts = []
+    skipped_items: list[dict] = []
 
     for idx, row in df.iterrows():
         # ── Cabinet ID ──
@@ -251,8 +255,14 @@ def process_order(order_path: str, output_path: str = None):
         else:
             cab_type = detect_cabinet_type(item)
 
-        if cab_type not in ("wall", "base", "tall"):
-            cab_type = "wall"  # safe fallback
+        if cab_type not in VALID_CABINET_TYPES:
+            skipped_items.append({
+                "cab_id": cab_id,
+                "item": item,
+                "type": cab_type or "(blank)",
+                "row": int(idx) + 2,
+            })
+            continue
 
         # ── Dimensions (inches → mm) ──
         W_in = parse_imperial(row.get(col_map.get("W", ""), 0))
@@ -352,6 +362,12 @@ def process_order(order_path: str, output_path: str = None):
     print(f"  Total parts generated: {len(result_df)}")
     print(f"{'─' * 60}")
 
+    # Skipped-type summary
+    if skipped_items:
+        print(f"  SKIPPED: {len(skipped_items)} cabinet(s) with unknown type")
+        for s in skipped_items:
+            print(f"    • row {s['row']} {s['cab_id']} (type='{s['type']}')")
+
     # Per-type summary
     for ctype in ("wall", "base", "tall"):
         count = len(df[df[col_map.get("Type", "___")].astype(str).str.lower() == ctype]) if has_type_col else 0
@@ -367,7 +383,7 @@ def process_order(order_path: str, output_path: str = None):
 
     print(f"{'═' * 60}\n")
 
-    return result_df, cabinet_breakdown
+    return result_df, cabinet_breakdown, skipped_items
 
 
 # ─── CLI Entry Point ────────────────────────────────────

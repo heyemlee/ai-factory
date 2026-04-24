@@ -480,6 +480,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       * {
         transition: none !important;
         animation: none !important;
+        box-shadow: none !important;
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
         color-adjust: exact !important;
@@ -644,6 +645,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                               hideUtilization={true}
                               showDimensions={true}
                               hideStackBadge={true}
+                              hidePreviousStripShade={true}
                             />
                           </div>
                           {/* Arrow between steps */}
@@ -665,6 +667,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                               hideUtilization={true}
                               showDimensions={true}
                               hideStackBadge={true}
+                              hidePreviousStripShade={true}
                             />
                           </div>
                         </div>
@@ -689,6 +692,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                           hideUtilization={true}
                           showDimensions={true}
                           hideStackBadge={true}
+                          hidePreviousStripShade={true}
                         />
                       </div>
                     );
@@ -748,13 +752,13 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
 
                 return (
                   <div key={pIdx} data-print-step={`${grp.engNo}-${pIdx}`}>
-                    <div data-print-step-header className="flex items-center gap-3 mb-2">
+                    <div data-print-step-header className="mb-2">
                       <h4 data-print-step-title className="text-[15px] font-bold text-slate-800">
                         {mt("stepCutTitle").replace("{stepNum}", String(stepNum)).replace("{patternNo}", boardLabel)}
+                        <span data-print-board-count className="ml-3 text-[14px] font-semibold text-red-600 align-baseline">
+                          {badgeText}
+                        </span>
                       </h4>
-                      <span data-print-board-count className="text-[14px] font-semibold text-red-600">
-                        {badgeText}
-                      </span>
                     </div>
                     <div data-print-step-box className="bg-blue-50/40 p-4 rounded-xl border border-blue-100">
                       

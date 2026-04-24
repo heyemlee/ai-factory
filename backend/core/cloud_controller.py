@@ -169,7 +169,7 @@ def process_order(order: dict):
         calc_order = cab_mod.process_order
 
         parts_path = os.path.join(tempfile.gettempdir(), f"{job_id}_parts.xlsx")
-        parts_df, cabinet_breakdown = calc_order(order_path, parts_path)
+        parts_df, cabinet_breakdown, skipped_items = calc_order(order_path, parts_path)
 
         # Count cabinet types for summary
         import pandas as pd
@@ -190,6 +190,8 @@ def process_order(order: dict):
                     parts_list.append(f"{counts[t]}{t[0].upper()}")
             if parts_list:
                 cab_summary = f"{len(order_df)} ({'/'.join(parts_list)})"
+        if skipped_items:
+            cab_summary = f"{cab_summary} + {len(skipped_items)} skipped"
 
         # 3. Run Cutting Engine
         update_progress(60, "正在进行 AI 智能排版裁切计算...")
@@ -210,6 +212,17 @@ def process_order(order: dict):
         # premature deduction before actual cutting occurs.
         # Old code: deduct_inventory_supabase(result["boards"])
 
+        if skipped_items:
+            issues = result.setdefault("issues", {})
+            integrity_list = issues.setdefault("integrity", [])
+            for s in skipped_items:
+                integrity_list.append({
+                    "code": "SKIPPED_UNKNOWN_TYPE",
+                    "severity": "warning",
+                    "msg": f"Row {s['row']} ({s['cab_id']}): type '{s['type']}' not in wall/base/tall — skipped",
+                    "ref": s,
+                })
+
         # 5. Update order in Supabase
         summary = result["summary"]
 
@@ -224,7 +237,7 @@ def process_order(order: dict):
             for e in shape_errs:
                 schema_list.append({"code": "SCHEMA_VIOLATION", "severity": "error", "msg": e})
 
-        status_value = "completed_with_warnings" if shape_errs else "completed"
+        status_value = "completed_with_warnings" if (shape_errs or skipped_items) else "completed"
 
         supabase.table("orders").update({
             "status": status_value,

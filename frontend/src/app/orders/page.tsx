@@ -151,7 +151,8 @@ export default function Orders() {
     setUploading(true);
     setUploadError(null);
     const now = new Date();
-    const jobId = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}`;
+    const randomSuffix = Math.random().toString(36).substring(2, 6);
+    const jobId = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}${String(now.getSeconds()).padStart(2,"0")}_${randomSuffix}`;
     const uniqueSuffix = Date.now();
     const storagePath = `orders/${jobId}_${uniqueSuffix}_${file.name}`;
 

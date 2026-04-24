@@ -47,6 +47,7 @@ export function BoardDetailModal({ board, color, onClose }: {
     const last = partLayout[partLayout.length - 1];
     return last.left + last.width + 0.2;
   }, [partLayout]);
+  const lengthWasteWidth = Math.max(100 - wasteLeft, 0);
 
   const utilPct = (board.utilization * 100).toFixed(1);
   const utilNum = parseFloat(utilPct);
@@ -98,7 +99,7 @@ export function BoardDetailModal({ board, color, onClose }: {
                   return (
                     <div key={`${p.part_id}-${p.idx}-group`} title={`Part: ${p.part_id} | Size: ${p.rotated ? `${p.Width}×${p.Height} 🔄` : `${p.Height}×${p.Width}`} | Cab: ${p.cab_id}`}>
                       <div className="absolute flex items-center justify-center overflow-hidden" style={{
-                        left: `${p.left}%`, bottom: `0%`, width: `${p.width}%`, height: `${p.height}%`,
+                        left: `${lengthWasteWidth + p.left}%`, bottom: `0%`, width: `${p.width}%`, height: `${p.height}%`,
                         backgroundColor: color.bg,
                         borderRight: `1px solid ${color.border}`,
                         borderTop: p.height < 100 ? `1px solid ${color.border}` : undefined,
@@ -112,7 +113,7 @@ export function BoardDetailModal({ board, color, onClose }: {
                       </div>
                       {p.height < 100 && (
                         <div className="absolute flex items-center justify-center overflow-hidden" style={{
-                          left: `${p.left}%`, bottom: `${p.height}%`, width: `${p.width}%`, height: `${100 - p.height}%`,
+                          left: `${lengthWasteWidth + p.left}%`, bottom: `${p.height}%`, width: `${p.width}%`, height: `${100 - p.height}%`,
                           backgroundColor: "#ffffff",
                           backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
                           borderRight: `1.5px dashed #94a3b8`,
@@ -123,14 +124,14 @@ export function BoardDetailModal({ board, color, onClose }: {
                     </div>
                   );
                 })}
-                {wasteLeft < 96 && (
+                {lengthWasteWidth > 0.5 && (
                   <div className="absolute top-0 h-full flex items-center justify-center" style={{
-                    left: `${wasteLeft}%`, width: `${Math.max(100 - wasteLeft, 0)}%`,
+                    left: 0, width: `${lengthWasteWidth}%`,
                     backgroundColor: "#ffffff",
                     backgroundImage: "repeating-linear-gradient(45deg, #ffffff, #ffffff 4px, #f8fafc 4px, #f8fafc 8px)",
-                    borderLeft: `1.5px dashed #94a3b8`,
+                    borderRight: `1.5px dashed #94a3b8`,
                   }}>
-                    {(100 - wasteLeft) > 6 && <span className="text-[9px] font-bold text-slate-400">{t("orderDetail.modalWaste")} {wasteDims} mm</span>}
+                    {lengthWasteWidth > 6 && <span className="text-[9px] font-bold text-slate-400">{t("orderDetail.modalWaste")} {wasteDims} mm</span>}
                   </div>
                 )}
               </div>
