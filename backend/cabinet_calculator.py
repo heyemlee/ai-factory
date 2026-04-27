@@ -36,6 +36,57 @@ SHELF_INSET = 20.0           # 活动层板前方内缩
 STRETCHER_DEPTH = 101.6      # 拉条深度 (4")
 INCHES_TO_MM = 25.4
 
+# ─── Box Color (driven by Supabase box_colors table) ────
+DEFAULT_BOX_COLOR = "WhiteBirch"
+
+
+def load_box_colors() -> dict:
+    """
+    Load valid box colors from Supabase. Returns a dict mapping multiple
+    aliases (key, name_en, name_zh, name_es — all lowercased) → key.
+    Falls back to a minimal default registry if Supabase is unreachable.
+    """
+    fallback = {
+        "whitebirch": "WhiteBirch",
+        "white birch plywood": "WhiteBirch",
+        "白桦木胶合板": "WhiteBirch",
+        "contrachapado de abedul blanco": "WhiteBirch",
+        "whitemelamine": "WhiteMelamine",
+        "white melamine plywood": "WhiteMelamine",
+        "白色三聚氰胺板": "WhiteMelamine",
+        "melamina blanca": "WhiteMelamine",
+    }
+    try:
+        # Local import so this module can still be imported in tooling without supabase deps
+        from config.supabase_client import supabase
+        result = supabase.table("box_colors").select("*").eq("is_active", True).execute()
+        if not result.data:
+            return fallback
+        alias_map: dict = {}
+        for row in result.data:
+            key = row["key"]
+            for alias in (row.get("key"), row.get("name_en"), row.get("name_zh"), row.get("name_es")):
+                if alias:
+                    alias_map[str(alias).strip().lower()] = key
+        return alias_map or fallback
+    except Exception:
+        return fallback
+
+
+def normalize_box_color(value, alias_map: dict) -> tuple[str, bool]:
+    """Normalize an Excel cell into a canonical box_color key.
+
+    Returns (key, is_default). is_default=True means the cell was empty
+    and we fell back to the default color.
+    """
+    s = "" if value is None else str(value).strip()
+    if not s or s.lower() == "nan":
+        return DEFAULT_BOX_COLOR, True
+    key = alias_map.get(s.lower())
+    if key:
+        return key, False
+    return s, False  # caller validates against alias_map for unknowns
+
 # ─── Default dimensions (mm) ────────────────────────────
 WALL_DEFAULT_DEPTH = 304.8      # 12"
 BASE_DEFAULT_DEPTH = 609.6      # 24"
@@ -112,6 +163,7 @@ def calculate_panels(
     adj_shelf: int,
     fixed_shelf: int,
     cab_id: str = "",
+    color: str = DEFAULT_BOX_COLOR,
 ) -> list[dict]:
     """
     Calculate all board pieces for a single cabinet.
@@ -191,6 +243,7 @@ def calculate_panels(
     for p in parts:
         p["cab_type"] = cab_type
         p["cab_id"] = cab_id
+        p["color"] = color
 
     return parts
 
@@ -238,19 +291,41 @@ def process_order(order_path: str, output_path: str = None, include_skipped_item
             col_map["CabNo"] = c
         elif cl in ("abc item", "item"):
             col_map["Item"] = c
+        elif ("box" in cl and "color" in cl) or cl in ("color", "颜色", "颜 色"):
+            col_map["BoxColor"] = c
 
     has_type_col = "Type" in col_map
+    color_alias_map = load_box_colors()
+    has_color_col = "BoxColor" in col_map
 
     all_parts = []
     skipped_items: list[dict] = []
+
+    # Pre-scan: count how many times each ABC Item code appears
+    # so we only add a disambiguating suffix when there are duplicates.
+    item_counts: dict[str, int] = {}
+    for _, row in df.iterrows():
+        item_val = str(row.get(col_map.get("Item", ""), "")).strip()
+        if item_val:
+            item_counts[item_val] = item_counts.get(item_val, 0) + 1
+    # Running counters for duplicate items
+    item_seen: dict[str, int] = {}
 
     for idx, row in df.iterrows():
         # ── Cabinet ID ──
         cab_no = row.get(col_map.get("CabNo", ""), idx + 1)
         item = str(row.get(col_map.get("Item", ""), "")).strip()
-        # Use "CabinetNo-ABCItem" to ensure uniqueness — multiple cabinets
-        # can share the same ABC Item code (e.g., two W3333T cabinets).
-        cab_id = f"{cab_no}-{item}" if item else f"C{cab_no}"
+        # Use ABC Item code directly (e.g. "W2745T").
+        # When the same item appears multiple times, append a counter
+        # suffix to ensure uniqueness (e.g. "W3045T", "W3045T(2)").
+        if item:
+            item_seen[item] = item_seen.get(item, 0) + 1
+            if item_counts.get(item, 1) > 1:
+                cab_id = f"{item}({item_seen[item]})" if item_seen[item] > 1 else item
+            else:
+                cab_id = item
+        else:
+            cab_id = f"C{cab_no}"
 
         # ── Cabinet Type ──
         if has_type_col:
@@ -266,6 +341,21 @@ def process_order(order_path: str, output_path: str = None, include_skipped_item
                 "row": int(idx) + 2,
             })
             continue
+
+        # ── Box Color ──
+        raw_color = row.get(col_map.get("BoxColor", ""), "") if has_color_col else ""
+        color_key, is_default = normalize_box_color(raw_color, color_alias_map)
+        if color_key not in set(color_alias_map.values()):
+            skipped_items.append({
+                "cab_id": cab_id,
+                "item": item,
+                "type": cab_type,
+                "row": int(idx) + 2,
+                "reason": f"unknown Box Color '{raw_color}'",
+            })
+            continue
+        if is_default and has_color_col:
+            print(f"  ℹ️  {cab_id}: Box Color 空 → 使用默认 {DEFAULT_BOX_COLOR}")
 
         # ── Dimensions (inches → mm) ──
         W_in = parse_imperial(row.get(col_map.get("W", ""), 0))
@@ -308,6 +398,7 @@ def process_order(order_path: str, output_path: str = None, include_skipped_item
             adj_shelf=adj_shelf,
             fixed_shelf=fixed_shelf,
             cab_id=cab_id,
+            color=color_key,
         )
 
         # Expand by cabinet Qty (e.g. if Qty=2, duplicate all panels)
@@ -329,10 +420,12 @@ def process_order(order_path: str, output_path: str = None, include_skipped_item
                 "Height": p["length"],    # Length direction (along board)
                 "Width": p["width"],      # Width direction
                 "qty": 1,
+                "color": p.get("color", DEFAULT_BOX_COLOR),
             }
             records.append(rec)
             cb = cabinet_breakdown.setdefault(p["cab_id"], {
                 "cab_type": p["cab_type"],
+                "color": p.get("color", DEFAULT_BOX_COLOR),
                 "count": 0,
                 "parts": [],
             })

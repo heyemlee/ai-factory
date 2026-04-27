@@ -1,8 +1,9 @@
 "use client";
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { CheckCircle2, Plus, Minus, Loader2 } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
+import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
 import type { Board, Order } from "./types";
 
 export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
@@ -11,45 +12,68 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
   onConfirmed: () => void;
   onClose: () => void;
 }) {
-  const { t } = useLanguage();
-  /* Compute board usage by board_type */
+  const { t, locale } = useLanguage();
+  const { getColor } = useBoxColors();
+  /* Compute board usage by board_type + color */
   const boardUsage = useMemo(() => {
-    const usage: Record<string, number> = {};
+    const usage: Record<string, { board_type: string; color: string; planned: number }> = {};
     for (const b of boards) {
       const bt = b.board;
-      usage[bt] = (usage[bt] || 0) + 1;
+      const color = b.color || DEFAULT_BOX_COLOR;
+      const key = `${bt}|${color}`;
+      if (!usage[key]) usage[key] = { board_type: bt, color, planned: 0 };
+      usage[key].planned += 1;
     }
-    return Object.entries(usage).map(([board_type, count]) => ({
-      board_type,
-      planned: count,
-    }));
+    return Object.entries(usage).map(([key, row]) => ({ key, ...row }));
   }, [boards]);
 
   const [extras, setExtras] = useState<Record<string, number>>(() => {
     const init: Record<string, number> = {};
-    boardUsage.forEach((u) => { init[u.board_type] = 0; });
+    boardUsage.forEach((u) => { init[u.key] = 0; });
     return init;
   });
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stockByKey, setStockByKey] = useState<Record<string, number | null>>({});
 
-  const adjustExtra = (bt: string, delta: number) => {
+  useEffect(() => {
+    let alive = true;
+    async function loadStock() {
+      const entries: Record<string, number | null> = {};
+      await Promise.all(boardUsage.map(async (u) => {
+        const { data } = await supabase
+          .from("inventory")
+          .select("stock")
+          .eq("board_type", u.board_type)
+          .eq("color", u.color)
+          .maybeSingle();
+        entries[u.key] = data?.stock ?? null;
+      }));
+      if (alive) setStockByKey(entries);
+    }
+    loadStock();
+    return () => {
+      alive = false;
+    };
+  }, [boardUsage]);
+
+  const adjustExtra = (key: string, delta: number) => {
     setExtras((prev) => ({
       ...prev,
-      [bt]: Math.max(0, (prev[bt] || 0) + delta),
+      [key]: Math.max(0, (prev[key] || 0) + delta),
     }));
   };
 
   const recoveredCounts = useMemo(() => {
     const recovered = order.cut_result_json?.recovered_inventory ?? [];
-    const counts: Record<string, number> = {};
+    const counts: Record<string, { board_type: string; color: string; count: number }> = {};
     for (const r of recovered) {
-      counts[r.board_type] = (counts[r.board_type] || 0) + 1;
+      const color = r.color || DEFAULT_BOX_COLOR;
+      const key = `${r.board_type}|${color}`;
+      if (!counts[key]) counts[key] = { board_type: r.board_type, color, count: 0 };
+      counts[key].count += 1;
     }
-    return Object.entries(counts).map(([board_type, count]) => ({
-      board_type,
-      count,
-    }));
+    return Object.entries(counts).map(([key, row]) => ({ key, ...row }));
   }, [order.cut_result_json]);
 
   const handleConfirm = async () => {
@@ -59,7 +83,7 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
     try {
       // 1. Deduct inventory for each board_type (planned + extra)
       for (const u of boardUsage) {
-        const totalUsed = u.planned + (extras[u.board_type] || 0);
+        const totalUsed = u.planned + (extras[u.key] || 0);
         if (totalUsed <= 0) continue;
 
         // Get current stock
@@ -67,6 +91,7 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
           .from("inventory")
           .select("stock")
           .eq("board_type", u.board_type)
+          .eq("color", u.color)
           .single();
 
         if (invData) {
@@ -74,30 +99,36 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
           await supabase
             .from("inventory")
             .update({ stock: newStock })
-            .eq("board_type", u.board_type);
+            .eq("board_type", u.board_type)
+            .eq("color", u.color);
         }
       }
 
       // 2. Increment inventory for recovered scrap pieces (T0 leftover → T1 stock)
       const recovered = order.cut_result_json?.recovered_inventory ?? [];
       if (recovered.length > 0) {
-        const recoveredCounts: Record<string, number> = {};
+        const recoveredCounts: Record<string, { board_type: string; color: string; count: number }> = {};
         for (const r of recovered) {
-          recoveredCounts[r.board_type] = (recoveredCounts[r.board_type] || 0) + 1;
+          const color = r.color || DEFAULT_BOX_COLOR;
+          const key = `${r.board_type}|${color}`;
+          if (!recoveredCounts[key]) recoveredCounts[key] = { board_type: r.board_type, color, count: 0 };
+          recoveredCounts[key].count += 1;
         }
-        for (const [bt, count] of Object.entries(recoveredCounts)) {
+        for (const row of Object.values(recoveredCounts)) {
           const { data: invData } = await supabase
             .from("inventory")
             .select("stock")
-            .eq("board_type", bt)
+            .eq("board_type", row.board_type)
+            .eq("color", row.color)
             .single();
           if (invData) {
             await supabase
               .from("inventory")
-              .update({ stock: invData.stock + count })
-              .eq("board_type", bt);
+              .update({ stock: invData.stock + row.count })
+              .eq("board_type", row.board_type)
+              .eq("color", row.color);
           } else {
-            console.warn(`Recovered board_type "${bt}" not found in inventory; skipping increment.`);
+            console.warn(`Recovered board_type "${row.board_type}" (${row.color}) not found in inventory; skipping increment.`);
           }
         }
       }
@@ -135,7 +166,14 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
       // 4. Build extra_boards_used array
       const extraBoardsUsed = Object.entries(extras)
         .filter(([, count]) => count > 0)
-        .map(([board_type, count]) => ({ board_type, count }));
+        .map(([key, count]) => {
+          const usage = boardUsage.find((u) => u.key === key);
+          return {
+            board_type: usage?.board_type || key.split("|")[0],
+            color: usage?.color || key.split("|")[1] || DEFAULT_BOX_COLOR,
+            count,
+          };
+        });
 
       // 5. Update order status → cut_done
       await supabase
@@ -158,7 +196,7 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/25 backdrop-blur-sm" />
       <div
-        className="relative bg-white w-full max-w-lg rounded-2xl shadow-[0_8px_40px_rgba(0,0,0,0.15)] border border-black/5 overflow-hidden flex flex-col max-h-[90vh]"
+        className="relative bg-white w-full max-w-3xl rounded-2xl shadow-[0_8px_40px_rgba(0,0,0,0.15)] border border-black/5 overflow-hidden flex flex-col max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
         style={{ animation: "modalIn 0.22s cubic-bezier(0.16, 1, 0.3, 1)" }}
       >
@@ -185,22 +223,39 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
             <thead>
               <tr className="border-b border-border/40">
                 <th className="text-left py-2 font-semibold text-apple-gray">{t("orderDetail.modalThBoardType")}</th>
+                <th className="text-center py-2 font-semibold text-apple-gray">{t("orderDetail.stock")}</th>
                 <th className="text-center py-2 font-semibold text-apple-gray">{t("orderDetail.modalThPlanned")}</th>
                 <th className="text-center py-2 font-semibold text-apple-gray">{t("orderDetail.modalThExtra")}</th>
                 <th className="text-center py-2 font-semibold text-apple-gray">{t("orderDetail.modalThTotal")}</th>
+                <th className="text-center py-2 font-semibold text-apple-gray">{t("orderDetail.missing")}</th>
               </tr>
             </thead>
             <tbody>
               {boardUsage.map((u) => {
-                const extra = extras[u.board_type] || 0;
+                const extra = extras[u.key] || 0;
+                const total = u.planned + extra;
+                const stock = stockByKey[u.key];
+                const shortage = stock == null ? total : Math.max(0, total - stock);
+                const after = stock == null ? null : Math.max(0, stock - total);
+                const boxColor = getColor(u.color);
                 return (
-                  <tr key={u.board_type} className="border-b border-border/20">
-                    <td className="py-3 font-medium">{u.board_type}</td>
+                  <tr key={u.key} className="border-b border-border/20">
+                    <td className="py-3 font-medium">
+                      <div>{u.board_type}</div>
+                      <div className="mt-0.5 inline-flex items-center gap-1.5 text-[11px] text-apple-gray">
+                        <span className="w-2.5 h-2.5 rounded-full border border-black/10" style={{ backgroundColor: boxColor.hex_color }} />
+                        {colorLabel(boxColor, locale)}
+                      </div>
+                    </td>
+                    <td className="py-3 text-center text-apple-gray">
+                      {stock == null ? "0" : stock}
+                      {after !== null && <span className="block text-[10px] text-black/35">→ {after}</span>}
+                    </td>
                     <td className="py-3 text-center text-apple-gray">{u.planned}</td>
                     <td className="py-3">
                       <div className="flex items-center justify-center gap-2">
                         <button
-                          onClick={() => adjustExtra(u.board_type, -1)}
+                          onClick={() => adjustExtra(u.key, -1)}
                           disabled={extra <= 0}
                           className="w-6 h-6 rounded-full bg-black/5 hover:bg-black/10 flex items-center justify-center text-apple-gray disabled:opacity-30 transition-colors"
                         >
@@ -210,14 +265,17 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
                           {extra}
                         </span>
                         <button
-                          onClick={() => adjustExtra(u.board_type, 1)}
+                          onClick={() => adjustExtra(u.key, 1)}
                           className="w-6 h-6 rounded-full bg-black/5 hover:bg-black/10 flex items-center justify-center text-apple-gray transition-colors"
                         >
                           <Plus size={12} />
                         </button>
                       </div>
                     </td>
-                    <td className="py-3 text-center font-bold text-foreground">{u.planned + extra}</td>
+                    <td className="py-3 text-center font-bold text-foreground">{total}</td>
+                    <td className={`py-3 text-center font-bold ${shortage > 0 ? "text-apple-red" : "text-apple-green"}`}>
+                      {shortage}
+                    </td>
                   </tr>
                 );
               })}
@@ -245,8 +303,8 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
                   </thead>
                   <tbody>
                     {recoveredCounts.map((r) => (
-                      <tr key={r.board_type} className="border-b border-apple-green/5 last:border-0">
-                        <td className="py-2.5 px-3 font-medium text-apple-green/90">{r.board_type}</td>
+                      <tr key={r.key} className="border-b border-apple-green/5 last:border-0">
+                        <td className="py-2.5 px-3 font-medium text-apple-green/90">{r.board_type} <span className="text-[11px] opacity-70">[{r.color}]</span></td>
                         <td className="py-2.5 px-3 text-center font-bold text-apple-green">+{r.count}</td>
                       </tr>
                     ))}

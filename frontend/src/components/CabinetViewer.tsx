@@ -29,24 +29,12 @@ interface Part {
 interface Cabinet {
   cab_id: string;
   cab_type: string;
+  color?: string;
   parts: Part[];
   dimensions: { width: number; height: number; depth: number };
 }
 
-interface CabinetViewerProps {
-  cabinet: Cabinet;
-}
-
 const THICKNESS = 18; // 18mm standard board thickness
-
-// Material for the boards - standard transparent to avoid WebGL crashes with transmission
-const boardMaterial = new THREE.MeshStandardMaterial({
-  color: "#d4a373", // Warm wood/amber base color
-  roughness: 0.3,
-  metalness: 0.1,
-  transparent: true,
-  opacity: 0.85,
-});
 
 const highlightedMaterial = new THREE.MeshStandardMaterial({
   color: "#3b82f6", // Apple blue
@@ -62,12 +50,14 @@ function Board3D({
   part, 
   position, 
   args, 
+  material,
   isHovered, 
   onHover 
 }: { 
   part: Part; 
   position: [number, number, number]; 
   args: [number, number, number];
+  material: THREE.MeshStandardMaterial;
   isHovered: boolean;
   onHover: (hovered: boolean) => void;
 }) {
@@ -78,7 +68,7 @@ function Board3D({
       receiveShadow
       onPointerOver={(e) => { e.stopPropagation(); onHover(true); }}
       onPointerOut={(e) => { e.stopPropagation(); onHover(false); }}
-      material={isHovered ? highlightedMaterial : boardMaterial}
+      material={isHovered ? highlightedMaterial : material}
     >
       <boxGeometry args={args} />
       <Edges scale={1.001} threshold={15} color={isHovered ? "#60a5fa" : "#a87747"} />
@@ -86,12 +76,20 @@ function Board3D({
   );
 }
 
-export function Cabinet3DScene({ cabinet, hoveredPartId, setHoveredPartId }: { 
+export function Cabinet3DScene({ cabinet, hoveredPartId, setHoveredPartId, boxColorHex }: { 
   cabinet: Cabinet;
   hoveredPartId: string | null;
   setHoveredPartId: (id: string | null) => void;
+  boxColorHex?: string;
 }) {
   const { width: cabW, height: cabH, depth: cabD } = cabinet.dimensions;
+  const material = useMemo(() => new THREE.MeshStandardMaterial({
+    color: boxColorHex || "#d4a373",
+    roughness: 0.3,
+    metalness: 0.1,
+    transparent: true,
+    opacity: 0.85,
+  }), [boxColorHex]);
 
   // We map the parts to 3D positions based on heuristics
   const boards3D = useMemo(() => {
@@ -137,16 +135,20 @@ export function Cabinet3DScene({ cabinet, hoveredPartId, setHoveredPartId }: {
       return { h, w };
     };
 
+    // Z offset: panels (top/bottom/shelf) sit in front of the back panel
+    // Back panel occupies the rear sT of depth, so inner panels shift forward by sT/2
+    const zShift = sT / 2;
+
     // Top
     grouped.top.forEach((p) => {
       const { h, w } = getDims(p);
-      addBoard(p, 0, sH - sT/2, 0, h * SCALE, sT, w * SCALE);
+      addBoard(p, 0, sH - sT/2, zShift, h * SCALE, sT, w * SCALE);
     });
 
     // Bottom
     grouped.bottom.forEach((p) => {
       const { h, w } = getDims(p);
-      addBoard(p, 0, sT/2, 0, h * SCALE, sT, w * SCALE);
+      addBoard(p, 0, sT/2, zShift, h * SCALE, sT, w * SCALE);
     });
 
     // Sides (Left and Right): Height=柜高(Y), Width=柜深(Z)
@@ -176,15 +178,16 @@ export function Cabinet3DScene({ cabinet, hoveredPartId, setHoveredPartId }: {
     grouped.shelf.forEach((p, i) => {
       const { h, w } = getDims(p);
       const spacing = sH / (numShelves + 1);
-      addBoard(p, 0, spacing * (i + 1), 0, h * SCALE, sT, w * SCALE);
+      addBoard(p, 0, spacing * (i + 1), zShift, h * SCALE, sT, w * SCALE);
     });
 
     // Stretchers (拉条): Height=柜宽-36(X), Width=101.6mm拉条深度(Z)
+    // Front stretcher at the front edge, back stretcher just in front of back panel
     grouped.stretcher.forEach((p, i) => {
       const { h, w } = getDims(p);
       const pDepth = w * SCALE; // 拉条深度 101.6mm
       const isFront = i % 2 === 0;
-      const zPos = isFront ? sD/2 - pDepth/2 : -sD/2 + pDepth/2;
+      const zPos = isFront ? sD/2 - pDepth/2 : -sD/2 + sT + pDepth/2;
       addBoard(p, 0, sH - sT/2, zPos, h * SCALE, sT, pDepth);
     });
 
@@ -211,6 +214,7 @@ export function Cabinet3DScene({ cabinet, hoveredPartId, setHoveredPartId }: {
             part={b.part}
             position={b.position}
             args={b.args}
+            material={material}
             isHovered={hoveredPartId === b.part.part_id}
             onHover={(h) => setHoveredPartId(h ? b.part.part_id : null)}
           />
@@ -222,16 +226,17 @@ export function Cabinet3DScene({ cabinet, hoveredPartId, setHoveredPartId }: {
   );
 }
 
-export default function CabinetCanvas({ cabinet, hoveredPartId, setHoveredPartId }: { 
+export default function CabinetCanvas({ cabinet, hoveredPartId, setHoveredPartId, boxColorHex }: { 
   cabinet: Cabinet;
   hoveredPartId: string | null;
   setHoveredPartId: (id: string | null) => void;
+  boxColorHex?: string;
 }) {
   const { t } = useLanguage();
   return (
     <div className="w-full h-full relative cursor-grab active:cursor-grabbing bg-[#f8fafc] rounded-2xl overflow-hidden border border-black/5 shadow-inner">
       <Canvas camera={{ position: [12, 10, 15], fov: 45 }}>
-        <Cabinet3DScene cabinet={cabinet} hoveredPartId={hoveredPartId} setHoveredPartId={setHoveredPartId} />
+        <Cabinet3DScene cabinet={cabinet} hoveredPartId={hoveredPartId} setHoveredPartId={setHoveredPartId} boxColorHex={boxColorHex} />
       </Canvas>
       <div className="absolute top-4 left-4 pointer-events-none">
         <div className="flex items-center gap-2 px-3 py-1.5 bg-white/80 backdrop-blur rounded-lg border border-black/5 shadow-sm text-[12px] font-medium text-apple-gray">

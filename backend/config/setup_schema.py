@@ -21,10 +21,35 @@ SQL_SCHEMA = """
 -- AI Factory — Supabase Schema
 -- ════════════════════════════════════════════════
 
+-- 0. Box Colors registry (drives non-hard-coded color options)
+CREATE TABLE IF NOT EXISTS box_colors (
+  key text PRIMARY KEY,
+  name_en text NOT NULL,
+  name_zh text NOT NULL,
+  name_es text NOT NULL,
+  hex_color text NOT NULL DEFAULT '#FFFFFF',
+  sort_order int NOT NULL DEFAULT 0,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS material_options (
+  key text PRIMARY KEY,
+  name_en text NOT NULL,
+  name_zh text NOT NULL,
+  name_es text NOT NULL,
+  sort_order int NOT NULL DEFAULT 0,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
 -- 1. Inventory table (replaces data/t1_inventory.xlsx)
 CREATE TABLE IF NOT EXISTS inventory (
   id serial PRIMARY KEY,
-  board_type text UNIQUE NOT NULL,
+  board_type text NOT NULL,
+  color text NOT NULL DEFAULT 'WhiteBirch' REFERENCES box_colors(key) ON UPDATE CASCADE,
   name text NOT NULL,
   material text DEFAULT 'MDF',
   category text DEFAULT 'main' CHECK (category IN ('main', 'sub', 'aux')),
@@ -34,7 +59,8 @@ CREATE TABLE IF NOT EXISTS inventory (
   stock int NOT NULL DEFAULT 0,
   threshold int NOT NULL DEFAULT 10,
   unit text DEFAULT 'pcs',
-  updated_at timestamptz DEFAULT now()
+  updated_at timestamptz DEFAULT now(),
+  CONSTRAINT inventory_board_type_color_uk UNIQUE (board_type, color)
 );
 
 -- 2. Orders table (task queue)
@@ -80,10 +106,24 @@ CREATE TRIGGER trg_inventory_updated
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS trg_box_colors_updated ON box_colors;
+CREATE TRIGGER trg_box_colors_updated
+  BEFORE UPDATE ON box_colors
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS trg_material_options_updated ON material_options;
+CREATE TRIGGER trg_material_options_updated
+  BEFORE UPDATE ON material_options
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at();
+
 -- Enable RLS but allow all for now (will tighten later with auth)
 ALTER TABLE inventory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bom_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE box_colors ENABLE ROW LEVEL SECURITY;
+ALTER TABLE material_options ENABLE ROW LEVEL SECURITY;
 
 -- Permissive policies (open for development)
 DO $$
@@ -97,12 +137,30 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'allow_all_bom') THEN
     CREATE POLICY allow_all_bom ON bom_history FOR ALL USING (true) WITH CHECK (true);
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'allow_all_box_colors') THEN
+    CREATE POLICY allow_all_box_colors ON box_colors FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'allow_all_material_options') THEN
+    CREATE POLICY allow_all_material_options ON material_options FOR ALL USING (true) WITH CHECK (true);
+  END IF;
 END $$;
 """
+
+SEED_BOX_COLORS = [
+    {"key": "WhiteBirch",    "name_en": "White Birch Plywood",    "name_zh": "白桦木胶合板",     "name_es": "Contrachapado de Abedul Blanco", "hex_color": "#F5DEB3", "sort_order": 1},
+    {"key": "WhiteMelamine", "name_en": "White Melamine Plywood", "name_zh": "白色三聚氰胺板",   "name_es": "Melamina Blanca",                 "hex_color": "#FAFAFA", "sort_order": 2},
+]
+
+SEED_MATERIAL_OPTIONS = [
+    {"key": "MDF",       "name_en": "MDF",        "name_zh": "中密度纤维板", "name_es": "MDF",           "sort_order": 1},
+    {"key": "Plywood",   "name_en": "Plywood",    "name_zh": "胶合板",       "name_es": "Contrachapado", "sort_order": 2},
+    {"key": "SolidWood", "name_en": "Solid Wood", "name_zh": "实木",         "name_es": "Madera Maciza", "sort_order": 3},
+]
 
 SEED_INVENTORY = [
     {
         "board_type": "T0-1219x2438",
+        "color": "WhiteBirch",
         "name": "T0 Full Sheet",
         "material": "MDF",
         "category": "main",
@@ -115,6 +173,7 @@ SEED_INVENTORY = [
     },
     {
         "board_type": "T1-305x2438",
+        "color": "WhiteBirch",
         "name": "T1 Wall Stock (12\")",
         "material": "MDF",
         "category": "main",
@@ -127,6 +186,7 @@ SEED_INVENTORY = [
     },
     {
         "board_type": "T1-610x2438",
+        "color": "WhiteBirch",
         "name": "T1 Base/Tall Stock (24\")",
         "material": "MDF",
         "category": "main",
@@ -139,6 +199,7 @@ SEED_INVENTORY = [
     },
     {
         "board_type": "S001-EdgeBand",
+        "color": "WhiteBirch",
         "name": "Edge Banding 1mm White",
         "material": "PVC",
         "category": "sub",
@@ -151,6 +212,7 @@ SEED_INVENTORY = [
     },
     {
         "board_type": "A001-Hinge",
+        "color": "WhiteBirch",
         "name": "Soft Close Hinge",
         "material": "Steel",
         "category": "aux",
@@ -204,16 +266,31 @@ def run():
     # Test connectivity
     print("🔗 Testing Supabase connection...")
     try:
+        # Seed box_colors first (idempotent upsert)
+        print("📝 Seeding box_colors registry...")
+        try:
+            supabase.table("box_colors").upsert(SEED_BOX_COLORS, on_conflict="key").execute()
+            print(f"✅ Box colors registry ready ({len(SEED_BOX_COLORS)} default colors)")
+        except Exception as bc_err:
+            print(f"⚠️  Box colors upsert failed (table may not exist yet): {bc_err}")
+
+        print("📝 Seeding material options...")
+        try:
+            supabase.table("material_options").upsert(SEED_MATERIAL_OPTIONS, on_conflict="key").execute()
+            print(f"✅ Material options ready ({len(SEED_MATERIAL_OPTIONS)} default materials)")
+        except Exception as mat_err:
+            print(f"⚠️  Material options upsert failed (table may not exist yet): {mat_err}")
+
         result = supabase.table("inventory").select("*").execute()
         print(f"✅ Connected! inventory table has {len(result.data)} rows")
-        
+
         if len(result.data) == 0:
             print("📝 Seeding initial inventory data...")
             result = supabase.table("inventory").insert(SEED_INVENTORY).execute()
             print(f"✅ Seeded {len(result.data)} inventory items")
         else:
             print("ℹ️  Inventory already has data, skipping seed")
-            
+
     except Exception as e:
         err_msg = str(e)
         if "relation" in err_msg and "does not exist" in err_msg:

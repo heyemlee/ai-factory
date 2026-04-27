@@ -3,6 +3,9 @@ import { useState, useEffect } from "react";
 import { Search, Edit2, Save, X, Trash2, AlertOctagon, Plus, ChevronDown } from "lucide-react";
 import clsx from "clsx";
 import { supabase } from "@/lib/supabase";
+import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
+import { DEFAULT_MATERIAL, materialLabel, useMaterialOptions } from "@/lib/material_options";
+import { useLanguage } from "@/lib/i18n";
 
 type ItemCategory = "main" | "sub" | "aux";
 
@@ -18,9 +21,20 @@ interface InventoryItem {
   stock: number;
   threshold: number;
   unit: string;
+  color?: string;
+}
+
+function inventoryErrorMessage(message: string) {
+  if (message.includes("'color' column") || message.includes("schema cache")) {
+    return "Database migration is not applied yet: inventory.color is missing in Supabase. Run backend/config/migration_box_colors.sql in Supabase SQL Editor, then retry.";
+  }
+  return message;
 }
 
 export default function Inventory() {
+  const { t, locale } = useLanguage();
+  const { colors, getColor } = useBoxColors();
+  const { materials, getMaterial } = useMaterialOptions();
   const [activeTab, setActiveTab] = useState<ItemCategory>("main");
   const [searchQuery, setSearchQuery] = useState("");
   const [items, setItems] = useState<InventoryItem[]>([]);
@@ -72,6 +86,7 @@ export default function Inventory() {
     const { error } = await supabase
       .from("inventory")
       .update({
+        board_type: editForm.board_type,
         name: editForm.name,
         material: editForm.material,
         height: editForm.height,
@@ -79,6 +94,7 @@ export default function Inventory() {
         thickness: editForm.thickness,
         stock: editForm.stock,
         threshold: editForm.threshold,
+        color: activeTab === "main" ? (editForm.color || DEFAULT_BOX_COLOR) : editForm.color,
       })
       .eq("id", id);
 
@@ -88,6 +104,8 @@ export default function Inventory() {
           item.id === id ? { ...item, ...editForm } as InventoryItem : item
         )
       );
+    } else {
+      alert(inventoryErrorMessage(error.message));
     }
     setEditingId(null);
   };
@@ -103,14 +121,15 @@ export default function Inventory() {
   const [addForm, setAddForm] = useState<Partial<InventoryItem>>({
     board_type: "",
     name: "",
-    material: "MDF",
+    material: DEFAULT_MATERIAL,
     category: "main",
     height: 2438.4,
     width: 0,
     thickness: 18,
     stock: 0,
     threshold: 10,
-    unit: "pcs"
+    unit: "pcs",
+    color: DEFAULT_BOX_COLOR,
   });
 
   const confirmDelete = async () => {
@@ -143,7 +162,7 @@ export default function Inventory() {
     try {
       const { data, error } = await supabase.from("inventory").insert([addForm]).select();
       if (error) {
-        setAddFormError(error.message);
+        setAddFormError(inventoryErrorMessage(error.message));
         setAdding(false);
         return;
       }
@@ -155,7 +174,7 @@ export default function Inventory() {
       setShowAddModal(false);
       setCategoryDropdownOpen(false);
       setAddForm({
-        board_type: "", name: "", material: "MDF", category: activeTab, height: 2438.4, width: 0, thickness: 18, stock: 0, threshold: 10, unit: "pcs"
+        board_type: "", name: "", material: DEFAULT_MATERIAL, category: activeTab, height: 2438.4, width: 0, thickness: 18, stock: 0, threshold: 10, unit: "pcs", color: DEFAULT_BOX_COLOR
       });
       setAdding(false);
     } catch (e: unknown) {
@@ -173,7 +192,7 @@ export default function Inventory() {
         </div>
         <button
           onClick={() => {
-            setAddForm(prev => ({ ...prev, category: activeTab }));
+            setAddForm(prev => ({ ...prev, category: activeTab, color: prev.color || DEFAULT_BOX_COLOR }));
             setShowAddModal(true);
           }}
           className="bg-apple-blue text-white px-5 py-2 rounded-full text-[14px] font-medium hover:bg-apple-blue/90 transition-colors shadow-sm shrink-0 whitespace-nowrap flex items-center gap-2"
@@ -225,6 +244,9 @@ export default function Inventory() {
                 <th className="py-4 px-3 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border w-12 text-center">#</th>
                 <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">ID</th>
                 <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">Name</th>
+                {activeTab === "main" && (
+                  <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">{t("inventory.color")}</th>
+                )}
                 {(activeTab === "main" || activeTab === "sub") && (
                   <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">Dimensions</th>
                 )}
@@ -240,22 +262,64 @@ export default function Inventory() {
                 return (
                   <tr key={item.id} className={clsx("transition-colors", isEditing ? "bg-apple-blue/5" : "hover:bg-black/[0.01]")}>
                     <td className="py-4 px-3 text-[13px] text-apple-gray text-center font-mono">{rowIndex + 1}</td>
-                    <td className="py-4 px-6 text-[14px] text-apple-gray">{item.board_type}</td>
-
                     <td className="py-4 px-6">
                       {isEditing ? (
                         <input
-                          className="bg-white border border-border rounded-lg px-3 py-1.5 text-[14px] w-full focus:outline-none focus:border-apple-blue"
-                          value={editForm.name || ""}
-                          onChange={e => setEditForm({...editForm, name: e.target.value})}
+                          className="bg-white border border-border rounded-lg px-3 py-1.5 text-[14px] w-44 focus:outline-none focus:border-apple-blue font-mono"
+                          value={editForm.board_type || ""}
+                          onChange={e => setEditForm({...editForm, board_type: e.target.value})}
                         />
+                      ) : (
+                        <span className="text-[14px] text-apple-gray font-mono">{item.board_type}</span>
+                      )}
+                    </td>
+
+                    <td className="py-4 px-6">
+                      {isEditing ? (
+                        <div className="space-y-2 min-w-48">
+                          <input
+                            className="bg-white border border-border rounded-lg px-3 py-1.5 text-[14px] w-full focus:outline-none focus:border-apple-blue"
+                            value={editForm.name || ""}
+                            onChange={e => setEditForm({...editForm, name: e.target.value})}
+                          />
+                          <select
+                            className="bg-white border border-border rounded-lg px-3 py-1.5 text-[13px] w-full focus:outline-none focus:border-apple-blue"
+                            value={editForm.material || DEFAULT_MATERIAL}
+                            onChange={e => setEditForm({...editForm, material: e.target.value})}
+                          >
+                            {materials.map(material => (
+                              <option key={material.key} value={material.key}>{materialLabel(material, locale)}</option>
+                            ))}
+                          </select>
+                        </div>
                       ) : (
                         <div>
                           <div className="font-medium text-[15px]">{item.name}</div>
-                          <div className="text-[13px] text-apple-gray mt-0.5">{item.material}</div>
+                          <div className="text-[13px] text-apple-gray mt-0.5">{materialLabel(getMaterial(item.material), locale)}</div>
                         </div>
                       )}
                     </td>
+
+                    {activeTab === "main" && (
+                      <td className="py-4 px-6">
+                        {isEditing ? (
+                          <select
+                            className="bg-white border border-border rounded-lg px-3 py-1.5 text-[14px] w-full min-w-44 focus:outline-none focus:border-apple-blue"
+                            value={editForm.color || DEFAULT_BOX_COLOR}
+                            onChange={e => setEditForm({...editForm, color: e.target.value})}
+                          >
+                            {colors.map(color => (
+                              <option key={color.key} value={color.key}>{colorLabel(color, locale)}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <div className="inline-flex items-center gap-2 text-[14px]">
+                            <span className="w-3 h-3 rounded-full border border-black/10" style={{ backgroundColor: getColor(item.color).hex_color }} />
+                            <span>{colorLabel(getColor(item.color), locale)}</span>
+                          </div>
+                        )}
+                      </td>
+                    )}
 
                     {(activeTab === "main" || activeTab === "sub") && (
                       <td className="py-4 px-6 text-[15px] text-foreground">
@@ -401,7 +465,11 @@ export default function Inventory() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[13px] font-medium text-apple-gray mb-1">Material</label>
-                  <input type="text" value={addForm.material} onChange={e => setAddForm({...addForm, material: e.target.value})} className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white focus:shadow-apple border border-transparent focus:border-apple-blue/30 transition-all text-foreground" placeholder="e.g. MDF / Plywood" />
+                  <select value={addForm.material || DEFAULT_MATERIAL} onChange={e => setAddForm({...addForm, material: e.target.value})} className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white focus:shadow-apple border border-transparent focus:border-apple-blue/30 transition-all text-foreground">
+                    {materials.map(material => (
+                      <option key={material.key} value={material.key}>{materialLabel(material, locale)}</option>
+                    ))}
+                  </select>
                 </div>
                 <div className="relative">
                   <label className="block text-[13px] font-medium text-apple-gray mb-1">Category</label>
@@ -427,6 +495,21 @@ export default function Inventory() {
                   )}
                 </div>
               </div>
+
+              {addForm.category === "main" && (
+                <div>
+                  <label className="block text-[13px] font-medium text-apple-gray mb-1">{t("inventory.color")}</label>
+                  <select
+                    value={addForm.color || DEFAULT_BOX_COLOR}
+                    onChange={e => setAddForm({...addForm, color: e.target.value})}
+                    className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white focus:shadow-apple border border-transparent focus:border-apple-blue/30 transition-all text-foreground"
+                  >
+                    {colors.map(color => (
+                      <option key={color.key} value={color.key}>{colorLabel(color, locale)}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {(addForm.category === "main" || addForm.category === "sub") && (
                 <div>

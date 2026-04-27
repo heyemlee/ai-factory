@@ -8,6 +8,7 @@ export interface Part {
   component: string;
   cab_id: string;
   cab_type: string;
+  color?: string;
   rotated?: boolean;
   auto_swapped?: boolean;
 }
@@ -21,6 +22,7 @@ export interface IntegrityIssue {
 
 export interface CabinetBreakdownEntry {
   cab_type: string;
+  color?: string;
   count: number;
   parts: { part_id: string; component: string; Height: number; Width: number }[];
 }
@@ -31,6 +33,7 @@ export interface Board {
   board_type: string;
   board_size: string;
   strip_width: number;
+  color?: string;
   parts: Part[];
   trim_loss: number;
   saw_kerf: number;
@@ -56,6 +59,7 @@ export interface Board {
 
 export interface InventoryShortage {
   board_type: string;
+  color?: string;
   needed: number;
   stock: number;
   shortage: number;
@@ -64,6 +68,7 @@ export interface InventoryShortage {
 export interface RecoveredStrip {
   width: number;
   board_type: string;
+  color?: string;
   type?: string;
   label?: string;
 }
@@ -77,6 +82,15 @@ export interface CutResult {
     inventory_shortage?: InventoryShortage[];
     inventory_used?: Record<string, number>;
     board_type_breakdown?: Record<string, number>;
+    by_color?: Record<string, {
+      parts_total?: number;
+      parts_placed?: number;
+      total_parts_placed?: number;
+      boards_used: number;
+      t0_sheets_used?: number;
+      t0_recovered_strips?: number;
+      overall_utilization: number;
+    }>;
   };
   boards: Board[];
   recovered_inventory?: RecoveredStrip[];
@@ -106,12 +120,13 @@ export interface Order {
   status: string;
   cut_result_json: CutResult | null;
   cabinets_summary: string;
-  extra_boards_used?: { board_type: string; count: number }[];
+  extra_boards_used?: { board_type: string; color?: string; count: number }[];
 }
 
 export interface Cabinet {
   cab_id: string;
   cab_type: string;
+  color?: string;
   parts: Part[];
   dimensions: { width: number; height: number; depth: number };
 }
@@ -139,6 +154,7 @@ export interface EngineeringGroup {
   key: string;
   engNo: number;
   boardType: string;
+  color?: string;
   boardWidth: number;
   totalLength: number;
   trimSetting: number;

@@ -26,3 +26,6 @@ LOGS_DIR = PROJECT_ROOT / "logs"
 PANEL_THICKNESS = int(os.getenv("PANEL_THICKNESS", "18"))   # mm
 TRIM_LOSS = int(os.getenv("TRIM_LOSS", "5"))                # mm
 SAW_KERF = int(os.getenv("SAW_KERF", "5"))                  # mm
+
+# ── Box color defaults ─────────────────────
+DEFAULT_BOX_COLOR = os.getenv("DEFAULT_BOX_COLOR", "WhiteBirch")

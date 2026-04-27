@@ -91,6 +91,19 @@ def _shape_check_cut_result(result: dict) -> list:
     return errs
 
 
+def _summarize_box_colors(cabinet_breakdown: dict | None) -> str:
+    """Build a compact cabinet color distribution from cabinet_breakdown."""
+    if not cabinet_breakdown:
+        return ""
+    counts: dict[str, int] = {}
+    for cb in cabinet_breakdown.values():
+        color = cb.get("color") or "WhiteBirch"
+        counts[color] = counts.get(color, 0) + 1
+    if not counts:
+        return ""
+    return " + ".join(f"{count}×{color}" for color, count in sorted(counts.items()))
+
+
 def fetch_pending_orders():
     """Get all pending orders from Supabase."""
     result = supabase.table("orders").select("*").eq("status", "pending").order("created_at").execute()
@@ -185,6 +198,17 @@ def process_order(order: dict):
                 f"Unexpected cabinet_calculator.process_order return shape: {len(calc_result)} values"
             )
 
+        unknown_color_rows = [
+            s for s in skipped_items
+            if "unknown Box Color" in str(s.get("reason", ""))
+        ]
+        if unknown_color_rows:
+            details = "; ".join(
+                f"row {s.get('row')} {s.get('cab_id')}: {s.get('reason')}"
+                for s in unknown_color_rows
+            )
+            raise ValueError(f"Unknown Box Color in order: {details}")
+
         # Count cabinet types for summary
         import pandas as pd
         order_df = pd.read_excel(order_path)
@@ -206,6 +230,9 @@ def process_order(order: dict):
                 cab_summary = f"{len(order_df)} ({'/'.join(parts_list)})"
         if skipped_items:
             cab_summary = f"{cab_summary} + {len(skipped_items)} skipped"
+        color_summary = _summarize_box_colors(cabinet_breakdown)
+        if color_summary:
+            cab_summary = f"{cab_summary} | {color_summary}"
 
         # 3. Run Cutting Engine
         update_progress(60, "正在进行 AI 智能排版裁切计算...")
@@ -230,10 +257,17 @@ def process_order(order: dict):
             issues = result.setdefault("issues", {})
             integrity_list = issues.setdefault("integrity", [])
             for s in skipped_items:
+                code = "SKIPPED_ORDER_ROW"
+                msg = f"Row {s['row']} ({s['cab_id']}): skipped"
+                if s.get("reason"):
+                    msg = f"{msg} — {s['reason']}"
+                elif s.get("type"):
+                    code = "SKIPPED_UNKNOWN_TYPE"
+                    msg = f"Row {s['row']} ({s['cab_id']}): type '{s['type']}' not in wall/base/tall — skipped"
                 integrity_list.append({
-                    "code": "SKIPPED_UNKNOWN_TYPE",
+                    "code": code,
                     "severity": "warning",
-                    "msg": f"Row {s['row']} ({s['cab_id']}): type '{s['type']}' not in wall/base/tall — skipped",
+                    "msg": msg,
                     "ref": s,
                 })
 

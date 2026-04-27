@@ -2,6 +2,8 @@
 import React, { useMemo, useState } from "react";
 import { Printer } from "lucide-react";
 import type { Board, SizeColor, PatternNumbering, EngineeringGroup, CutResult, IntegrityIssue } from "./types";
+import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
+import { useLanguage } from "@/lib/i18n";
 import { SIZE_COLORS } from "./constants";
 import { boardFingerprint, nominalStockWidthForBoard, parseBoardDims } from "./utils";
 import { BoardTile } from "./BoardTile";
@@ -70,6 +72,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     boardWord: "板材",
     singleSheet: "1 张",
     stackBadge: "叠切 x{n}",
+    color: "颜色",
   },
   en: {
     tabLabel: "Machine Cut Plan",
@@ -120,6 +123,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     boardWord: "Board",
     singleSheet: "1 Sheet",
     stackBadge: "Stack x{n}",
+    color: "Color",
   },
   es: {
     tabLabel: "Plan de Corte de Máquina",
@@ -170,6 +174,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     boardWord: "Tablero",
     singleSheet: "1 Hoja",
     stackBadge: "Apilado x{n}",
+    color: "Color",
   },
 };
 
@@ -193,6 +198,8 @@ const PRINT_FONT_STACK = [
 ].join(", ");
 
 export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang, patternNumbering, cutResult }: { boards: Board[], orderLabel: string, machineLang: "zh" | "en" | "es", setMachineLang: (l: "zh" | "en" | "es") => void, patternNumbering: { byIndex: Record<number, number>; byFingerprint: Record<string, number>; total: number }, cutResult?: CutResult | null }) {
+  const { locale } = useLanguage();
+  const { getColor } = useBoxColors();
   const sizeColorMap = useMemo(() => {
     const map: Record<string, typeof SIZE_COLORS[0]> = {};
     const uniqueSizes = Array.from(new Set(boards.map((b) => b.board_size)));
@@ -217,7 +224,8 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     const groupMap: Record<string, Board[]> = {};
     for (const b of boards) {
       const w = b.strip_width || 0;
-      const key = `${w}_${b.board}_${b.board_size}`;
+      const color = b.color || DEFAULT_BOX_COLOR;
+      const key = `${color}|||${w}|||${b.board}|||${b.board_size}`;
       if (!groupMap[key]) groupMap[key] = [];
       groupMap[key].push(b);
     }
@@ -232,8 +240,8 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         const isT1B = typeB.toUpperCase().includes("T1");
         if (isT1A !== isT1B) return isT1A ? -1 : 1;
 
-        const wA = parseFloat(keyA.split("_")[0]);
-        const wB = parseFloat(keyB.split("_")[0]);
+        const wA = parseFloat(keyA.split("|||")[1]);
+        const wB = parseFloat(keyB.split("|||")[1]);
 
         // Non-rip before rip (rip = needs two-step, goes last)
         // Fall back to parseBoardDims width if SKU label doesn't yield a nominal width.
@@ -247,7 +255,8 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         return keyA.localeCompare(keyB);
       })
       .map(([key, grpBoards], idx) => {
-      const width = parseFloat(key.split("_")[0]);
+      const color = key.split("|||")[0] || DEFAULT_BOX_COLOR;
+      const width = parseFloat(key.split("|||")[1]);
       const sample = grpBoards[0];
       const totalLength = parseTotalLength(sample.board_size);
       const trimSetting = 5;
@@ -299,18 +308,21 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       // 组内一致性守卫 — 不同 strip_width 或 board 名称出现在同组意味着后端分组键污染
       const widthSet = new Set(grpBoards.map((b) => b.strip_width));
       const typeSet = new Set(grpBoards.map((b) => b.board));
-      const inconsistent = widthSet.size > 1 || typeSet.size > 1;
+      const colorSet = new Set(grpBoards.map((b) => b.color || DEFAULT_BOX_COLOR));
+      const inconsistent = widthSet.size > 1 || typeSet.size > 1 || colorSet.size > 1;
       if (inconsistent) {
         console.warn("[MachineCutPlan] engineering group has inconsistent strip_width/board_type", {
           key,
           widths: [...widthSet],
           types: [...typeSet],
+          colors: [...colorSet],
         });
       }
 
       return {
-        key: `w${width}`,
+        key: `${color}-w${width}`,
         engNo: idx + 1,
+        color,
         boardType,
         boardWidth: width,
         totalLength,
@@ -512,6 +524,16 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     if (Array.isArray(ii.integrity)) list.push(...ii.integrity);
     if (Array.isArray(ii.schema)) list.push(...ii.schema);
     return list.filter((issue) => {
+      if (issue.code === "STRIP_LENGTH_OVERFLOW") {
+        const ref = issue.ref as { board_id?: string } | undefined;
+        const board = boards.find((b) => b.board_id === ref?.board_id);
+        if (board) {
+          const partsLen = board.parts.reduce((sum, part) => sum + (part.cut_length || part.Height || 0), 0);
+          const kerfLen = Math.max(0, board.parts.length - 1) * (board.saw_kerf || 0);
+          const usableLen = board.usable_length || 0;
+          if (usableLen > 0 && partsLen + kerfLen <= usableLen + 0.5) return false;
+        }
+      }
       if (issue.code !== "CABINET_DIM_MISMATCH") return true;
       const ref = issue.ref as
         | {
@@ -607,6 +629,10 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                   </span>
                 )}
               </h3>
+              <div className="mt-2 inline-flex items-center gap-2 text-[13px] font-medium text-slate-600">
+                <span className="w-3 h-3 rounded-full border border-black/10" style={{ backgroundColor: getColor(grp.color).hex_color }} />
+                <span>{mt("color")}: {colorLabel(getColor(grp.color), locale)}</span>
+              </div>
             </div>
 
             {/* TOP ROW: Cut Layout Images ONLY */}

@@ -2,13 +2,16 @@
 import React, { useMemo } from "react";
 import { X } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
+import { colorLabel, useBoxColors } from "@/lib/box_colors";
 import type { Board, SizeColor } from "./types";
 import { formatWasteDimensions } from "./utils";
 
 export function BoardDetailModal({ board, color, onClose }: {
   board: Board; color: SizeColor; onClose: () => void;
 }) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
+  const { getColor } = useBoxColors();
+  const boxColor = getColor(board.color);
   const boardDims = useMemo(() => {
     if (board.board_size) {
       const p = board.board_size.split("×").map((s) => parseFloat(s.trim()));
@@ -67,7 +70,9 @@ export function BoardDetailModal({ board, color, onClose }: {
             <span className="w-4 h-4 rounded" style={{ backgroundColor: color.bg, border: `2px solid ${color.border}` }} />
             <div>
               <h3 className="text-[18px] font-semibold">{board.board_id}</h3>
-              <p className="text-[13px] text-apple-gray">{board.board} · {board.board_size}mm · {board.parts.length} {t("orderDetail.thParts")} · {board.cuts} {t("orderDetail.thCuts")}</p>
+              <p className="text-[13px] text-apple-gray">
+                {board.board} · {board.board_size}mm · {colorLabel(boxColor, locale)} · {board.parts.length} {t("orderDetail.thParts")} · {board.cuts} {t("orderDetail.thCuts")}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-3">

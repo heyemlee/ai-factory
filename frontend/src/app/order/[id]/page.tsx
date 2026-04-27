@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabase";
 import { revertCut } from "@/lib/order_actions";
 import dynamic from "next/dynamic";
 import { useLanguage } from "@/lib/i18n";
+import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
 
 /* ── Component imports ── */
 import type { Part, Board, CutResult, Order, Cabinet, PatternNumbering } from "./components/types";
@@ -23,7 +24,8 @@ import { CabinetReconciliation } from "./components/CabinetReconciliation";
 const CabinetCanvas = dynamic(() => import("@/components/CabinetViewer"), { ssr: false });
 
 export default function OrderDetail() {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
+  const { getColor } = useBoxColors();
   const params = useParams();
   const id = params?.id || "N/A";
 
@@ -36,6 +38,7 @@ export default function OrderDetail() {
   const [isReverting, setIsReverting] = useState(false);
   const [selectedCabinetId, setSelectedCabinetId] = useState<string | null>(null);
   const [hoveredPartId, setHoveredPartId] = useState<string | null>(null);
+  const [selectedColor, setSelectedColor] = useState<string>(DEFAULT_BOX_COLOR);
 
 
   useEffect(() => {
@@ -52,10 +55,79 @@ export default function OrderDetail() {
   }, [id]);
 
   const cutResult = order?.cut_result_json;
-  const boards = cutResult?.boards || [];
+  const allBoards = cutResult?.boards || [];
+  const boards = useMemo(
+    () => allBoards.filter((b) => (b.color || DEFAULT_BOX_COLOR) === selectedColor),
+    [allBoards, selectedColor]
+  );
   const summary = cutResult?.summary;
   const shortages = summary?.inventory_shortage || [];
   const orderDisplayName = order?.filename?.replace(/\.(xlsx|xls)$/i, "") || (id as string);
+
+  const colorOptions = useMemo(() => {
+    const stats: Record<string, { colorKey: string; cabinets: number; boards: number; parts: number }> = {};
+    const ensure = (colorKey: string) => {
+      if (!stats[colorKey]) stats[colorKey] = { colorKey, cabinets: 0, boards: 0, parts: 0 };
+      return stats[colorKey];
+    };
+
+    for (const b of allBoards) {
+      const color = b.color || DEFAULT_BOX_COLOR;
+      const stat = ensure(color);
+      stat.boards += 1;
+      stat.parts += b.parts?.length || 0;
+    }
+    for (const color of Object.keys(summary?.by_color || {})) {
+      ensure(color);
+    }
+    for (const entry of Object.values(cutResult?.cabinet_breakdown || {})) {
+      const color = entry.color || DEFAULT_BOX_COLOR;
+      const stat = ensure(color);
+      stat.cabinets += 1;
+      if (stat.parts === 0) stat.parts += entry.parts?.length || 0;
+    }
+    for (const shortage of shortages) {
+      const color = shortage.color || DEFAULT_BOX_COLOR;
+      ensure(color);
+    }
+    return Object.values(stats).sort((a, b) => a.colorKey.localeCompare(b.colorKey));
+  }, [allBoards, cutResult?.cabinet_breakdown, shortages, summary?.by_color]);
+
+  useEffect(() => {
+    if (colorOptions.length > 0 && !colorOptions.some((option) => option.colorKey === selectedColor)) {
+      setSelectedColor(colorOptions[0].colorKey);
+    }
+  }, [colorOptions, selectedColor]);
+
+  const selectedColorSummary = summary?.by_color?.[selectedColor];
+  const selectedBoardsUsed = selectedColorSummary?.boards_used ?? boards.length;
+  const selectedPartsPlaced = selectedColorSummary?.total_parts_placed ?? selectedColorSummary?.parts_placed ?? boards.reduce((sum, b) => sum + b.parts.length, 0);
+  const selectedUtilization = selectedColorSummary?.overall_utilization ?? (
+    boards.length > 0
+      ? boards.reduce((sum, b) => sum + b.utilization, 0) / boards.length
+      : 0
+  );
+  const selectedCutResult = useMemo<CutResult | null>(() => {
+    if (!cutResult) return null;
+    const cabinet_breakdown = cutResult.cabinet_breakdown
+      ? Object.fromEntries(
+          Object.entries(cutResult.cabinet_breakdown).filter(([, entry]) => (entry.color || DEFAULT_BOX_COLOR) === selectedColor)
+        )
+      : undefined;
+    return {
+      ...cutResult,
+      boards,
+      cabinet_breakdown,
+      recovered_inventory: cutResult.recovered_inventory?.filter((r) => (r.color || DEFAULT_BOX_COLOR) === selectedColor),
+      t0_plan: cutResult.t0_plan ? {
+        ...cutResult.t0_plan,
+        t0_sheets: cutResult.t0_plan.t0_sheets?.filter((s) => ((s as { color?: string }).color || DEFAULT_BOX_COLOR) === selectedColor),
+      } : undefined,
+    };
+  }, [cutResult, boards, selectedColor]);
+  const selectedColorStats = colorOptions.find((option) => option.colorKey === selectedColor);
+  const selectedExpectedParts = selectedColorStats?.parts || 0;
+  const selectedHasLegacyMissingCutData = boards.length === 0 && selectedExpectedParts > 0;
 
   useEffect(() => {
     document.title = `${t("orderDetail.title")} #${orderDisplayName}`;
@@ -89,7 +161,7 @@ export default function OrderDetail() {
     const fpMap: Record<string, { board: Board; index: number }[]> = {};
     for (let i = 0; i < boards.length; i++) {
       const b = boards[i];
-      const fp = boardFingerprint(b);
+      const fp = `${b.color || DEFAULT_BOX_COLOR}|${boardFingerprint(b)}`;
       if (!fpMap[fp]) fpMap[fp] = [];
       fpMap[fp].push({ board: b, index: i });
     }
@@ -135,7 +207,7 @@ export default function OrderDetail() {
     const groupMap: Record<string, Board[]> = {};
     for (const b of boards) {
       const w = b.strip_width || 0;
-      const key = `${w}_${b.board}_${b.board_size}`;
+      const key = `${b.color || DEFAULT_BOX_COLOR}|||${w}|||${b.board}|||${b.board_size}`;
       if (!groupMap[key]) groupMap[key] = [];
       groupMap[key].push(b);
     }
@@ -148,8 +220,8 @@ export default function OrderDetail() {
       const isT1B = typeB.toUpperCase().includes("T1");
       if (isT1A !== isT1B) return isT1A ? -1 : 1;
 
-      const wA = parseFloat(keyA.split("_")[0]);
-      const wB = parseFloat(keyB.split("_")[0]);
+      const wA = parseFloat(keyA.split("|||")[1]);
+      const wB = parseFloat(keyB.split("|||")[1]);
       const nwA = nominalStockWidthForBoard(boardsA[0]);
       const nwB = nominalStockWidthForBoard(boardsB[0]);
       const needsRipA = nwA != null && (nwA - wA > 0.5);
@@ -177,7 +249,7 @@ export default function OrderDetail() {
         byFingerprint[fp] = nextNo;
         // Map all boards with this fingerprint to this pattern number
         for (let i = 0; i < boards.length; i++) {
-          if (boardFingerprint(boards[i]) === fp) {
+          if (`${boards[i].color || DEFAULT_BOX_COLOR}|${boardFingerprint(boards[i])}` === fp) {
             byIndex[i] = nextNo;
           }
         }
@@ -191,20 +263,44 @@ export default function OrderDetail() {
   /* ── Group parts into cabinets ── */
   const cabinets = useMemo(() => {
     const cabMap: Record<string, Cabinet> = {};
-    for (const b of boards) {
-      for (const p of b.parts) {
-        if (!p.cab_id || p.cab_id === "?" || p.cab_id === "Unknown") continue;
-        if (!cabMap[p.cab_id]) {
-          cabMap[p.cab_id] = {
-            cab_id: p.cab_id,
-            cab_type: p.cab_type || "Unknown",
-            parts: [],
-            dimensions: { width: 0, height: 0, depth: 0 }
-          };
+
+    if (cutResult?.cabinet_breakdown && Object.keys(cutResult.cabinet_breakdown).length > 0) {
+      for (const [cabId, cabData] of Object.entries(cutResult.cabinet_breakdown)) {
+        if (!cabId || cabId === "?" || cabId === "Unknown") continue;
+        const cabColor = cabData.color || DEFAULT_BOX_COLOR;
+        if (cabColor !== selectedColor) continue;
+        cabMap[cabId] = {
+          cab_id: cabId,
+          cab_type: cabData.cab_type || "Unknown",
+          color: cabColor,
+          parts: cabData.parts.map((p): Part => ({
+            ...p,
+            cut_length: p.Height,
+            cab_id: cabId,
+            cab_type: cabData.cab_type || "Unknown",
+            color: cabColor,
+          })),
+          dimensions: { width: 0, height: 0, depth: 0 }
+        };
+      }
+    } else {
+      for (const b of boards) {
+        for (const p of b.parts) {
+          if (!p.cab_id || p.cab_id === "?" || p.cab_id === "Unknown") continue;
+          if (!cabMap[p.cab_id]) {
+            cabMap[p.cab_id] = {
+              cab_id: p.cab_id,
+              cab_type: p.cab_type || "Unknown",
+              color: p.color || DEFAULT_BOX_COLOR,
+              parts: [],
+              dimensions: { width: 0, height: 0, depth: 0 }
+            };
+          }
+          cabMap[p.cab_id].parts.push(p);
         }
-        cabMap[p.cab_id].parts.push(p);
       }
     }
+
     // Heuristically calculate dimensions
     return Object.values(cabMap).map(cab => {
       let maxH = 0, maxW = 0, maxD = 0;
@@ -250,7 +346,7 @@ export default function OrderDetail() {
       cab.dimensions = { width: maxW, height: maxH, depth: maxD };
       return cab;
     }).sort((a, b) => a.cab_id.localeCompare(b.cab_id));
-  }, [boards]);
+  }, [boards, cutResult?.cabinet_breakdown, selectedColor]);
 
   // Set default selected cabinet when switching to cabinets view
   useEffect(() => {
@@ -258,6 +354,12 @@ export default function OrderDetail() {
       setSelectedCabinetId(cabinets[0].cab_id);
     }
   }, [viewMode, cabinets, selectedCabinetId]);
+
+  useEffect(() => {
+    if (selectedCabinetId && !cabinets.some((cab) => cab.cab_id === selectedCabinetId)) {
+      setSelectedCabinetId(cabinets[0]?.cab_id || null);
+    }
+  }, [cabinets, selectedCabinetId]);
 
 
   const handleCutConfirmed = useCallback(() => {
@@ -330,23 +432,7 @@ export default function OrderDetail() {
             <h1 className="text-[26px] font-semibold tracking-tight">{t("orderDetail.title")} #{orderDisplayName}</h1>
           </div>
         </div>
-          <div className="flex items-center gap-3">
-            {/* View mode toggle */}
-            <div className="flex bg-black/[0.04] p-1 rounded-xl">
-            <button onClick={() => setViewMode("layout")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${viewMode === "layout" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
-              <LayoutGrid size={14} /> {t("orderDetail.layout")}
-            </button>
-            <button onClick={() => setViewMode("table")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${viewMode === "table" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
-              <Table2 size={14} /> {t("orderDetail.dataTable")}
-            </button>
-            <button onClick={() => setViewMode("cabinets")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${viewMode === "cabinets" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
-              <Box size={14} /> {t("orderDetail.cabinetView")}
-            </button>
-            <button onClick={() => setViewMode("machine")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors ${viewMode === "machine" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
-              <Scissors size={14} /> {t("machine.tabLabel")}
-            </button>
-          </div>
-
+        <div className="flex items-center gap-3">
           {/* Status / Confirm button */}
           {isCutDone ? (
             <div className="flex items-center gap-2">
@@ -385,11 +471,72 @@ export default function OrderDetail() {
             <p className="text-[13px] text-amber-700 mt-1">{t("orderDetail.shortageDesc")}</p>
             <div className="flex flex-wrap gap-2 mt-2">
               {shortages.map(s => (
-                <span key={s.board_type} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-100 text-amber-800 text-[12px] font-medium">
-                  {s.board_type}: {t("orderDetail.need")}{s.needed} / {t("orderDetail.stock")}{s.stock} / {t("orderDetail.missing")}{s.shortage}
+                <span key={`${s.board_type}-${s.color || DEFAULT_BOX_COLOR}`} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-100 text-amber-800 text-[12px] font-medium">
+                  {s.board_type} [{colorLabel(getColor(s.color), locale)}]: {t("orderDetail.need")}{s.needed} / {t("orderDetail.stock")}{s.stock} / {t("orderDetail.missing")}{s.shortage}
                 </span>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {colorOptions.length > 0 && (
+        <div className="bg-card rounded-xl shadow-apple border border-border/40 p-4 space-y-4">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div>
+              <div className="text-[12px] font-semibold uppercase tracking-wide text-apple-gray mb-2">{t("orderDetail.boxColor")}</div>
+              <div className="flex flex-wrap items-center gap-2">
+                {colorOptions.map((option) => {
+                  const colorKey = option.colorKey;
+                  const boxColor = getColor(colorKey);
+                  return (
+                    <button
+                      key={colorKey}
+                      onClick={() => {
+                        setSelectedColor(colorKey);
+                        setSelectedBoard(null);
+                      }}
+                      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[13px] font-medium transition-colors ${selectedColor === colorKey ? "bg-foreground text-white" : "bg-black/[0.04] text-foreground hover:bg-black/[0.07]"}`}
+                    >
+                      <span className="w-3 h-3 rounded-full border border-black/10" style={{ backgroundColor: boxColor.hex_color }} />
+                      {colorLabel(boxColor, locale)} ({option.cabinets || option.boards})
+                      {option.boards === 0 && option.parts > 0 && (
+                        <span className="ml-1 text-[10px] opacity-70">needs reprocess</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex bg-black/[0.04] p-1 rounded-xl overflow-x-auto">
+              <button onClick={() => setViewMode("layout")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors whitespace-nowrap ${viewMode === "layout" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
+                <LayoutGrid size={14} /> {t("orderDetail.layout")}
+              </button>
+              <button onClick={() => setViewMode("table")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors whitespace-nowrap ${viewMode === "table" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
+                <Table2 size={14} /> {t("orderDetail.dataTable")}
+              </button>
+              <button onClick={() => setViewMode("cabinets")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors whitespace-nowrap ${viewMode === "cabinets" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
+                <Box size={14} /> {t("orderDetail.cabinetView")}
+              </button>
+              <button onClick={() => setViewMode("machine")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors whitespace-nowrap ${viewMode === "machine" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
+                <Scissors size={14} /> {t("machine.tabLabel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedHasLegacyMissingCutData && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+          <AlertTriangle size={20} className="text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-[14px] font-semibold text-amber-800">
+              {colorLabel(getColor(selectedColor), locale)} cut layout was not generated for this saved result.
+            </p>
+            <p className="text-[13px] text-amber-700 mt-1">
+              This order was processed before the no-inventory color fix, so it has cabinet data for this color but no board layout. Reprocess the order to generate this color's Cutting Layout, Data Table, and Machine Cut Plan.
+            </p>
           </div>
         </div>
       )}
@@ -399,31 +546,61 @@ export default function OrderDetail() {
         <>
           {/* ── Summary Stats ── */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <StatCard icon={<Layers size={18} />} label={t("orderDetail.boardsCount")} value={String(summary?.boards_used || 0)} color="#3b82f6" />
-            <StatCard icon={<Package size={18} />} label={t("orderDetail.partsCount")} value={String(summary?.total_parts_placed || 0)} color="#8b5cf6" />
-            <StatCard icon={<BarChart3 size={18} />} label={t("orderDetail.overallUtil")} value={`${((summary?.overall_utilization || 0) * 100).toFixed(1)}%`} color="#10b981" />
+            <StatCard icon={<Layers size={18} />} label={t("orderDetail.boardsCount")} value={String(selectedBoardsUsed)} color="#3b82f6" />
+            <StatCard icon={<Package size={18} />} label={t("orderDetail.partsCount")} value={String(selectedPartsPlaced)} color="#8b5cf6" />
+            <StatCard icon={<BarChart3 size={18} />} label={t("orderDetail.overallUtil")} value={`${(selectedUtilization * 100).toFixed(1)}%`} color="#10b981" />
           </div>
+
+          {summary?.by_color?.[selectedColor] && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {Object.entries(summary.by_color).filter(([colorKey]) => colorKey === selectedColor).map(([colorKey, data]) => {
+                const boxColor = getColor(colorKey);
+                return (
+                  <div key={colorKey} className="bg-card rounded-xl border border-border/40 p-4 shadow-apple">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="w-3 h-3 rounded-full border border-black/10" style={{ backgroundColor: boxColor.hex_color }} />
+                      <span className="text-[13px] font-semibold">{colorLabel(boxColor, locale)}</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-[12px] text-apple-gray">
+                      <span>{data.boards_used} {t("orderDetail.boardsCount")}</span>
+                      <span>{data.total_parts_placed ?? data.parts_placed ?? 0} {t("orderDetail.thParts")}</span>
+                      <span>{((data.overall_utilization || 0) * 100).toFixed(1)}%</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
 
         </>
       )}
 
       {/* ── Layout View: Split layout for T1 and T0 ── */}
-      {viewMode === "layout" && (
+      {viewMode === "layout" && !selectedHasLegacyMissingCutData && (
         <div className="mb-3">
-          <CabinetReconciliation cutResult={cutResult} />
+          <CabinetReconciliation cutResult={selectedCutResult} />
         </div>
       )}
-      {viewMode === "layout" && (() => {
+      {viewMode === "layout" && selectedHasLegacyMissingCutData && (
+        <div className="bg-card rounded-xl shadow-apple border border-border/30 p-12 text-center text-apple-gray text-[15px]">
+          Reprocess this order to generate {colorLabel(getColor(selectedColor), locale)} cutting layout data.
+        </div>
+      )}
+      {viewMode === "layout" && !selectedHasLegacyMissingCutData && (() => {
         const typeGroups = boards.reduce((acc, b, idx) => {
           const type = b.board || b.board_type || "Unknown";
-          if (!acc[type]) acc[type] = [];
-          acc[type].push(idx);
+          const color = b.color || DEFAULT_BOX_COLOR;
+          const key = `${color}|||${type}`;
+          if (!acc[key]) acc[key] = [];
+          acc[key].push(idx);
           return acc;
         }, {} as Record<string, number[]>);
 
-        const t1Entries = Object.entries(typeGroups).filter(([type]) => type.toUpperCase().includes("T1")).sort(([a], [b]) => b.localeCompare(a));
-        const t0Entries = Object.entries(typeGroups).filter(([type]) => !type.toUpperCase().includes("T1")).sort(([a], [b]) => b.localeCompare(a));
+        const getTypeFromKey = (key: string) => key.split("|||")[1] || key;
+        const getColorFromKey = (key: string) => key.split("|||")[0] || DEFAULT_BOX_COLOR;
+        const t1Entries = Object.entries(typeGroups).filter(([key]) => getTypeFromKey(key).toUpperCase().includes("T1")).sort(([a], [b]) => a.localeCompare(b));
+        const t0Entries = Object.entries(typeGroups).filter(([key]) => !getTypeFromKey(key).toUpperCase().includes("T1")).sort(([a], [b]) => a.localeCompare(b));
 
         /* Group T0 boards by t0_sheet_id for visual grouping */
         const t0SheetGroups: Record<string, { board: Board; index: number }[]> = {};
@@ -445,7 +622,10 @@ export default function OrderDetail() {
         }
 
         const MAX_BOARDS_PER_COL = 4;
-        const renderColumns = ([type, indices]: [string, number[]]) => {
+        const renderColumns = ([typeKey, indices]: [string, number[]]) => {
+          const type = getTypeFromKey(typeKey);
+          const colorKey = getColorFromKey(typeKey);
+          const boxColor = getColor(colorKey);
           const leaders = indices.filter((idx) => stackGroups.lookup[idx]?.isLeader);
           if (leaders.length === 0) return null;
 
@@ -462,11 +642,18 @@ export default function OrderDetail() {
             const isFirstCol = i === 0;
 
             cols.push(
-              <div key={`${type}-${i}`} className="flex flex-col gap-y-5 shrink-0">
+              <div key={`${typeKey}-${i}`} className="flex flex-col gap-y-5 shrink-0">
                 <div className="text-left px-2" style={{ visibility: isFirstCol ? 'visible' : 'hidden' }}>
-                  <h3 className="text-[16px] font-bold text-foreground">{isFirstCol ? type : "\u00A0"}</h3>
+                  <h3 className="text-[16px] font-bold text-foreground inline-flex items-center gap-2">
+                    {isFirstCol ? (
+                      <>
+                        <span className="w-3 h-3 rounded-full border border-black/10" style={{ backgroundColor: boxColor.hex_color }} />
+                        {type}
+                      </>
+                    ) : "\u00A0"}
+                  </h3>
                   <p className="text-[13px] text-apple-gray font-medium">
-                    {isFirstCol ? `${indices.length} ${t("orderDetail.boardsCount")}` : "\u00A0"}
+                    {isFirstCol ? `${colorLabel(boxColor, locale)} · ${indices.length} ${t("orderDetail.boardsCount")}` : "\u00A0"}
                   </p>
                 </div>
                 <div className="flex flex-col gap-y-6 pb-0">
@@ -512,7 +699,7 @@ export default function OrderDetail() {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 items-start">
                   {/* T0 Sheet Groups */}
                   {Object.entries(t0SheetGroups).map(([sheetId, strips]) => {
-                    const sheetPlan = cutResult?.t0_plan?.t0_sheets?.find((s: any) => s.sheet_id === sheetId);
+            const sheetPlan = selectedCutResult?.t0_plan?.t0_sheets?.find((s: any) => s.sheet_id === sheetId);
                     const recoveredStrips = sheetPlan?.recovered_strips || [];
                     return (
                       <T0SheetCard
@@ -564,6 +751,7 @@ export default function OrderDetail() {
               <thead>
                 <tr className="bg-black/[0.02]">
                   <th className="text-left py-3 px-4 font-semibold text-apple-gray">#</th>
+                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.boxColor")}</th>
                   <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thBoardId")}</th>
                   <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thBoardType")}</th>
                   <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thSize")}</th>
@@ -588,6 +776,12 @@ export default function OrderDetail() {
                   return (
                     <tr key={`${board.board_id}-${idx}`} className="border-b border-border/20 hover:bg-black/[0.01]">
                       <td className="py-2.5 px-4 text-apple-gray">{mappedIdx + 1}</td>
+                      <td className="py-2.5 px-4">
+                        <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                          <span className="w-3 h-3 rounded-full border border-black/10" style={{ backgroundColor: getColor(board.color).hex_color }} />
+                          <span className="text-[12px] text-apple-gray">{colorLabel(getColor(board.color), locale)}</span>
+                        </span>
+                      </td>
                       <td className="py-2.5 px-4 font-medium">
                         <span className="inline-flex items-center gap-1.5">
                           <span className="w-2.5 h-2.5 rounded" style={{ backgroundColor: c.bg, border: `1.5px solid ${c.border}` }} />
@@ -659,9 +853,12 @@ export default function OrderDetail() {
                   }`}
                 >
                   <div>
-                    <div className="font-medium text-[14px] leading-tight">{cab.cab_id}</div>
+                    <div className="font-medium text-[14px] leading-tight flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full border border-black/10 shrink-0" style={{ backgroundColor: getColor(cab.color).hex_color }} />
+                      {cab.cab_id}
+                    </div>
                     <div className={`text-[11px] mt-0.5 ${selectedCabinetId === cab.cab_id ? "text-blue-100" : "text-apple-gray"}`}>
-                      {cab.cab_type} · {cab.parts.length}{t("orderDetail.cabParts")}
+                      {cab.cab_type} · {cab.parts.length}{t("orderDetail.cabParts")} · {colorLabel(getColor(cab.color), locale)}
                     </div>
                   </div>
                   <ArrowLeft size={14} className={`rotate-180 opacity-0 group-hover:opacity-100 transition-opacity ${selectedCabinetId === cab.cab_id ? "opacity-100" : ""}`} />
@@ -678,6 +875,7 @@ export default function OrderDetail() {
                   cabinet={cabinets.find(c => c.cab_id === selectedCabinetId)!} 
                   hoveredPartId={hoveredPartId}
                   setHoveredPartId={setHoveredPartId}
+                  boxColorHex={getColor(cabinets.find(c => c.cab_id === selectedCabinetId)?.color).hex_color}
                 />
               )}
             </div>
@@ -721,12 +919,17 @@ export default function OrderDetail() {
       )}
 
       {/* ── Machine Cut Plan View ── */}
-      {viewMode === "machine" && (
+      {viewMode === "machine" && selectedHasLegacyMissingCutData && (
+        <div className="bg-card rounded-xl shadow-apple border border-border/30 p-12 text-center text-apple-gray text-[15px]">
+          Reprocess this order to generate {colorLabel(getColor(selectedColor), locale)} machine cut plan data.
+        </div>
+      )}
+      {viewMode === "machine" && !selectedHasLegacyMissingCutData && (
         <>
           <div className="mb-3">
-            <CabinetReconciliation cutResult={cutResult} />
+            <CabinetReconciliation cutResult={selectedCutResult} />
           </div>
-          <MachineCutPlan boards={boards} orderLabel={orderDisplayName} machineLang={machineLang} setMachineLang={setMachineLang} patternNumbering={patternNumbering} cutResult={cutResult} />
+          <MachineCutPlan boards={boards} orderLabel={orderDisplayName} machineLang={machineLang} setMachineLang={setMachineLang} patternNumbering={patternNumbering} cutResult={selectedCutResult} />
         </>
       )}
 
@@ -743,7 +946,7 @@ export default function OrderDetail() {
       {showConfirmModal && order && cutResult && (
         <ConfirmCutModal
           order={order}
-          boards={boards}
+          boards={allBoards}
           onConfirmed={handleCutConfirmed}
           onClose={() => setShowConfirmModal(false)}
         />

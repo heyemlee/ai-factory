@@ -49,6 +49,9 @@ DEFAULT_BOARD_T1_WIDE   = "T1-609.6-INV"
 # Data Loading
 # ─────────────────────────────────────────────
 
+DEFAULT_BOX_COLOR = "WhiteBirch"
+
+
 def load_parts(path: str):
     """Read parts.xlsx (output from cabinet_calculator v2)."""
     df = pd.read_excel(path)
@@ -83,9 +86,11 @@ def load_parts(path: str):
 
         # Carry over extra metadata if present
         extra = {}
-        for col in ("cab_id", "cab_type", "component"):
-            if col in row:
+        for col in ("cab_id", "cab_type", "component", "color"):
+            if col in row and pd.notna(row[col]):
                 extra[col] = str(row[col])
+        if "color" not in extra:
+            extra["color"] = DEFAULT_BOX_COLOR
 
         for _ in range(q):
             parts.append({
@@ -107,7 +112,10 @@ def load_parts(path: str):
     return parts, skipped
 
 def load_inventory_from_supabase():
-    """Load inventory from Supabase cloud database (main materials only)."""
+    """Load inventory from Supabase cloud database (main materials only).
+
+    Returns a per-color inventory: {color_key: {board_type: {board_type, Height, Width, qty, color}}}.
+    """
     try:
         from config.supabase_client import supabase
         result = supabase.table("inventory").select("*").eq("category", "main").execute()
@@ -116,20 +124,26 @@ def load_inventory_from_supabase():
             print("⚠️  Supabase inventory is empty")
             return None
 
-        boards = {}
+        per_color: dict = {}
         for row in result.data:
             bt = row["board_type"]
-            boards[bt] = {
+            color = row.get("color") or DEFAULT_BOX_COLOR
+            entry = {
                 "board_type": bt,
                 "Height": float(row["height"]),
                 "Width": float(row["width"]),
                 "qty": int(row["stock"]),
+                "color": color,
             }
+            per_color.setdefault(color, {})[bt] = entry
 
-        print(f"☁️  Inventory from Supabase: {len(boards)} board types")
-        for bt, info in sorted(boards.items(), key=lambda x: x[1]["Width"]):
-            print(f"    {bt}: {info['Width']} × {info['Height']} mm, qty={info['qty']}")
-        return boards
+        total = sum(len(v) for v in per_color.values())
+        print(f"☁️  Inventory from Supabase: {total} board rows across {len(per_color)} color(s)")
+        for color, boards in per_color.items():
+            print(f"  🎨 {color}: {len(boards)} board types")
+            for bt, info in sorted(boards.items(), key=lambda x: x[1]["Width"]):
+                print(f"      {bt}: {info['Width']} × {info['Height']} mm, qty={info['qty']}")
+        return per_color
 
     except Exception as e:
         print(f"⚠️  Supabase unavailable ({e}), falling back to local Excel")
@@ -139,13 +153,14 @@ def load_inventory_from_supabase():
 def load_inventory(path: str = None):
     """
     Load inventory: try Supabase first, fall back to local Excel.
+    Returns per-color dict: {color: {board_type: info}}.
     """
     # Try Supabase first
-    boards = load_inventory_from_supabase()
-    if boards:
-        return boards
+    per_color = load_inventory_from_supabase()
+    if per_color:
+        return per_color
 
-    # Fallback to local Excel
+    # Fallback to local Excel (legacy single-color)
     if path is None:
         raise RuntimeError("No inventory source available (Supabase down, no local file)")
 
@@ -156,20 +171,25 @@ def load_inventory(path: str = None):
     if missing:
         raise RuntimeError(f"[inventory] Missing columns: {missing}")
 
-    boards = {}
+    per_color: dict = {}
     for _, row in df.iterrows():
         bt = str(row["board_type"]).strip()
-        boards[bt] = {
+        color = str(row["color"]).strip() if "color" in row and pd.notna(row.get("color")) else DEFAULT_BOX_COLOR
+        per_color.setdefault(color, {})[bt] = {
             "board_type": bt,
             "Height": float(row["Height"]),
             "Width": float(row["Width"]) if "Width" in row else float(row.get("Depth", 0)),
             "qty": int(row["qty"]),
+            "color": color,
         }
 
-    print(f"📋 Inventory (local): {len(boards)} board types")
-    for bt, info in sorted(boards.items(), key=lambda x: x[1]["Width"]):
-        print(f"    {bt}: {info['Width']} × {info['Height']} mm, qty={info['qty']}")
-    return boards
+    total = sum(len(v) for v in per_color.values())
+    print(f"📋 Inventory (local): {total} board rows across {len(per_color)} color(s)")
+    for color, boards in per_color.items():
+        print(f"  🎨 {color}: {len(boards)} board types")
+        for bt, info in sorted(boards.items(), key=lambda x: x[1]["Width"]):
+            print(f"      {bt}: {info['Width']} × {info['Height']} mm, qty={info['qty']}")
+    return per_color
 
 
 def deduct_inventory_supabase(board_results: list):
@@ -177,20 +197,33 @@ def deduct_inventory_supabase(board_results: list):
     try:
         from config.supabase_client import supabase
 
-        # Count how many of each board_type were used
+        # Count how many of each (board_type, color) were used
         usage = {}
         for br in board_results:
             bt = br["board"]
-            usage[bt] = usage.get(bt, 0) + 1
+            color = br.get("color") or DEFAULT_BOX_COLOR
+            usage[(bt, color)] = usage.get((bt, color), 0) + 1
 
-        for bt, used in usage.items():
+        for (bt, color), used in usage.items():
             # Get current stock
-            result = supabase.table("inventory").select("stock").eq("board_type", bt).execute()
+            result = (
+                supabase.table("inventory")
+                .select("stock")
+                .eq("board_type", bt)
+                .eq("color", color)
+                .execute()
+            )
             if result.data:
                 current = result.data[0]["stock"]
                 new_stock = max(0, current - used)
-                supabase.table("inventory").update({"stock": new_stock}).eq("board_type", bt).execute()
-                print(f"  📉 {bt}: {current} → {new_stock} ({used} used)")
+                (
+                    supabase.table("inventory")
+                    .update({"stock": new_stock})
+                    .eq("board_type", bt)
+                    .eq("color", color)
+                    .execute()
+                )
+                print(f"  📉 {bt} [{color}]: {current} → {new_stock} ({used} used)")
 
     except Exception as e:
         print(f"⚠️  Could not deduct inventory from Supabase: {e}")
@@ -467,7 +500,9 @@ def _split_parts_for_strips(parts: list, strip_width: float, max_strips: int):
 # ─────────────────────────────────────────────
 
 def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
-                   board_height: float = BOARD_HEIGHT) -> list:
+                   board_height: float = BOARD_HEIGHT,
+                   color: str = DEFAULT_BOX_COLOR,
+                   id_prefix: str | None = None) -> list:
     """
     FFD bin packing of parts within a strip along the Height (2438.4mm) axis.
 
@@ -514,6 +549,7 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
 
     strip_area = strip_width * board_height
     results = []
+    prefix = id_prefix if id_prefix is not None else f"{board_type}-{color}"
     for idx, strip in enumerate(open_strips, 1):
         parts_total_len = sum(p["Height"] for p in strip["parts"])
         parts_total_area = sum(p["Height"] * p["Width"] for p in strip["parts"])
@@ -524,11 +560,12 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
         utilization = parts_total_area / strip_area if strip_area > 0 else 0
 
         results.append({
-            "board_id": f"{board_type}-{idx:03d}",
+            "board_id": f"{prefix}-{idx:03d}",
             "board": board_type,
             "board_type": board_type,
             "board_size": f"{strip_width} × {board_height}",
             "strip_width": strip_width,
+            "color": color,
             "parts": [
                 {
                     "part_id": p["part_id"],
@@ -538,6 +575,7 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
                     "component": p.get("component", ""),
                     "cab_id": p.get("cab_id", ""),
                     "cab_type": p.get("cab_type", ""),
+                    "color": p.get("color", color),
                     "rotated": p.get("rotated", False),
                     "auto_swapped": p.get("auto_swapped", False),
                 }
@@ -730,11 +768,12 @@ def _validate_cut_result(output: dict, cabinet_breakdown: dict, total_parts_requ
             parts_sum += (p.get("cut_length") or p.get("Height") or 0)
         kerf_sum = max(0, (len(b.get("parts", [])) - 1)) * sk
         usable_len = (b.get("usable_length") or 0) or (BOARD_HEIGHT - tl)
-        if tl + parts_sum + kerf_sum > usable_len + 0.5:
+        used_len = parts_sum + kerf_sum
+        if used_len > usable_len + 0.5:
             integrity.append({
                 "code": "STRIP_LENGTH_OVERFLOW",
                 "severity": "error",
-                "msg": f"{bid}: trim+parts+kerf = {tl + parts_sum + kerf_sum:.1f} exceeds usable {usable_len:.1f}",
+                "msg": f"{bid}: parts+kerf = {used_len:.1f} exceeds usable {usable_len:.1f} (trim {tl:.1f}mm already excluded)",
                 "ref": {"board_id": bid},
             })
 
@@ -854,28 +893,20 @@ def _validate_cut_result(output: dict, cabinet_breakdown: dict, total_parts_requ
             print(f"   • {c}: {n}")
 
 
-def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "output/cut_result.json", cabinet_breakdown: dict = None):
-    """
-    Full engine run — v5 unified naming + real factory flow:
+def _run_pipeline_for_color(parts: list, inventory: dict, color: str,
+                            t0_id_offset: int = 0) -> dict:
+    """Run STEP 1-5 of the cutting pipeline for a single color partition.
 
-      parts → strip_demand → apply_inventory → T0 mixed optimize
-           → recover leftover → strip-level part packing
-
-    Board names used:
-      - T0-RAW          (T0 原板统一命名)
-      - T1-304.8-INV    (库存窄板)
-      - T1-609.6-INV    (库存宽板)
+    inventory is the single-color view {board_type: info}.
+    Returns a partial result dict with keys: boards, t0_plan, used_inventory,
+    recovered_inventory, t0_sheets_used, t0_recovered_strips.
     """
     from agents.t0_optimizer import optimize_t0_from_strips, recover_leftover
 
-    print("=" * 60)
-    print("  Guillotine Cutting Engine v5 — Unified Naming")
-    print("=" * 60)
+    print(f"\n{'─' * 60}")
+    print(f"  🎨 Color partition: {color}  ({len(parts)} parts)")
+    print(f"{'─' * 60}")
 
-    # ─── Load data ───
-    parts, skipped_rows = load_parts(parts_path)
-    inventory = load_inventory(inventory_path)
-    
     # 确定 T0 板的名字 (从库存获取)
     t0_name = DEFAULT_BOARD_T0
     if inventory:
@@ -883,45 +914,6 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
             if bt_inv.startswith("T0"):
                 t0_name = bt_inv
                 break
-
-    # ─── 检测超板零件 ───
-    # 板材最大尺寸: Height方向=2438.4mm, Width方向=1219.2mm (T0满板)
-    usable_height = BOARD_HEIGHT - TRIM_LOSS  # 2433.4mm
-    # 找到最大可用板宽 (T0 raw sheet width)
-    max_board_width = 1219.2  # T0 default
-    if inventory:
-        for bt, info in inventory.items():
-            if bt.startswith("T0"):
-                max_board_width = info["Width"]
-                break
-
-    valid_parts = []
-    oversized_parts = []
-    for p in parts:
-        h, w = p["Height"], p["Width"]
-        # 超板检测: 考虑旋转 — 任一方向能放下即可
-        fits_normal = (w <= max_board_width and h <= usable_height)
-        fits_rotated = (h <= max_board_width and w <= usable_height)
-        if fits_normal:
-            valid_parts.append(p)
-        elif fits_rotated:
-            # Auto-correct swapped dimensions (e.g. user input W=2362.2, H=732)
-            # We permanently swap them so it fits the T0 board logic.
-            p["Height"] = w
-            p["Width"] = h
-            p["auto_swapped"] = True
-            valid_parts.append(p)
-        else:
-            oversized_parts.append(p)
-
-    if oversized_parts:
-        print(f"\n❌ 发现 {len(oversized_parts)} 个超板零件 (板材极限: {max_board_width}×{BOARD_HEIGHT}mm):")
-        for op in oversized_parts:
-            cab = op.get('cab_id', '?')
-            comp = op.get('component', '?')
-            print(f"   ⛔ {cab}-{comp}: {op['Height']} × {op['Width']}mm — 无法裁切!")
-
-    parts = valid_parts
 
     # ─── STEP 1: Build strip demand ───
     strip_demand = build_strip_demand(parts, inventory)
@@ -933,31 +925,16 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
     inventory_strips = inv_result["inventory_strips"]
 
     # ─── STEP 3: T0 unified mixed-strip optimization ───
-    # Build the T0 strip list from the pool
-    # Key: ALL strips go into ONE mixed pool (different widths together)
     t0_strip_items = []
-    t0_parts_by_width = {}  # track parts for each width for STEP 5
+    t0_parts_by_width = {}
 
     for pool_entry in t0_pool:
         sw = pool_entry["strip_width"]
         pool_parts = pool_entry["parts"]
-
-        # Store parts for later packing
         if sw not in t0_parts_by_width:
             t0_parts_by_width[sw] = []
         t0_parts_by_width[sw].extend(pool_parts)
-
-        # Count how many strips we need for this width
         count = _count_strips_needed(pool_parts, sw)
-        
-        # 寻找库存里的 T0 名字 (动态匹配)
-        t0_name = DEFAULT_BOARD_T0
-        if inventory:
-            for bt_inv in inventory.keys():
-                if bt_inv.startswith("T0"):
-                    t0_name = bt_inv
-                    break
-                    
         for _ in range(count):
             t0_strip_items.append({
                 "strip_width": sw,
@@ -965,15 +942,16 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
                 "strip_type": "T0",
             })
 
-
-
     t0_plan = None
     if t0_strip_items:
         t0_plan = optimize_t0_from_strips(t0_strip_items)
 
+        # Re-key sheet_id with color + offset to ensure global uniqueness
+        for s_idx, sheet in enumerate(t0_plan["t0_sheets"]):
+            sheet["sheet_id"] = f"{t0_name}-{color}-{t0_id_offset + s_idx + 1:03d}"
+            sheet["color"] = color
+
         # ─── STEP 4: Recover leftover from T0 sheets ───
-        # Build inventory-width candidates for DP matching: any non-T0 main
-        # material whose height covers a full T0 sheet length (≥ 2438.4mm).
         recovery_candidates = []
         for bt, info in inventory.items():
             if bt.startswith("T0"):
@@ -987,17 +965,17 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
         recovery_candidates.sort(key=lambda c: -c["width"])
         if recovery_candidates:
             cand_desc = ", ".join(f"{c['board_type']}={c['width']}mm" for c in recovery_candidates)
-            print(f"  ♻️  Recovery candidates (from inventory): {cand_desc}")
+            print(f"  ♻️  Recovery candidates ({color}): {cand_desc}")
 
         for sheet in t0_plan["t0_sheets"]:
             recover_leftover(sheet, recovery_candidates)
+            for r in sheet.get("recovered_strips", []):
+                r["color"] = color
 
     # ─── STEP 4b: Build T0 sheet → strip mapping for frontend ───
-    # Maps each strip (by width) to its parent T0 sheet position
     t0_width_assignments = defaultdict(list)
     if t0_plan:
         for sheet in t0_plan["t0_sheets"]:
-            # Build full strip list for this sheet
             all_strips_info = [
                 {"strip_width": s["strip_width"], "strip_index": si}
                 for si, s in enumerate(sheet["strips"])
@@ -1019,38 +997,29 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
     # ─── STEP 5: Pack parts into strips ───
     all_board_results = []
 
-    # 5a. Inventory strips — pack parts using T1-xxx-INV name
-    #     扫边: Height方向 5mm (2438.4→2433.4), Width不扫
     for inv_strip in inventory_strips:
         results = ffd_strip_pack(
             inv_strip["parts"],
             inv_strip["strip_width"],
-            inv_strip["board_type"],  # T1-304.8-INV or T1-609.6-INV
+            inv_strip["board_type"],
+            color=color,
         )
         for r in results:
             r["source"] = "inventory"
         all_board_results.extend(results)
 
-    # 5b. T0 strips — pack parts using T0 name + attach sheet traceability
     for sw, t0_parts in t0_parts_by_width.items():
-        # 寻找库存里的 T0 名字
-        t0_name = DEFAULT_BOARD_T0
-        if inventory:
-            for bt_inv in inventory.keys():
-                if bt_inv.startswith("T0"):
-                    t0_name = bt_inv
-                    break
-
         results = ffd_strip_pack(
             t0_parts,
             sw,
             t0_name,
+            color=color,
+            id_prefix=f"{t0_name}-{color}-{sw}",
         )
         assignments = t0_width_assignments.get(sw, [])
         for i, r in enumerate(results):
             r["source"] = "T0"
-            r["actual_strip_width"] = sw  # 保存实际裁切宽度
-            # Attach T0 sheet traceability for frontend grouping
+            r["actual_strip_width"] = sw
             if i < len(assignments):
                 a = assignments[i]
                 r["t0_sheet_id"] = a["sheet_id"]
@@ -1062,94 +1031,223 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
                 r["t0_remaining_width"] = a["remaining_width"]
         all_board_results.extend(results)
 
-    # ─── Summary ───
-    total_boards = len(all_board_results)
-    total_parts_required = len(parts)
-    total_parts_placed = sum(len(b["parts"]) for b in all_board_results)
-    total_parts_unmatched = total_parts_required - total_parts_placed
-    total_oversized = len(oversized_parts)
-    all_parts_cut = (total_parts_placed == total_parts_required) and total_oversized == 0
-
-    # Calculate total board area correctly
-    t0_sheets_used = t0_plan["t0_sheets_needed"] if t0_plan else 0
-    t0_total_area = t0_sheets_used * (1219.2 * 2438.4)
-    
-    # Area of T1 boards used from inventory
-    t1_inv_area = sum(b["board_area"] for b in all_board_results if b.get("source") == "inventory")
-    
-    total_board_area = t0_total_area + t1_inv_area
-    total_parts_area = sum(b["parts_total_area"] for b in all_board_results)
-    
     t0_sheets_used = t0_plan["t0_sheets_needed"] if t0_plan else 0
     t0_total_recovery = 0
     recovered_inventory = []
-    total_recovered_area = 0
     if t0_plan:
         for sheet in t0_plan["t0_sheets"]:
             for r in sheet.get("recovered_strips", []):
                 t0_total_recovery += 1
                 recovered_inventory.append(r)
-                total_recovered_area += r["width"] * 2438.4
 
-    # Fix t0_sheet_utilization for each strip to be based on actual parts area + recovered area
+    # Fix t0_sheet_utilization for each strip based on parts area + recovered area
     sheet_to_parts_area = defaultdict(float)
     sheet_to_recovered_area = defaultdict(float)
     if t0_plan:
         for sheet in t0_plan["t0_sheets"]:
-            sheet_to_recovered_area[sheet["sheet_id"]] = sum(r["width"] * 2438.4 for r in sheet.get("recovered_strips", []))
-            
+            sheet_to_recovered_area[sheet["sheet_id"]] = sum(
+                r["width"] * 2438.4 for r in sheet.get("recovered_strips", [])
+            )
     for b in all_board_results:
         if "t0_sheet_id" in b:
             sheet_to_parts_area[b["t0_sheet_id"]] += b["parts_total_area"]
-            
     for b in all_board_results:
         if "t0_sheet_id" in b:
             t0_area = 1219.2 * 2438.4
-            b["t0_sheet_utilization"] = round((sheet_to_parts_area[b["t0_sheet_id"]] + sheet_to_recovered_area[b["t0_sheet_id"]]) / t0_area, 4)
+            b["t0_sheet_utilization"] = round(
+                (sheet_to_parts_area[b["t0_sheet_id"]] + sheet_to_recovered_area[b["t0_sheet_id"]]) / t0_area, 4
+            )
 
-    # Calculate overall utilization (Parts + Recovered)
+    return {
+        "boards": all_board_results,
+        "t0_plan": t0_plan,
+        "used_inventory": used_inventory,
+        "recovered_inventory": recovered_inventory,
+        "t0_sheets_used": t0_sheets_used,
+        "t0_recovered_strips": t0_total_recovery,
+        "color": color,
+    }
+
+
+def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "output/cut_result.json", cabinet_breakdown: dict = None):
+    """
+    Full engine run — v5 unified naming + real factory flow + per-color partition:
+
+      parts → split by color → (per color: strip_demand → apply_inventory →
+        T0 mixed optimize → recover leftover → strip-level part packing)
+        → merge results
+
+    Cutting is strictly partitioned by box color. T0 sheets and inventory
+    are never shared across colors.
+    """
+    print("=" * 60)
+    print("  Guillotine Cutting Engine v5 — Per-Color Pipeline")
+    print("=" * 60)
+
+    # ─── Load data ───
+    parts, skipped_rows = load_parts(parts_path)
+    inventory_per_color = load_inventory(inventory_path)
+    if not inventory_per_color:
+        raise RuntimeError("Inventory is empty")
+
+    # ─── 检测超板零件 (跨颜色,T0 dim 假设各色一致) ───
+    usable_height = BOARD_HEIGHT - TRIM_LOSS  # 2433.4mm
+    max_board_width = 1219.2
+    for color, boards in inventory_per_color.items():
+        for bt, info in boards.items():
+            if bt.startswith("T0"):
+                max_board_width = info["Width"]
+                break
+
+    valid_parts = []
+    oversized_parts = []
+    for p in parts:
+        h, w = p["Height"], p["Width"]
+        fits_normal = (w <= max_board_width and h <= usable_height)
+        fits_rotated = (h <= max_board_width and w <= usable_height)
+        if fits_normal:
+            valid_parts.append(p)
+        elif fits_rotated:
+            p["Height"] = w
+            p["Width"] = h
+            p["auto_swapped"] = True
+            valid_parts.append(p)
+        else:
+            oversized_parts.append(p)
+
+    if oversized_parts:
+        print(f"\n❌ 发现 {len(oversized_parts)} 个超板零件 (板材极限: {max_board_width}×{BOARD_HEIGHT}mm):")
+        for op in oversized_parts:
+            cab = op.get('cab_id', '?')
+            comp = op.get('component', '?')
+            color = op.get('color', '?')
+            print(f"   ⛔ {cab}-{comp} [{color}]: {op['Height']} × {op['Width']}mm — 无法裁切!")
+
+    parts = valid_parts
+
+    # ─── Per-color pipeline ───
+    parts_by_color: dict = defaultdict(list)
+    for p in parts:
+        parts_by_color[p.get("color", DEFAULT_BOX_COLOR)].append(p)
+
+    template_inventory = (
+        inventory_per_color.get(DEFAULT_BOX_COLOR)
+        or next(iter(inventory_per_color.values()), {})
+    )
+
+    all_board_results = []
+    aggregated_t0_sheets = []
+    aggregated_recovered = []
+    unmatched_parts = []
+    used_inventory: dict = {}
+    inventory_used_by_color: dict = {}
+    by_color: dict = {}
+    t0_id_offset = 0
+
+    for color, color_parts in parts_by_color.items():
+        actual_color_inventory = inventory_per_color.get(color, {})
+        if not actual_color_inventory:
+            print(f"\n⚠️  No inventory rows configured for color '{color}'. Generating cut plan with stock=0 and reporting shortage.")
+
+        color_inventory = {
+            bt: {
+                **info,
+                "qty": int(actual_color_inventory.get(bt, {}).get("qty", 0)),
+                "color": color,
+            }
+            for bt, info in template_inventory.items()
+        }
+        for bt, info in actual_color_inventory.items():
+            color_inventory[bt] = {**info, "color": color}
+        inventory_per_color[color] = color_inventory
+
+        partial = _run_pipeline_for_color(
+            color_parts,
+            color_inventory,
+            color,
+            t0_id_offset=t0_id_offset,
+        )
+        all_board_results.extend(partial["boards"])
+        if partial["t0_plan"]:
+            aggregated_t0_sheets.extend(partial["t0_plan"]["t0_sheets"])
+            t0_id_offset += partial["t0_plan"]["t0_sheets_needed"]
+        aggregated_recovered.extend(partial["recovered_inventory"])
+
+        # Used inventory: namespace by color to avoid collisions when same
+        # board_type exists for multiple colors.
+        for bt, cnt in partial["used_inventory"].items():
+            key = f"{bt}|{color}"
+            used_inventory[key] = used_inventory.get(key, 0) + cnt
+            inventory_used_by_color.setdefault(color, {})[bt] = (
+                inventory_used_by_color.setdefault(color, {}).get(bt, 0) + cnt
+            )
+
+        # Per-color summary
+        c_boards = partial["boards"]
+        c_parts_placed = sum(len(b["parts"]) for b in c_boards)
+        c_parts_area = sum(b["parts_total_area"] for b in c_boards)
+        c_t0_used = partial["t0_sheets_used"]
+        c_t1_area = sum(b["board_area"] for b in c_boards if b.get("source") == "inventory")
+        c_total_area = c_t0_used * (1219.2 * 2438.4) + c_t1_area
+        c_util = c_parts_area / c_total_area if c_total_area > 0 else 0
+        by_color[color] = {
+            "parts_total": len(color_parts),
+            "total_parts_placed": c_parts_placed,
+            "parts_placed": c_parts_placed,
+            "boards_used": len(c_boards),
+            "t0_sheets_used": c_t0_used,
+            "t0_recovered_strips": partial["t0_recovered_strips"],
+            "overall_utilization": round(c_util, 4),
+        }
+
+    # ─── Aggregate summary across all colors ───
+    total_boards = len(all_board_results)
+    total_parts_required = len(parts)
+    total_parts_placed = sum(len(b["parts"]) for b in all_board_results)
+    total_parts_unmatched = len(unmatched_parts) + max(0, total_parts_required - total_parts_placed - len(unmatched_parts))
+    total_oversized = len(oversized_parts)
+    all_parts_cut = (total_parts_placed == total_parts_required) and total_oversized == 0
+
+    t0_sheets_used = len(aggregated_t0_sheets)
+    t0_total_area = t0_sheets_used * (1219.2 * 2438.4)
+    t1_inv_area = sum(b["board_area"] for b in all_board_results if b.get("source") == "inventory")
+    total_board_area = t0_total_area + t1_inv_area
+    total_parts_area = sum(b["parts_total_area"] for b in all_board_results)
+
+    total_recovered_area = sum(r["width"] * 2438.4 for r in aggregated_recovered)
+    t0_total_recovery = len(aggregated_recovered)
+
     overall_useful_area = total_parts_area + total_recovered_area
     overall_util = overall_useful_area / total_board_area if total_board_area > 0 else 0
-    
-    # Calculate true total waste (Total Area - Useful Area - Kerf Area)
-    # Note: Trim loss is considered waste
-    total_kerf_area = sum((b["cuts"] * SAW_KERF) * b.get("actual_strip_width", b.get("strip_width", 1219.2)) for b in all_board_results)
+    total_kerf_area = sum(
+        (b["cuts"] * SAW_KERF) * b.get("actual_strip_width", b.get("strip_width", 1219.2))
+        for b in all_board_results
+    )
     total_waste_area = total_board_area - overall_useful_area - total_kerf_area
 
-
-    # Board type breakdown
+    # Board type breakdown (by board_type only, not color)
     board_type_counts = defaultdict(int)
     for b in all_board_results:
         board_type_counts[b["board"]] += 1
 
-    # ── Inventory shortage detection ──
-    # Compare boards needed (board_type_counts) vs inventory stock
+    # Inventory shortage per (board_type, color)
     inventory_shortage = []
-    for bt, needed in board_type_counts.items():
-        if bt in inventory:
-            stock = inventory[bt]["qty"]
-            if needed > stock:
+    for color, color_used in inventory_used_by_color.items():
+        color_inv = inventory_per_color.get(color, {})
+        for bt, used_cnt in color_used.items():
+            stock = color_inv.get(bt, {}).get("qty", 0)
+            if used_cnt > stock:
                 inventory_shortage.append({
                     "board_type": bt,
-                    "needed": needed,
+                    "color": color,
+                    "needed": used_cnt,
                     "stock": stock,
-                    "shortage": needed - stock,
-                })
-        # Also check via used_inventory (which tracks T1 inventory usage)
-    for bt, used_count in used_inventory.items():
-        if bt in inventory:
-            stock = inventory[bt]["qty"]
-            if used_count > stock and not any(s["board_type"] == bt for s in inventory_shortage):
-                inventory_shortage.append({
-                    "board_type": bt,
-                    "needed": used_count,
-                    "stock": stock,
-                    "shortage": used_count - stock,
+                    "shortage": used_cnt - stock,
                 })
     if inventory_shortage:
         print(f"\n⚠️  库存不足:")
         for s in inventory_shortage:
-            print(f"   {s['board_type']}: 需要 {s['needed']}张, 库存 {s['stock']}张, 缺少 {s['shortage']}张")
+            print(f"   {s['board_type']} [{s['color']}]: 需要 {s['needed']}张, 库存 {s['stock']}张, 缺少 {s['shortage']}张")
 
     summary = {
         "total_parts_required": total_parts_required,
@@ -1157,12 +1255,13 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
         "total_parts_unmatched": total_parts_unmatched,
         "all_parts_cut": all_parts_cut,
         "strips_used": total_boards,
-        "boards_used": total_boards,  # legacy compat
+        "boards_used": total_boards,
         "t0_sheets_used": t0_sheets_used,
         "t0_recovered_strips": t0_total_recovery,
         "inventory_used": used_inventory,
         "inventory_shortage": inventory_shortage,
         "board_type_breakdown": dict(board_type_counts),
+        "by_color": by_color,
         "total_parts_length": round(sum(b["parts_total_length"] for b in all_board_results), 1),
         "total_trim_loss": round(sum(b["trim_loss"] for b in all_board_results), 1),
         "total_kerf_loss": round(sum(b["kerf_total"] for b in all_board_results), 1),
@@ -1171,6 +1270,7 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
         "config_trim_loss_mm": TRIM_LOSS,
         "config_saw_kerf_mm": SAW_KERF,
     }
+    recovered_inventory = aggregated_recovered
 
     if total_parts_unmatched > 0:
         summary["warning"] = f"{total_parts_unmatched} parts could not be placed"
@@ -1189,6 +1289,7 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
             "component": p.get("component", "?"),
             "Height": p["Height"],
             "Width": p["Width"],
+            "color": p.get("color", DEFAULT_BOX_COLOR),
             "reason": f"尺寸 {p['Height']}×{p['Width']}mm 超过板材最大尺寸 {BOARD_HEIGHT}mm",
         }
         for p in oversized_parts
@@ -1198,7 +1299,18 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
             {"file": "parts.xlsx", "source": f"Row {s['row']}: {s['reason']}"}
             for s in skipped_rows
         ],
-        "unmatched_parts": [],
+        "unmatched_parts": [
+            {
+                "part_id": p.get("part_id", "?"),
+                "cab_id": p.get("cab_id", "?"),
+                "component": p.get("component", "?"),
+                "Height": p.get("Height"),
+                "Width": p.get("Width"),
+                "color": p.get("color", DEFAULT_BOX_COLOR),
+                "reason": p.get("_unmatched_reason", "part could not be placed"),
+            }
+            for p in unmatched_parts
+        ],
         "oversized_parts": oversized_issues,
     }
 
@@ -1211,9 +1323,24 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
         "boards": all_board_results,
     }
 
-    # Add T0 plan details if present
-    if t0_plan and t0_plan.get("t0_sheets_needed", 0) > 0:
-        output["t0_plan"] = t0_plan
+    # Add aggregated T0 plan details if present
+    if aggregated_t0_sheets:
+        output["t0_plan"] = {
+            "t0_sheets_needed": len(aggregated_t0_sheets),
+            "t0_sheets": aggregated_t0_sheets,
+            "total_utilization": round(
+                sum(float(s.get("utilization", 0)) for s in aggregated_t0_sheets) / len(aggregated_t0_sheets),
+                4,
+            ),
+            "by_color": {
+                color: {
+                    "t0_sheets_needed": data.get("t0_sheets_used", 0),
+                    "t0_recovered_strips": data.get("t0_recovered_strips", 0),
+                }
+                for color, data in by_color.items()
+                if data.get("t0_sheets_used", 0) > 0
+            },
+        }
 
     # Add recovered inventory
     if recovered_inventory:
@@ -1246,8 +1373,8 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
         print(f"    {bt}: {cnt} strips")
     print(f"  {'─' * 58}")
     print(f"  T0 sheets used:  {t0_sheets_used}")
-    if t0_plan:
-        t0_util = t0_plan.get("total_utilization", 0)
+    if aggregated_t0_sheets:
+        t0_util = output["t0_plan"].get("total_utilization", 0)
         print(f"  T0 utilization:  {t0_util*100:.1f}%")
     print(f"  T0 recovered:    {t0_total_recovery} strips")
     if recovered_inventory:
