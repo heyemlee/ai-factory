@@ -20,6 +20,18 @@ function formatOrderInlineLabel(lang: "zh" | "en" | "es", orderNoLabel: string, 
   return lang === "zh" ? `(${orderNoLabel}${orderLabel})` : `(${orderNoLabel} ${orderLabel})`;
 }
 
+const T0_RAW_WIDTH_MM = 1219.2;
+const T0_RAW_LENGTH_MM = 2438.4;
+
+function parseT0SheetDims(sheetId: string): { width: number; length: number } {
+  const match = sheetId.match(/T0-(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)/i);
+  if (!match) return { width: T0_RAW_WIDTH_MM, length: T0_RAW_LENGTH_MM };
+  return {
+    width: parseFloat(match[1]) || T0_RAW_WIDTH_MM,
+    length: parseFloat(match[2]) || T0_RAW_LENGTH_MM,
+  };
+}
+
 interface MachineT0Recovered {
   width?: number;
   board_type?: string;
@@ -100,7 +112,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     mm: "mm",
     step1Title: "Step 1：机器设定",
     step1Desc1: "请确认板材型号为",
-    step1Desc2: "，并在机器上输入总长度",
+    step1Desc2: "在机器上输入总长度",
     step1Desc3: "，宽度",
     step1Desc4: "，修边设置",
     stepCutTitle: "Step {stepNum}：{patternNo}",
@@ -116,6 +128,14 @@ const machineI18n: Record<string, Record<string, string>> = {
     recovered: "回收",
     waste: "废料",
     fromLeft: "从左到右",
+    phaseATitle: "Step A：T0 → T1 原板纵裁",
+    phaseBTitle: "Step B：T1 → T2 条料裁件",
+    subStepSetup: "① 机器设定",
+    subStepInput: "② 板材输入",
+    subStepLayout: "③ 排版图",
+    rawSheetWord: "原板",
+    stripColumn: "条料",
+    ripWidth: "纵裁宽度 (mm)",
   },
   en: {
     tabLabel: "Machine Cut Plan",
@@ -157,7 +177,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     mm: "mm",
     step1Title: "Step 1: Machine Setup",
     step1Desc1: "Please confirm board type is",
-    step1Desc2: ", and input Total Length",
+    step1Desc2: "Input Total Length",
     step1Desc3: ", Width",
     step1Desc4: ", Trim Setting",
     stepCutTitle: "Step {stepNum}: {patternNo}",
@@ -173,6 +193,14 @@ const machineI18n: Record<string, Record<string, string>> = {
     recovered: "Recovered",
     waste: "Waste",
     fromLeft: "Left to right",
+    phaseATitle: "Step A: T0 → T1 Sheet Rip",
+    phaseBTitle: "Step B: T1 → T2 Strip Cutting",
+    subStepSetup: "① Machine Setup",
+    subStepInput: "② Board Input",
+    subStepLayout: "③ Layout",
+    rawSheetWord: "Raw Sheet",
+    stripColumn: "Strip",
+    ripWidth: "Rip Width (mm)",
   },
   es: {
     tabLabel: "Plan de Corte de Máquina",
@@ -214,7 +242,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     mm: "mm",
     step1Title: "Paso 1: Configuración de Máquina",
     step1Desc1: "Confirme el tipo de tablero",
-    step1Desc2: ", e ingrese Longitud Total",
+    step1Desc2: "Ingrese Longitud Total",
     step1Desc3: ", Ancho",
     step1Desc4: ", Ajuste Recorte",
     stepCutTitle: "Paso {stepNum}: {patternNo}",
@@ -230,6 +258,14 @@ const machineI18n: Record<string, Record<string, string>> = {
     recovered: "Recuperado",
     waste: "Desperdicio",
     fromLeft: "Izquierda a derecha",
+    phaseATitle: "Paso A: T0 → T1 Corte de Tablero",
+    phaseBTitle: "Paso B: T1 → T2 Corte de Piezas",
+    subStepSetup: "① Configuración",
+    subStepInput: "② Entrada de Tablero",
+    subStepLayout: "③ Diagrama",
+    rawSheetWord: "Hoja",
+    stripColumn: "Tira",
+    ripWidth: "Ancho de Corte (mm)",
   },
 };
 
@@ -265,9 +301,11 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
   }, [boards]);
   const mt = (key: string) => machineI18n[machineLang]?.[key] || machineI18n.en[key] || key;
   const t0Sheets = useMemo<MachineT0Sheet[]>(() => {
+    // Accept any sheet that has a sheet_id — avoid filtering on `strips` array
+    // which the CutResult index signature types as `unknown`.
     return (cutResult?.t0_plan?.t0_sheets || [])
       .map((sheet) => sheet as MachineT0Sheet)
-      .filter((sheet) => sheet.sheet_id && Array.isArray(sheet.strips) && sheet.strips.length > 0);
+      .filter((sheet) => !!sheet.sheet_id);
   }, [cutResult]);
   const t0SheetById = useMemo(() => {
     const map: Record<string, MachineT0Sheet> = {};
@@ -489,28 +527,32 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         inconsistent,
       } as EngineeringGroup & { inconsistent: boolean };
     });
-  }, [boards, machineLang]);
+  }, [boards]);
 
   const displayGroups = useMemo(() => {
     const usedT0Sheets = new Set<string>();
     const groups: Array<EngineeringGroup & { displayBoards: Board[]; displayT0Sheets: MachineT0Sheet[] }> = [];
 
     for (const grp of engineeringGroups) {
-      const sheetIds = Array.from(new Set(grp.boards.map((b) => b.t0_sheet_id).filter(Boolean) as string[]));
-      if (sheetIds.length > 0 && sheetIds.some((sheetId) => usedT0Sheets.has(sheetId))) {
+      const allSheetIds = Array.from(new Set(grp.boards.map((b) => b.t0_sheet_id).filter(Boolean) as string[]));
+      // Only keep sheet IDs that haven't been claimed by a previous group
+      const newSheetIds = allSheetIds.filter((sheetId) => !usedT0Sheets.has(sheetId));
+
+      // If ALL sheets were already claimed, skip this group
+      if (allSheetIds.length > 0 && newSheetIds.length === 0) {
         continue;
       }
 
-      const displayT0Sheets = sheetIds.map((sheetId) => t0SheetById[sheetId]).filter(Boolean);
-      const displayBoards = sheetIds.length > 0
+      const displayT0Sheets = newSheetIds.map((sheetId) => t0SheetById[sheetId]).filter(Boolean);
+      const displayBoards = newSheetIds.length > 0
         ? Array.from(new Map(
-            sheetIds
+            newSheetIds
               .flatMap((sheetId) => t0BoardStripsBySheetId[sheetId] || [])
               .map(({ board }) => [board.board_id, board])
           ).values())
         : grp.boards;
 
-      for (const sheetId of sheetIds) usedT0Sheets.add(sheetId);
+      for (const sheetId of newSheetIds) usedT0Sheets.add(sheetId);
       groups.push({ ...grp, displayBoards, displayT0Sheets });
     }
 
@@ -619,16 +661,31 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       .print-page:last-child { page-break-after: auto; break-after: auto; }
       table { page-break-inside: avoid; }
 
+      /* Keep individual diagrams (T0SheetCard, BoardTile layout box) together.
+         If a diagram would split across pages, push it to the next page instead. */
+      .print-group-clone [data-print-keep],
+      .print-group-clone [data-print-substep="setup"],
+      .print-group-clone [data-print-substep="input"] {
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      /* Keep each Phase A strip sub-flow and each Phase B pattern sub-flow together when possible. */
+      .print-group-clone [data-print-step] {
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      /* Phase title must stay attached to its first sub-flow — never end a page on a bare phase heading. */
+      .print-group-clone [data-print-phase] > h4,
+      .print-group-clone [data-print-step-title] {
+        page-break-after: avoid;
+        break-after: avoid;
+      }
+
       .print-group-clone {
         box-shadow: none !important;
         border-radius: 0 !important;
         overflow: visible !important;
         flex: 1 1 auto;
-      }
-
-      .print-group-clone [data-print-tiles-wrap] {
-        overflow: visible !important;
-        padding: 8px 12px !important;
       }
 
       .print-group-clone [data-print-group-header] {
@@ -643,26 +700,17 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         margin-top: 10px !important;
       }
 
-      .print-group-clone [data-print-setup] h4,
       .print-group-clone [data-print-step-title] {
         margin-bottom: 4px !important;
       }
 
-      .print-group-clone [data-print-setup-box],
-      .print-group-clone [data-print-step-box] {
+      .print-group-clone [data-print-substep] {
         padding: 10px 12px !important;
         border-radius: 10px !important;
       }
 
       .print-group-clone [data-print-step-header] {
         margin-bottom: 4px !important;
-      }
-
-      .print-group-clone [data-print-tiles-row] {
-        min-width: 0 !important;
-        flex-wrap: wrap !important;
-        gap: 10px !important;
-        padding-bottom: 0 !important;
       }
 
       .print-page-footer {
@@ -800,10 +848,6 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         {(displayGroups as (EngineeringGroup & { inconsistent?: boolean; displayBoards: Board[]; displayT0Sheets: MachineT0Sheet[] })[]).map((grp) => {
           const groupT0Sheets = grp.displayT0Sheets;
           const hasT0RipStep = groupT0Sheets.length > 0;
-          const setupStepTitle = hasT0RipStep
-            ? mt("stepCutTitle").replace("{stepNum}", "2").replace("{patternNo}", mt("machineSetup"))
-            : mt("step1Title");
-          const cutStepBase = hasT0RipStep ? 3 : 2;
           const cutSections = buildCutSections(grp.displayBoards);
           const tileItems = cutSections.flatMap((section) =>
             section.patterns.map((pattern) => ({ section, pattern }))
@@ -827,192 +871,181 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
               </div>
             </div>
 
-            {/* TOP ROW: Cut Layout Images ONLY */}
-            <div data-print-tiles-wrap={grp.engNo} className="p-5 border-b border-border/40 bg-slate-50/50">
-              <div data-print-tiles-row={grp.engNo} className="flex flex-wrap gap-6 pb-2">
+            {/* CONTENT SECTION */}
+            <div data-print-content className="p-5 space-y-8">
+
+              {hasT0RipStep && (
+                <div data-print-phase={`A-${grp.engNo}`} className="space-y-4">
+                  <h4 data-print-step-title className="text-[16px] font-bold text-slate-800 border-b-2 border-emerald-200 pb-2">
+                    {mt("phaseATitle")}
+                  </h4>
+
+                  {groupT0Sheets.map((sheet, sheetIdx) => {
+                    const t0Dims = parseT0SheetDims(sheet.sheet_id);
+                    const sheetStrips = t0BoardStripsBySheetId[sheet.sheet_id] || [];
+                    const recoveredRows = (sheet.recovered_strips || [])
+                      .filter((r) => typeof r.width === "number")
+                      .map((r, rIdx) => ({
+                        key: `recovered-${rIdx}`,
+                        width: r.width as number,
+                        pieces: 1,
+                    }));
+                    const ripRows = [
+                      ...sheetStrips.map(({ board }, stripIdx) => ({
+                        key: board.board_id || `strip-${stripIdx}`,
+                        width: board.strip_width || board.actual_strip_width || 0,
+                        pieces: 1,
+                      })),
+                      ...recoveredRows,
+                    ];
+                    const sheetLabel = `${mt("rawSheetWord")} ${sheetIdx + 1}`;
+                    const sheetBadge = mt("singleSheet");
+
+                    return (
+                      <div key={sheet.sheet_id} data-print-step={`${grp.engNo}-A-${sheetIdx}`} className="space-y-3 border-l-4 border-emerald-200/70 pl-4">
+                        <div data-print-step-header className="flex items-center gap-2 flex-wrap">
+                          <h5 className="text-[15px] font-bold text-slate-800">{sheetLabel}</h5>
+                          <span data-print-board-count className="text-[14px] font-semibold text-red-600">
+                            {sheetBadge}
+                          </span>
+                        </div>
+
+                        <div data-print-substep="setup" className="text-[13px] text-slate-600 bg-black/[0.02] p-4 rounded-xl border border-black/[0.05]">
+                          <h6 className="text-[13px] font-semibold text-slate-700 mb-2">{mt("subStepSetup")}</h6>
+                          <p>
+                            {mt("step1Desc2")} <strong className="text-black font-semibold">{t0Dims.length} mm</strong>{mt("step1Desc3")} <strong className="text-black font-semibold">{t0Dims.width} mm</strong>{mt("step1Desc4")} <strong className="text-black font-semibold">5 mm</strong>。
+                          </p>
+                        </div>
+
+                        <div data-print-substep="input" className="bg-emerald-50/30 p-4 rounded-xl border border-emerald-100">
+                          <h6 className="text-[13px] font-semibold text-slate-700 mb-2">{mt("subStepInput")}</h6>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-[13px] bg-white rounded-lg overflow-hidden border border-border/40">
+                              <thead>
+                                <tr className="bg-black/[0.03] border-b border-border/40">
+                                  <th className="text-center py-3 px-4 font-semibold text-apple-gray w-24">{mt("rowNo")}</th>
+                                  <th className="text-center py-3 px-4 font-semibold text-apple-gray w-48">{mt("cutLength")}</th>
+                                  <th className="text-center py-3 px-4 font-semibold text-apple-gray w-36">{mt("pieceCount")}</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {ripRows.map((row, ri) => (
+                                  <tr key={row.key} className="border-b border-border/10 last:border-0 hover:bg-black/[0.01]">
+                                    <td className="text-center py-2.5 px-4 text-apple-gray">{ri + 1}</td>
+                                    <td className="text-center py-2.5 px-4 font-mono text-[15px]">{row.width}</td>
+                                    <td className="text-center py-2.5 px-4 text-[15px]">{row.pieces}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        <div data-print-substep="layout" data-print-keep className="bg-emerald-50/30 p-4 rounded-xl border border-emerald-100">
+                          <h6 className="text-[13px] font-semibold text-slate-700 mb-3">{mt("subStepLayout")}</h6>
+                          <T0SheetCard
+                            sheetId={sheet.sheet_id}
+                            strips={sheetStrips}
+                            sizeColorMap={sizeColorMap}
+                            onBoardClick={() => {}}
+                            recoveredStrips={(sheet.recovered_strips || [])
+                              .filter((r) => typeof r.width === "number")
+                              .map((r) => ({ width: r.width as number, board_type: r.board_type ?? "", label: r.label }))}
+                            patternNumbering={patternNumbering}
+                            compactHeader={true}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div data-print-phase={`B-${grp.engNo}`} className="space-y-5">
+                <h4 data-print-step-title className="text-[16px] font-bold text-slate-800 border-b-2 border-blue-200 pb-2">
+                  {mt("phaseBTitle")}
+                </h4>
+
                 {tileItems.map(({ section, pattern }, pIdx) => {
                   const numLabel = indexToNumberStr(pIdx);
                   const nw = nominalStockWidthForBoard(pattern.sampleBoard);
                   const patternNeedsRip = nw != null && (nw - section.boardWidth > 0.5);
-                  
-                  const stackBadge = pattern.boardCount > 1 && (
-                    <span data-print-board-count className="ml-2 text-[11px] font-semibold text-blue-700">
-                      ×{pattern.boardCount}
-                    </span>
-                  );
+                  const boardLabel = `${mt("boardWord")} ${numLabel}`;
+                  const badgeText = pattern.boardCount === 1
+                    ? mt("singleSheet")
+                    : `${pattern.boardCount} ${mt("sheetsUnit")}`;
 
-                  const patternLabel = `${mt("boardWord")} ${numLabel}`;
-
-                  if (patternNeedsRip) {
-                    return (
-                      <div key={`${pIdx}-final`} data-print-tile={`${grp.engNo}-${pIdx}`} className="flex flex-col items-center gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[13px] font-bold text-slate-700">{patternLabel}</span>
+                  return (
+                    <div key={pIdx} data-print-step={`${grp.engNo}-B-${pIdx}`} className="space-y-3 border-l-4 border-blue-200/60 pl-4">
+                      <div data-print-step-header className="flex items-center gap-2 flex-wrap">
+                        <h5 className="text-[15px] font-bold text-slate-800">{boardLabel}</h5>
+                        <span data-print-board-count className="text-[14px] font-semibold text-red-600">
+                          {badgeText}
+                        </span>
+                        {patternNeedsRip && (
                           <span className="px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-100 text-[10px] font-bold">
                             {mt("widthRipBadge")} {section.boardWidth}mm
                           </span>
-                          {stackBadge}
-                        </div>
-                        <BoardTile
-                          board={pattern.sampleBoard}
-                          index={pIdx}
-                          color={{ bg: "#fad2a4", border: "#f47820", text: "#c2410c", light: "#ffffff" }}
-                          stackInfo={{ groupSize: pattern.boardCount, stackOf: pattern.boardCount, isLeader: true }}
-                          onClick={() => {}}
-                          disableHover={true}
-                          hideWidthWaste={true}
-                          isRotated={false}
-                          hideUtilization={true}
-                          showDimensions={true}
-                          hideStackBadge={true}
-                          hidePreviousStripShade={true}
-                        />
+                        )}
                       </div>
-                    );
-                  } else {
-                    return (
-                      <div key={`${pIdx}-final`} data-print-tile={`${grp.engNo}-${pIdx}`} className="flex flex-col items-center gap-2">
-                        <div className="flex items-center">
-                          <span className="text-[13px] font-bold text-slate-700">{patternLabel}</span>
-                          {stackBadge}
-                        </div>
-                        <BoardTile 
-                          board={pattern.sampleBoard}
-                          index={pIdx}
-                          color={{ bg: "#fad2a4", border: "#f47820", text: "#c2410c", light: "#ffffff" }}
-                          stackInfo={{ groupSize: pattern.boardCount, stackOf: pattern.boardCount, isLeader: true }}
-                          onClick={() => {}}
-                          disableHover={true}
-                          hideWidthWaste={false}
-                          isRotated={false}
-                          hideUtilization={true}
-                          showDimensions={true}
-                          hideStackBadge={true}
-                          hidePreviousStripShade={true}
-                        />
+
+                      <div data-print-substep="setup" className="text-[13px] text-slate-600 bg-black/[0.02] p-4 rounded-xl border border-black/[0.05]">
+                        <h6 className="text-[13px] font-semibold text-slate-700 mb-2">{mt("subStepSetup")}</h6>
+                        <p>
+                          {mt("step1Desc2")} <strong className="text-black font-semibold">{section.totalLength} mm</strong>{mt("step1Desc3")} <strong className="text-black font-semibold">{section.boardWidth} mm</strong>{mt("step1Desc4")} <strong className="text-black font-semibold">{section.trimSetting} mm</strong>。
+                        </p>
                       </div>
-                    );
-                  }
+
+                      <div data-print-substep="input" className="bg-blue-50/40 p-4 rounded-xl border border-blue-100">
+                        <h6 className="text-[13px] font-semibold text-slate-700 mb-2">{mt("subStepInput")}</h6>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-[13px] bg-white rounded-lg overflow-hidden border border-border/40">
+                            <thead>
+                              <tr className="bg-black/[0.03] border-b border-border/40">
+                                <th className="text-center py-3 px-4 font-semibold text-apple-gray w-24">{mt("rowNo")}</th>
+                                <th className="text-center py-3 px-4 font-semibold text-apple-gray w-48">{mt("cutLength")}</th>
+                                <th className="text-center py-3 px-4 font-semibold text-apple-gray w-36">{mt("pieceCount")}</th>
+                                <th className="py-3 px-4"></th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {pattern.cutRows.map((row, ri) => (
+                                <tr key={ri} className="border-b border-border/10 last:border-0 hover:bg-black/[0.01]">
+                                  <td className="text-center py-2.5 px-4 text-apple-gray">{ri + 1}</td>
+                                  <td className="text-center py-2.5 px-4 font-mono text-[15px]">{row.cutLength}</td>
+                                  <td className="text-center py-2.5 px-4 text-[15px]">{row.pieces}</td>
+                                  <td className="py-2.5 px-4"></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      <div data-print-substep="layout" data-print-keep className="bg-slate-50/60 p-4 rounded-xl border border-slate-200/60">
+                        <h6 className="text-[13px] font-semibold text-slate-700 mb-3">{mt("subStepLayout")}</h6>
+                        <div className="flex justify-center">
+                          <BoardTile
+                            board={pattern.sampleBoard}
+                            index={pIdx}
+                            color={{ bg: "#fad2a4", border: "#f47820", text: "#c2410c", light: "#ffffff" }}
+                            stackInfo={{ groupSize: pattern.boardCount, stackOf: pattern.boardCount, isLeader: true }}
+                            onClick={() => {}}
+                            disableHover={true}
+                            hideWidthWaste={patternNeedsRip}
+                            isRotated={false}
+                            hideUtilization={true}
+                            showDimensions={true}
+                            hideStackBadge={true}
+                            hidePreviousStripShade={true}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
                 })}
               </div>
-            </div>
 
-            {/* CONTENT SECTION */}
-            <div data-print-content className="p-5 space-y-6">
-              {hasT0RipStep && (
-                <div data-print-t0-rip={grp.engNo}>
-                  <h4 data-print-step-title className="text-[15px] font-bold text-slate-800 mb-2">{mt("t0RipTitle")}</h4>
-                  <div data-print-step-box className="bg-emerald-50/30 p-4 rounded-xl border border-emerald-100 space-y-3">
-                    <p className="text-[13px] text-slate-600">{mt("t0RipDesc")}</p>
-                    <div className="grid gap-3 xl:grid-cols-2">
-                      {groupT0Sheets.map((sheet, sheetIdx) => (
-                        <T0SheetCard
-                          key={sheet.sheet_id}
-                          sheetId={sheet.sheet_id}
-                          strips={t0BoardStripsBySheetId[sheet.sheet_id] || []}
-                          sizeColorMap={sizeColorMap}
-                          onBoardClick={() => {}}
-                          recoveredStrips={(sheet.recovered_strips || [])
-                            .filter((r) => typeof r.width === "number" && !!r.board_type)
-                            .map((r) => ({ width: r.width as number, board_type: r.board_type as string, label: r.label }))}
-                          patternNumbering={patternNumbering}
-                          compactHeader={true}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Step 1: Machine Setup */}
-              <div data-print-setup={grp.engNo}>
-                <h4 data-print-step-title className="text-[15px] font-bold text-slate-800 mb-2">{setupStepTitle}</h4>
-                <div className="space-y-3">
-                  {cutSections.map((section) => (
-                    <div key={section.key} data-print-setup-box className="text-[13px] text-slate-600 bg-black/[0.02] p-4 rounded-xl border border-black/[0.05]">
-                      <p>
-                        {mt("step1Desc1")} <strong className="text-black font-semibold">{section.boardType}</strong>{mt("step1Desc2")} <strong className="text-black font-semibold">{section.totalLength} mm</strong>{mt("step1Desc3")} <strong className="text-black font-semibold">{section.boardWidth} mm</strong>{mt("step1Desc4")} <strong className="text-black font-semibold">{section.trimSetting} mm</strong>。
-                      </p>
-                      {section.needsWidthRip && section.ripStockWidthMm != null && (
-                        <div className="mt-3 bg-white p-3 rounded-xl border border-border/60">
-
-                      <table className="w-full text-[13px] rounded-lg overflow-hidden border border-border/40">
-                        <thead>
-                          <tr className="bg-black/[0.03] border-b border-border/40">
-                            <th className="text-center py-2 px-4 font-semibold text-apple-gray w-24">{mt("rowNo")}</th>
-                            <th className="text-center py-2 px-4 font-semibold text-apple-gray w-48">{mt("cutLength")}</th>
-                            <th className="text-center py-2 px-4 font-semibold text-apple-gray w-36">{mt("pieceCount")}</th>
-                            <th className="py-2 px-4"></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr className="hover:bg-black/[0.01]">
-                            <td className="text-center py-2.5 px-4 text-apple-gray">1</td>
-                            <td className="text-center py-2.5 px-4 font-mono text-[15px]">{section.boardWidth}</td>
-                            <td className="text-center py-2.5 px-4 text-[15px]">1</td>
-                            <td className="py-2.5 px-4"></td>
-                          </tr>
-                        </tbody>
-                      </table>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Step 2+: Cutting steps */}
-              {tileItems.map(({ pattern }, pIdx) => {
-                const stepNum = pIdx + cutStepBase;
-                const numLabel = indexToNumberStr(pIdx);
-                
-                const nw = nominalStockWidthForBoard(pattern.sampleBoard);
-                const patternNeedsRip = nw != null && (nw - grp.boardWidth > 0.5);
-                
-                const boardLabel = `${mt("boardWord")} ${numLabel}`;
-                
-                const badgeText = pattern.boardCount === 1
-                  ? mt("singleSheet")
-                  : `${pattern.boardCount} ${mt("sheetsUnit")}`;
-
-                return (
-                  <div key={pIdx} data-print-step={`${grp.engNo}-${pIdx}`}>
-                    <div data-print-step-header className="mb-2">
-                      <h4 data-print-step-title className="text-[15px] font-bold text-slate-800">
-                        {mt("stepCutTitle").replace("{stepNum}", String(stepNum)).replace("{patternNo}", boardLabel)}
-                        <span data-print-board-count className="ml-3 text-[14px] font-semibold text-red-600 align-baseline">
-                          {badgeText}
-                        </span>
-                      </h4>
-                    </div>
-                    <div data-print-step-box className="bg-blue-50/40 p-4 rounded-xl border border-blue-100">
-                      
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-[13px] bg-white rounded-lg overflow-hidden border border-border/40">
-                          <thead>
-                            <tr className="bg-black/[0.03] border-b border-border/40">
-                              <th className="text-center py-3 px-4 font-semibold text-apple-gray w-24">{mt("rowNo")}</th>
-                              <th className="text-center py-3 px-4 font-semibold text-apple-gray w-48">{mt("cutLength")}</th>
-                              <th className="text-center py-3 px-4 font-semibold text-apple-gray w-36">{mt("pieceCount")}</th>
-                              <th className="py-3 px-4"></th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {pattern.cutRows.map((row, ri) => (
-                              <tr key={ri} className="border-b border-border/10 last:border-0 hover:bg-black/[0.01]">
-                                <td className="text-center py-2.5 px-4 text-apple-gray">{ri + 1}</td>
-                                <td className="text-center py-2.5 px-4 font-mono text-[15px]">{row.cutLength}</td>
-                                <td className="text-center py-2.5 px-4 text-[15px]">{row.pieces}</td>
-                                <td className="py-2.5 px-4"></td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
             </div>
 
           </div>

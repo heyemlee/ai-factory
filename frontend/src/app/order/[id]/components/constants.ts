@@ -11,9 +11,9 @@ export const SIZE_COLORS: SizeColor[] = [
 
 /* Colors for T0 strips within a single T0 sheet */
 export const T0_STRIP_COLORS = [
-  { bg: "#a5f3e9", border: "#14b8a6", text: "#0d6e5e" },   // teal
+  { bg: "#bfdbfe", border: "#3b82f6", text: "#1d4ed8" },   // blue
   { bg: "#f9a8d4", border: "#ec4899", text: "#9d174d" },   // pink
   { bg: "#fdba74", border: "#f97316", text: "#9a3412" },   // orange
-  { bg: "#93c5fd", border: "#3b82f6", text: "#1d4ed8" },   // blue
   { bg: "#c4b5fd", border: "#8b5cf6", text: "#5b21b6" },   // violet
+  { bg: "#fde68a", border: "#f59e0b", text: "#92400e" },   // amber
 ];

@@ -5,7 +5,7 @@ import type { Board, SizeColor, PatternNumbering } from "./types";
 import { T0_STRIP_COLORS } from "./constants";
 import { clamp, safeNum } from "./utils";
 
-export function T0SheetCard({ sheetId, strips, sizeColorMap: _sizeColorMap, onBoardClick, recoveredStrips = [], patternNumbering, compactHeader = false }: {
+export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [], patternNumbering, compactHeader = false }: {
   sheetId: string;
   strips: { board: Board; index: number }[];
   sizeColorMap: Record<string, SizeColor>;
@@ -45,7 +45,7 @@ export function T0SheetCard({ sheetId, strips, sizeColorMap: _sizeColorMap, onBo
   }, [strips]);
 
   const recoveredLayout = useMemo(() => {
-    return recoveredStrips.reduce<Array<{ width: number; board_type: string; label?: string; left: number }>>((acc, rs, idx) => {
+    return recoveredStrips.reduce<Array<{ width: number; board_type: string; label?: string; left: number }>>((acc, rs) => {
       const previous = acc[acc.length - 1];
       const left = previous ? previous.left + safeNum(previous.width) + 5 : placedEdge;
       acc.push({ ...rs, left });
@@ -83,11 +83,15 @@ export function T0SheetCard({ sheetId, strips, sizeColorMap: _sizeColorMap, onBo
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="text-[10px] text-slate-500 font-mono whitespace-nowrap -rotate-90 w-6">2438.4 mm</div>
             <div
-              className="relative w-full aspect-[1219.2/2438.4] min-h-[360px] max-h-[520px] rounded-sm border-2 border-slate-300 overflow-hidden bg-slate-50"
+              className="relative w-full aspect-[1219.2/2438.4] min-h-[360px] max-h-[520px] rounded-sm border-2 border-slate-300 overflow-visible bg-slate-50"
               style={{ backgroundImage: sheetWastePattern }}
             >
+              <div className="absolute left-[-26px] top-1/2 -translate-y-1/2 z-10 pointer-events-none">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M19 12H5M12 19l-7-7 7-7" />
+                </svg>
+              </div>
               {strips.map(({ board, index: idx }, stripIdx) => {
                 const stripColor = T0_STRIP_COLORS[stripIdx % T0_STRIP_COLORS.length];
                 const stripX = safeNum(board.t0_strip_position);
@@ -189,6 +193,7 @@ export function T0SheetCard({ sheetId, strips, sizeColorMap: _sizeColorMap, onBo
                 );
               })}
             </div>
+            <div className="text-[10px] text-slate-500 font-mono whitespace-nowrap -rotate-90 w-6">2438.4 mm</div>
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2 text-[10px]">

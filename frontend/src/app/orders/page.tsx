@@ -182,6 +182,7 @@ export default function Orders() {
         filename: file.name,
         status: "pending",
         file_url: fileUrl,
+        cut_mode: "t0_start",
       });
 
     if (insertError) {
