@@ -66,7 +66,6 @@ export function useBoxColors(includeInactive = false) {
 
   useEffect(() => {
     let alive = true;
-    setLoading(!colorCache);
     fetchBoxColors(includeInactive).then((rows) => {
       if (!alive) return;
       setColors(rows);

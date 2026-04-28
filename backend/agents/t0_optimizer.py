@@ -98,34 +98,26 @@ def optimize_t0_from_strips(strip_items: list) -> dict:
     # Filter out oversized
     valid_items = [x for x in sorted_items if x["strip_width"] <= usable_width]
 
-    # Group items by strip_width so we don't mix different widths on the same T0 board
-    from collections import defaultdict
-    width_groups = defaultdict(list)
-    for item in valid_items:
-        width_groups[item["strip_width"]].append(item)
-
     open_sheets = []  # each: {remaining, strips, cut_count}
 
-    # Pack each group independently
-    for sw, items in sorted(width_groups.items(), key=lambda x: x[0], reverse=True):
-        group_sheets = []
-        for item in items:
-            placed = False
-            for sheet in group_sheets:
-                needed = sw + SAW_KERF
-                if sheet["remaining"] >= needed:
-                    sheet["strips"].append(item)
-                    sheet["remaining"] -= needed
-                    sheet["cut_count"] += 1
-                    placed = True
-                    break
-            if not placed:
-                group_sheets.append({
-                    "remaining": usable_width - sw,
-                    "strips": [item],
-                    "cut_count": 1,
-                })
-        open_sheets.extend(group_sheets)
+    # True mixed-width FFD: all valid strips compete for the same open T0 sheets.
+    for item in valid_items:
+        sw = item["strip_width"]
+        placed = False
+        for sheet in open_sheets:
+            needed = sw + SAW_KERF
+            if sheet["remaining"] >= needed:
+                sheet["strips"].append(item)
+                sheet["remaining"] -= needed
+                sheet["cut_count"] += 1
+                placed = True
+                break
+        if not placed:
+            open_sheets.append({
+                "remaining": usable_width - sw,
+                "strips": [item],
+                "cut_count": 1,
+            })
 
     # Build results
     t0_sheets = []

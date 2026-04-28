@@ -74,6 +74,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
   const utilPct = overrideUtilNum !== undefined ? (overrideUtilNum * 100).toFixed(1) : (board.utilization * 100).toFixed(1);
   const utilNum = parseFloat(utilPct);
   const utilColor = utilNum > 80 ? "#10b981" : utilNum > 60 ? "#f59e0b" : "#ef4444";
+  const wastePattern = "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 4px, #cbd5e1 4px, #cbd5e1 5.5px)";
 
   const stackOf = stackInfo?.stackOf || 1;
 
@@ -168,7 +169,9 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
                 width: '100%', height: '100%',
                 left: 0, top: 0
             }),
-            backgroundColor: color.light, border: `1.5px solid ${color.border}`,
+            backgroundColor: "#f8fafc",
+            backgroundImage: wastePattern,
+            border: `1.5px solid ${color.border}`,
           }}>
             {/* Shaded area for previously cut strips (if this is Strip 2+) */}
             {bottomOffset > 0 && !hidePreviousStripShade && (
@@ -202,7 +205,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
                   <div className="absolute" style={{
                     left: `${lengthWasteWidth + p.left}%`, bottom: `${visualBottomOffset + p.height}%`, width: `${p.width}%`, height: `${stripHeight - p.height}%`,
                     backgroundColor: "#f8fafc",
-                    backgroundImage: "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 4px, rgba(0,0,0,0.2) 4px, rgba(0,0,0,0.2) 5.5px)",
+                    backgroundImage: wastePattern,
                     borderRight: `1px dashed #94a3b8`,
                     borderTop: `1px solid ${color.border}20`,
                   }} />
@@ -216,7 +219,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
                 left: 0, width: `${lengthWasteWidth}%`,
                 bottom: `${visualBottomOffset}%`, height: `${stripHeight}%`,
                 backgroundColor: "#f8fafc",
-                backgroundImage: "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 4px, rgba(0,0,0,0.2) 4px, rgba(0,0,0,0.2) 5.5px)",
+                backgroundImage: wastePattern,
                 borderRight: `1.5px dashed #94a3b8`,
                 borderBottom: visualBottomOffset > 0 ? `1px solid ${color.border}40` : undefined,
                 borderTop: `1px solid ${color.border}`,
@@ -240,7 +243,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
                       }
                     : {
                         backgroundColor: "#f8fafc",
-                        backgroundImage: "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 4px, rgba(0,0,0,0.2) 4px, rgba(0,0,0,0.2) 5.5px)",
+                        backgroundImage: wastePattern,
                         ...(isRotated ? { borderTop: `1.5px dashed #94a3b8` } : { borderBottom: `1.5px dashed #94a3b8` }),
                       })
                 }} />

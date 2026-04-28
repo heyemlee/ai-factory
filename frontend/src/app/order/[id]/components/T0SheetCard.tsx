@@ -1,18 +1,18 @@
 "use client";
 import React, { useMemo } from "react";
-import { Plus } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import type { Board, SizeColor, PatternNumbering } from "./types";
 import { T0_STRIP_COLORS } from "./constants";
-import { BoardTile } from "./BoardTile";
+import { clamp, safeNum } from "./utils";
 
-export function T0SheetCard({ sheetId, strips, sizeColorMap, onBoardClick, recoveredStrips = [], patternNumbering }: {
+export function T0SheetCard({ sheetId, strips, sizeColorMap: _sizeColorMap, onBoardClick, recoveredStrips = [], patternNumbering, compactHeader = false }: {
   sheetId: string;
   strips: { board: Board; index: number }[];
   sizeColorMap: Record<string, SizeColor>;
   onBoardClick: (b: Board) => void;
   recoveredStrips?: { width: number; board_type: string; label?: string }[];
   patternNumbering: PatternNumbering;
+  compactHeader?: boolean;
 }) {
   const { t } = useLanguage();
   const T0_FULL_WIDTH = 1219.2;
@@ -29,19 +29,42 @@ export function T0SheetCard({ sheetId, strips, sizeColorMap, onBoardClick, recov
     return sheetArea > 0 ? (totalPartsArea + recoveredArea) / sheetArea : 0;
   }, [recoveredArea, strips]);
 
-  // Total strips count
   const totalStrips = strips.length;
+  const sheetWastePattern = "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 5px, #cbd5e1 5px, #cbd5e1 6.5px)";
+  const compactSheetLabel = useMemo(() => {
+    const match = sheetId.match(/^(T0-\d+(?:\.\d+)?x\d+(?:\.\d+)?)/i);
+    return match?.[1] || sheetId;
+  }, [sheetId]);
+
+  const placedEdge = useMemo(() => {
+    return strips.reduce((max, { board }) => {
+      const x = safeNum(board.t0_strip_position);
+      const w = safeNum(board.strip_width);
+      return Math.max(max, x + w);
+    }, 0);
+  }, [strips]);
+
+  const recoveredLayout = useMemo(() => {
+    return recoveredStrips.reduce<Array<{ width: number; board_type: string; label?: string; left: number }>>((acc, rs, idx) => {
+      const previous = acc[acc.length - 1];
+      const left = previous ? previous.left + safeNum(previous.width) + 5 : placedEdge;
+      acc.push({ ...rs, left });
+      return acc;
+    }, []);
+  }, [placedEdge, recoveredStrips]);
 
   return (
-    <div className="rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50/50 p-4 space-y-4">
+    <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-4 shadow-sm">
       {/* Header */}
       <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-slate-400" />
-          <span className="text-[14px] font-bold text-foreground">{sheetId}</span>
-          <span className="text-[11px] text-apple-gray font-medium">
-            · {totalStrips} strips · 1 T0
-          </span>
+          <div className="w-2 h-2 rounded-full bg-slate-500" />
+          <span className="text-[14px] font-bold text-foreground">{compactHeader ? compactSheetLabel : sheetId}</span>
+          {!compactHeader && (
+            <span className="text-[11px] text-apple-gray font-medium">
+              · {totalStrips} cuts · 1 T0
+            </span>
+          )}
         </div>
         <span
           className="text-[13px] font-bold tabular-nums"
@@ -51,65 +74,145 @@ export function T0SheetCard({ sheetId, strips, sizeColorMap, onBoardClick, recov
         </span>
       </div>
 
-      {/* Individual strip BoardTiles with progressive T0 shadow overlay */}
-      <div className="flex flex-col gap-y-5 pt-2">
-        {strips.map(({ board, index: idx }, stripIdx) => {
-          const stripColor = T0_STRIP_COLORS[stripIdx % T0_STRIP_COLORS.length];
+      <div className="flex justify-center pt-1">
+        <div className="w-full max-w-[340px]">
+          <div className="flex items-center justify-center gap-2 mb-2">
+            <div className="h-px bg-slate-200 flex-1" />
+            <span className="text-[10px] text-slate-500 font-mono">1219.2 mm</span>
+            <div className="h-px bg-slate-200 flex-1" />
+          </div>
 
-          // Keep the strip cards progressive, but let the final strip reflect recovered stock too.
-          let cumArea = 0;
-          for (let i = 0; i <= stripIdx; i++) {
-            cumArea += strips[i].board.parts_total_area || 0;
-          }
-          if (stripIdx === strips.length - 1) {
-            cumArea += recoveredArea;
-          }
-          const cumUtilNum = (T0_FULL_WIDTH * T0_BOARD_HEIGHT) > 0 ? cumArea / (T0_FULL_WIDTH * T0_BOARD_HEIGHT) : 0;
+          <div className="flex items-center gap-2">
+            <div className="text-[10px] text-slate-500 font-mono whitespace-nowrap -rotate-90 w-6">2438.4 mm</div>
+            <div
+              className="relative w-full aspect-[1219.2/2438.4] min-h-[360px] max-h-[520px] rounded-sm border-2 border-slate-300 overflow-hidden bg-slate-50"
+              style={{ backgroundImage: sheetWastePattern }}
+            >
+              {strips.map(({ board, index: idx }, stripIdx) => {
+                const stripColor = T0_STRIP_COLORS[stripIdx % T0_STRIP_COLORS.length];
+                const stripX = safeNum(board.t0_strip_position);
+                const stripW = safeNum(board.strip_width);
+                const stripLeftPct = clamp((stripX / T0_FULL_WIDTH) * 100, 0, 100);
+                const stripWidthPct = clamp((stripW / T0_FULL_WIDTH) * 100, 0, 100);
+                let y = safeNum(board.trim_loss);
 
-          return (
-            <div key={`${board.board_id}-${idx}`} className="space-y-1.5" data-pattern-no={patternNumbering.byIndex[idx] ?? undefined}>
-              {/* Strip label */}
-              <div className="flex items-center gap-2 px-2">
-                <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: stripColor.bg, border: `1.5px solid ${stripColor.border}` }} />
-                <span className="text-[10px] font-semibold" style={{ color: stripColor.text }}>
-                  Strip {stripIdx + 1} · {board.strip_width}mm
-                </span>
+                return (
+                  <button
+                    type="button"
+                    key={`${board.board_id}-${idx}`}
+                    data-pattern-no={patternNumbering.byIndex[idx] ?? undefined}
+                    onClick={() => onBoardClick(board)}
+                    className="absolute top-0 h-full text-left overflow-hidden focus:outline-none focus:ring-2 focus:ring-apple-blue/40"
+                    title={`${board.board_id} · ${stripW}mm`}
+                    style={{
+                      left: `${stripLeftPct}%`,
+                      width: `${stripWidthPct}%`,
+                      backgroundColor: stripColor.bg,
+                      borderLeft: `1px solid ${stripColor.border}`,
+                      borderRight: `1px solid ${stripColor.border}`,
+                    }}
+                  >
+                    <div className="absolute inset-x-0 top-0 h-full opacity-20" style={{ backgroundColor: stripColor.bg }} />
+                    {board.parts.map((part, partIdx) => {
+                      const partLen = safeNum(part.cut_length) || safeNum(part.Height);
+                      const partWidth = safeNum(part.Width);
+                      const topPct = clamp((y / T0_BOARD_HEIGHT) * 100, 0, 100);
+                      const heightPct = clamp((partLen / T0_BOARD_HEIGHT) * 100, 0, 100);
+                      const partWidthPct = stripW > 0 ? clamp((partWidth / stripW) * 100, 0, 100) : 100;
+                      y += partLen + safeNum(board.saw_kerf);
+                      const showLabel = stripWidthPct > 8 && heightPct > 4;
+                      return (
+                        <React.Fragment key={`${part.part_id}-${partIdx}`}>
+                          <div
+                            className="absolute left-0 overflow-hidden flex items-center justify-center"
+                            style={{
+                              top: `${topPct}%`,
+                              height: `${heightPct}%`,
+                              width: `${partWidthPct}%`,
+                              backgroundColor: stripColor.bg,
+                              borderTop: `1px solid ${stripColor.border}`,
+                              borderRight: `1px solid ${stripColor.border}`,
+                            }}
+                          >
+                            {showLabel && (
+                              <span className="text-[9px] font-bold truncate px-1" style={{ color: stripColor.text }}>
+                                {part.component || part.part_id}
+                              </span>
+                            )}
+                          </div>
+                          {partWidthPct < 99 && (
+                            <div
+                              className="absolute right-0"
+                              style={{
+                                top: `${topPct}%`,
+                                height: `${heightPct}%`,
+                                width: `${100 - partWidthPct}%`,
+                                backgroundImage: sheetWastePattern,
+                                borderTop: `1px solid ${stripColor.border}55`,
+                              }}
+                            />
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                    {y < T0_BOARD_HEIGHT && (
+                      <div
+                        className="absolute left-0 right-0 bottom-0"
+                        style={{
+                          top: `${clamp((y / T0_BOARD_HEIGHT) * 100, 0, 100)}%`,
+                          backgroundImage: sheetWastePattern,
+                          borderTop: `1.5px dashed ${stripColor.border}`,
+                        }}
+                      />
+                    )}
+                    <div className="absolute left-1 top-1 rounded bg-white/80 px-1 py-0.5 text-[9px] font-bold shadow-sm" style={{ color: stripColor.text }}>
+                      {patternNumbering.byIndex[idx] ? `P${patternNumbering.byIndex[idx]}` : `${stripW}mm`}
+                    </div>
+                  </button>
+                );
+              })}
 
-              </div>
-
-              {/* The actual BoardTile — no stackInfo since each strip is unique on this T0 sheet */}
-              <BoardTile
-                board={board}
-                index={idx}
-                color={{ ...sizeColorMap[board.board_size], bg: stripColor.bg, border: stripColor.border, text: stripColor.text }}
-                onClick={() => onBoardClick(board)}
-                overrideUtilNum={cumUtilNum}
-              />
-            </div>
-          );
-        })}
-
-        {/* Recovered Strips Visual Representation */}
-        {recoveredStrips.map((rs, rIdx) => (
-          <div key={`recovered-${rIdx}`} className="space-y-1.5">
-            <div className="flex items-center gap-2 px-2">
-              <div className="w-2.5 h-2.5 rounded-sm bg-apple-green/50 border-[1.5px] border-apple-green" />
-              <span className="text-[10px] font-semibold text-apple-green">
-                {t("orderDetail.modalThRecovered")} · {rs.width}mm
-              </span>
-            </div>
-            
-            <div className="relative rounded-xl border-2 border-dashed border-apple-green/40 bg-apple-green/5 overflow-hidden flex items-center justify-center py-6 h-[80px]">
-              <div className="text-center">
-                <span className="block text-[13px] font-bold text-apple-green">{rs.board_type}</span>
-                <span className="block text-[11px] text-apple-green/70 mt-0.5">{rs.width} × 2438.4 mm</span>
-                <span className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-apple-green/20 text-apple-green text-[10px] font-bold uppercase tracking-wider">
-                  <Plus size={10} /> STOCK
-                </span>
-              </div>
+              {recoveredLayout.map((rs, rIdx) => {
+                const leftPct = clamp((rs.left / T0_FULL_WIDTH) * 100, 0, 100);
+                const widthPct = clamp((safeNum(rs.width) / T0_FULL_WIDTH) * 100, 0, 100);
+                return (
+                  <div
+                    key={`recovered-${rIdx}`}
+                    className="absolute top-0 h-full bg-apple-green/35 border-x border-apple-green/80 flex items-center justify-center"
+                    title={`${rs.board_type} · ${rs.width}mm`}
+                    style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                  >
+                    <div className="-rotate-90 whitespace-nowrap text-[10px] font-bold text-apple-green">
+                      {rs.width}mm recovered
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
-        ))}
+
+          <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
+            {strips.map(({ board, index: idx }, stripIdx) => {
+          const stripColor = T0_STRIP_COLORS[stripIdx % T0_STRIP_COLORS.length];
+          return (
+                <span key={`${board.board_id}-legend-${idx}`} className="inline-flex items-center gap-1 rounded bg-black/[0.03] px-1.5 py-0.5">
+                  <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: stripColor.bg, border: `1px solid ${stripColor.border}` }} />
+                  P{patternNumbering.byIndex[idx] ?? stripIdx + 1} · {board.strip_width}mm
+                </span>
+          );
+        })}
+            {recoveredStrips.length > 0 && (
+              <span className="inline-flex items-center gap-1 rounded bg-apple-green/10 px-1.5 py-0.5 text-apple-green">
+                <span className="h-2 w-2 rounded-sm bg-apple-green/50 border border-apple-green" />
+                {t("orderDetail.modalThRecovered")} · {recoveredStrips.map((r) => `${r.width}mm`).join(", ")}
+              </span>
+            )}
+            <span className="inline-flex items-center gap-1 rounded bg-black/[0.03] px-1.5 py-0.5 text-slate-500">
+              <span className="h-2 w-3 rounded-sm border border-slate-300" style={{ backgroundImage: sheetWastePattern }} />
+              Waste
+            </span>
+          </div>
+        </div>
       </div>
     </div>
   );

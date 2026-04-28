@@ -44,6 +44,52 @@ DEFAULT_BOARD_T0        = "T0-RAW"
 DEFAULT_BOARD_T1_NARROW = "T1-304.8-INV"
 DEFAULT_BOARD_T1_WIDE   = "T1-609.6-INV"
 
+COMMON_RECOVERY_WIDTHS = [
+    304.8,
+    609.6,
+    101.6,
+    286.8,
+    266.8,
+    591.6,
+    571.6,
+    762.0,
+    838.2,
+]
+
+
+def _format_width_for_code(width: float) -> str:
+    text = f"{float(width):.1f}"
+    return text[:-2] if text.endswith(".0") else text
+
+
+def common_recovery_board_type(width: float) -> str:
+    return f"T1-{_format_width_for_code(width)}x2438.4"
+
+
+def load_recovery_specs_from_supabase() -> list:
+    """Load recoverable T1 board specs from Supabase board_specs."""
+    try:
+        from config.supabase_client import supabase
+        result = (
+            supabase.table("board_specs")
+            .select("board_type,width,height,is_recoverable,is_active,sort_order")
+            .eq("is_active", True)
+            .eq("is_recoverable", True)
+            .order("sort_order", desc=False)
+            .execute()
+        )
+        specs = []
+        for row in result.data or []:
+            height = float(row.get("height") or 0)
+            width = float(row.get("width") or 0)
+            if width > 0 and height + 1e-3 >= BOARD_HEIGHT:
+                specs.append({"board_type": row["board_type"], "width": width})
+        if specs:
+            return specs
+    except Exception as e:
+        print(f"⚠️  Could not load board_specs recovery sizes ({e}); using fallback sizes")
+    return [{"board_type": common_recovery_board_type(w), "width": w} for w in COMMON_RECOVERY_WIDTHS]
+
 
 # ─────────────────────────────────────────────
 # Data Loading
@@ -340,11 +386,11 @@ def build_strip_demand(parts: list, inventory: dict = None) -> list:
 # STEP 2: Apply Inventory (stock deduction)
 # ─────────────────────────────────────────────
 
-def apply_inventory(strip_demand: list, inventory: dict) -> dict:
+def apply_inventory(strip_demand: list, inventory: dict, force_t0_start: bool = False) -> dict:
     """
     Use existing T1 inventory to satisfy strip demand.
-    Inventory ONLY covers standard T1 strips (304.8 / 609.6).
-    Custom/oversize strips always go to T0 pool.
+    Inventory covers configured T1/common-width strips up to real stock quantity.
+    Custom/oversize strips, shortages, and force-T0-start orders go to T0 pool.
 
     Returns:
       {
@@ -375,8 +421,8 @@ def apply_inventory(strip_demand: list, inventory: dict) -> dict:
         sw = sd["strip_width"]
         parts_for_strip = sd["parts"]
 
-        if sd["needs_t0"]:
-            # 超宽零件 → 必须 T0 裁切, 直接进 t0_pool
+        if force_t0_start or sd["needs_t0"]:
+            # T0 Start / 超宽零件 → 必须 T0 裁切, 直接进 t0_pool
             t0_pool.append({
                 "strip_width": sw,
                 "parts": parts_for_strip,
@@ -399,21 +445,47 @@ def apply_inventory(strip_demand: list, inventory: dict) -> dict:
                 })
                 continue
 
-        # Ignore inventory quantity limits! If it's a standard T1 width, we ALWAYS cut it from T1 stock.
-        # This matches the factory workflow: T1 parts are always cut from T1 stock, and T0 is only for custom widths.
         needed_strips = _count_strips_needed(parts_for_strip, sw)
-        used_inventory[bt] = used_inventory.get(bt, 0) + needed_strips
+        available = int((board_info or {}).get("qty", 0))
 
-        # All parts served from inventory (unlimited stock assumption)
-        inventory_strips.append({
+        if available >= needed_strips:
+            used_inventory[bt] = used_inventory.get(bt, 0) + needed_strips
+            inventory_strips.append({
+                "strip_width": sw,
+                "board_type": bt,
+                "parts": parts_for_strip,
+                "source": "inventory",
+                "strips_used": needed_strips,
+            })
+            continue
+
+        if available > 0:
+            inv_parts, overflow_parts = _split_parts_for_strips(parts_for_strip, sw, available)
+            inv_used = _count_strips_needed(inv_parts, sw) if inv_parts else 0
+            if inv_parts:
+                used_inventory[bt] = used_inventory.get(bt, 0) + inv_used
+                inventory_strips.append({
+                    "strip_width": sw,
+                    "board_type": bt,
+                    "parts": inv_parts,
+                    "source": "inventory",
+                    "strips_used": inv_used,
+                })
+            if overflow_parts:
+                t0_pool.append({
+                    "strip_width": sw,
+                    "parts": overflow_parts,
+                })
+            continue
+
+        t0_pool.append({
             "strip_width": sw,
-            "board_type": sd["board_type"],
             "parts": parts_for_strip,
-            "source": "inventory",
-            "strips_used": needed_strips,
         })
 
     print(f"\n── STEP 2: Inventory Applied ──")
+    if force_t0_start:
+        print("  🔶 T0 Start: existing T1 inventory ignored for this run")
     for bt, cnt in used_inventory.items():
         print(f"  ✅ Used {cnt} × {bt} from inventory")
     if t0_pool:
@@ -894,7 +966,8 @@ def _validate_cut_result(output: dict, cabinet_breakdown: dict, total_parts_requ
 
 
 def _run_pipeline_for_color(parts: list, inventory: dict, color: str,
-                            t0_id_offset: int = 0) -> dict:
+                            t0_id_offset: int = 0,
+                            force_t0_start: bool = False) -> dict:
     """Run STEP 1-5 of the cutting pipeline for a single color partition.
 
     inventory is the single-color view {board_type: info}.
@@ -919,7 +992,7 @@ def _run_pipeline_for_color(parts: list, inventory: dict, color: str,
     strip_demand = build_strip_demand(parts, inventory)
 
     # ─── STEP 2: Apply inventory ───
-    inv_result = apply_inventory(strip_demand, inventory)
+    inv_result = apply_inventory(strip_demand, inventory, force_t0_start=force_t0_start)
     used_inventory = inv_result["used_inventory"]
     t0_pool = inv_result["t0_pool"]
     inventory_strips = inv_result["inventory_strips"]
@@ -952,7 +1025,12 @@ def _run_pipeline_for_color(parts: list, inventory: dict, color: str,
             sheet["color"] = color
 
         # ─── STEP 4: Recover leftover from T0 sheets ───
-        recovery_candidates = []
+        recovery_by_width: dict[float, dict] = {}
+        for spec in load_recovery_specs_from_supabase():
+            recovery_by_width[round(float(spec["width"]), 1)] = {
+                "board_type": spec["board_type"],
+                "width": float(spec["width"]),
+            }
         for bt, info in inventory.items():
             if bt.startswith("T0"):
                 continue
@@ -961,8 +1039,8 @@ def _run_pipeline_for_color(parts: list, inventory: dict, color: str,
             w = float(info.get("Width", 0))
             if w <= 0:
                 continue
-            recovery_candidates.append({"board_type": bt, "width": w})
-        recovery_candidates.sort(key=lambda c: -c["width"])
+            recovery_by_width[round(w, 1)] = {"board_type": bt, "width": w}
+        recovery_candidates = sorted(recovery_by_width.values(), key=lambda c: -c["width"])
         if recovery_candidates:
             cand_desc = ", ".join(f"{c['board_type']}={c['width']}mm" for c in recovery_candidates)
             print(f"  ♻️  Recovery candidates ({color}): {cand_desc}")
@@ -1069,7 +1147,8 @@ def _run_pipeline_for_color(parts: list, inventory: dict, color: str,
     }
 
 
-def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "output/cut_result.json", cabinet_breakdown: dict = None):
+def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "output/cut_result.json",
+               cabinet_breakdown: dict = None, force_t0_start: bool = False):
     """
     Full engine run — v5 unified naming + real factory flow + per-color partition:
 
@@ -1078,11 +1157,14 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
         → merge results
 
     Cutting is strictly partitioned by box color. T0 sheets and inventory
-    are never shared across colors.
+    are never shared across colors. When force_t0_start is true, all strip
+    demand starts from T0 raw sheets and existing T1 stock is ignored.
     """
     print("=" * 60)
     print("  Guillotine Cutting Engine v5 — Per-Color Pipeline")
     print("=" * 60)
+    if force_t0_start:
+        print("  Mode: T0 Start (all strips from raw sheets)")
 
     # ─── Load data ───
     parts, skipped_rows = load_parts(parts_path)
@@ -1166,6 +1248,7 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
             color_inventory,
             color,
             t0_id_offset=t0_id_offset,
+            force_t0_start=force_t0_start,
         )
         all_board_results.extend(partial["boards"])
         if partial["t0_plan"]:
@@ -1269,6 +1352,7 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
         "overall_utilization": round(overall_util, 4),
         "config_trim_loss_mm": TRIM_LOSS,
         "config_saw_kerf_mm": SAW_KERF,
+        "cut_mode": "t0_start" if force_t0_start else "inventory_first",
     }
     recovered_inventory = aggregated_recovered
 
@@ -1321,6 +1405,7 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
         "summary": summary,
         "issues": issues,
         "boards": all_board_results,
+        "cut_mode": "t0_start" if force_t0_start else "inventory_first",
     }
 
     # Add aggregated T0 plan details if present

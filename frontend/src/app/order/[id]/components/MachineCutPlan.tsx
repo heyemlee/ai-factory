@@ -1,12 +1,13 @@
 "use client";
 import React, { useMemo, useState } from "react";
 import { Printer } from "lucide-react";
-import type { Board, SizeColor, PatternNumbering, EngineeringGroup, CutResult, IntegrityIssue } from "./types";
+import type { Board, EngineeringGroup, CutResult, IntegrityIssue } from "./types";
 import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
 import { useLanguage } from "@/lib/i18n";
 import { SIZE_COLORS } from "./constants";
 import { boardFingerprint, nominalStockWidthForBoard, parseBoardDims } from "./utils";
 import { BoardTile } from "./BoardTile";
+import { T0SheetCard } from "./T0SheetCard";
 import { MachineCutErrorBoundary } from "./MachineCutErrorBoundary";
 
 /** Convert 0-based index to number string: 0→"1", 1→"2" */
@@ -18,6 +19,42 @@ function formatOrderInlineLabel(lang: "zh" | "en" | "es", orderNoLabel: string, 
   if (!orderLabel) return "";
   return lang === "zh" ? `(${orderNoLabel}${orderLabel})` : `(${orderNoLabel} ${orderLabel})`;
 }
+
+interface MachineT0Recovered {
+  width?: number;
+  board_type?: string;
+  label?: string;
+  color?: string;
+}
+
+interface MachineT0Sheet {
+  sheet_id: string;
+  color?: string;
+  strips?: Array<{ strip_width?: number; width?: number; board_type?: string; strip_label?: string }>;
+  recovered_strips?: MachineT0Recovered[];
+  remaining_width?: number;
+  waste_final?: number;
+  waste_width?: number;
+  utilization?: number;
+}
+
+type MachinePattern = {
+  sampleBoard: Board;
+  boardCount: number;
+  cutRows: { cutLength: number; pieces: number }[];
+};
+
+type MachineCutSection = {
+  key: string;
+  color: string;
+  boardType: string;
+  boardWidth: number;
+  totalLength: number;
+  trimSetting: number;
+  patterns: MachinePattern[];
+  needsWidthRip: boolean;
+  ripStockWidthMm: number | null;
+};
 
 /* ═══════════════════════════════════════════
    Machine Cut Plan i18n lookup (independent of app locale)
@@ -73,6 +110,12 @@ const machineI18n: Record<string, Record<string, string>> = {
     singleSheet: "1 张",
     stackBadge: "叠切 x{n}",
     color: "颜色",
+    t0RipTitle: "Step 1：T0 原板纵裁",
+    t0RipDesc: "本图纸先从下列 T0 原板纵裁出对应条料；绿色为回收库存，斜纹为不可回收废料。",
+    machineSetup: "机器设定",
+    recovered: "回收",
+    waste: "废料",
+    fromLeft: "从左到右",
   },
   en: {
     tabLabel: "Machine Cut Plan",
@@ -124,6 +167,12 @@ const machineI18n: Record<string, Record<string, string>> = {
     singleSheet: "1 Sheet",
     stackBadge: "Stack x{n}",
     color: "Color",
+    t0RipTitle: "Step 1: T0 Raw Sheet Rip",
+    t0RipDesc: "Rip the matching strips for this pattern from the T0 raw sheets below. Green is recovered stock; hatching is non-recoverable waste.",
+    machineSetup: "Machine Setup",
+    recovered: "Recovered",
+    waste: "Waste",
+    fromLeft: "Left to right",
   },
   es: {
     tabLabel: "Plan de Corte de Máquina",
@@ -175,6 +224,12 @@ const machineI18n: Record<string, Record<string, string>> = {
     singleSheet: "1 Hoja",
     stackBadge: "Apilado x{n}",
     color: "Color",
+    t0RipTitle: "Paso 1: Rip de Hoja T0",
+    t0RipDesc: "Corte primero las tiras correspondientes de las hojas T0 abajo. Verde es material recuperado; rayado es desperdicio.",
+    machineSetup: "Configuración de Máquina",
+    recovered: "Recuperado",
+    waste: "Desperdicio",
+    fromLeft: "Izquierda a derecha",
   },
 };
 
@@ -209,6 +264,28 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     return map;
   }, [boards]);
   const mt = (key: string) => machineI18n[machineLang]?.[key] || machineI18n.en[key] || key;
+  const t0Sheets = useMemo<MachineT0Sheet[]>(() => {
+    return (cutResult?.t0_plan?.t0_sheets || [])
+      .map((sheet) => sheet as MachineT0Sheet)
+      .filter((sheet) => sheet.sheet_id && Array.isArray(sheet.strips) && sheet.strips.length > 0);
+  }, [cutResult]);
+  const t0SheetById = useMemo(() => {
+    const map: Record<string, MachineT0Sheet> = {};
+    for (const sheet of t0Sheets) map[sheet.sheet_id] = sheet;
+    return map;
+  }, [t0Sheets]);
+  const t0BoardStripsBySheetId = useMemo(() => {
+    const map: Record<string, { board: Board; index: number }[]> = {};
+    boards.forEach((board, index) => {
+      if (!board.t0_sheet_id) return;
+      if (!map[board.t0_sheet_id]) map[board.t0_sheet_id] = [];
+      map[board.t0_sheet_id].push({ board, index });
+    });
+    for (const strips of Object.values(map)) {
+      strips.sort((a, b) => (a.board.t0_strip_position || 0) - (b.board.t0_strip_position || 0));
+    }
+    return map;
+  }, [boards]);
 
   /* ── Parse board_size → { totalLength } ── */
   const parseTotalLength = (bs: string): number => {
@@ -216,6 +293,82 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     if (m) return parseFloat(m[2]);
     console.warn("[MachineCutPlan] board_size unparsable, falling back to 2438.4", bs);
     return 2438.4;
+  };
+
+  const buildCutSections = (sectionBoards: Board[]): MachineCutSection[] => {
+    const sectionMap: Record<string, Board[]> = {};
+    for (const b of sectionBoards) {
+      const w = b.strip_width || 0;
+      const color = b.color || DEFAULT_BOX_COLOR;
+      const key = `${color}|||${w}|||${b.board}|||${b.board_size}`;
+      if (!sectionMap[key]) sectionMap[key] = [];
+      sectionMap[key].push(b);
+    }
+
+    return Object.entries(sectionMap)
+      .sort(([keyA, boardsA], [keyB, boardsB]) => {
+        const typeA = boardsA[0]?.board || "";
+        const typeB = boardsB[0]?.board || "";
+        const isT1A = typeA.toUpperCase().includes("T1");
+        const isT1B = typeB.toUpperCase().includes("T1");
+        if (isT1A !== isT1B) return isT1A ? -1 : 1;
+        const wA = parseFloat(keyA.split("|||")[1]);
+        const wB = parseFloat(keyB.split("|||")[1]);
+        if (Math.abs(wB - wA) > 0.01) return wB - wA;
+        return keyA.localeCompare(keyB);
+      })
+      .map(([key, groupedBoards]) => {
+        const color = key.split("|||")[0] || DEFAULT_BOX_COLOR;
+        const width = parseFloat(key.split("|||")[1]);
+        const sample = groupedBoards[0];
+        const boardType = [...new Set(groupedBoards.map((b) => b.board))].join(" / ");
+        const fpMap: Record<string, Board[]> = {};
+        for (const b of groupedBoards) {
+          const fp = boardFingerprint(b);
+          if (!fpMap[fp]) fpMap[fp] = [];
+          fpMap[fp].push(b);
+        }
+        const patterns = Object.values(fpMap).flatMap((boardsOfPattern) => {
+          const sampleBoard = boardsOfPattern[0];
+          const cutMap: Record<number, number> = {};
+          for (const p of sampleBoard.parts) {
+            const cl = p.cut_length || p.Height;
+            cutMap[cl] = (cutMap[cl] || 0) + 1;
+          }
+          const cutRows = Object.entries(cutMap)
+            .map(([len, qty]) => ({ cutLength: parseFloat(len), pieces: qty }))
+            .sort((a, b) => a.cutLength - b.cutLength);
+          const chunks: MachinePattern[] = [];
+          for (let i = 0; i < boardsOfPattern.length; i += 4) {
+            chunks.push({
+              sampleBoard,
+              boardCount: boardsOfPattern.slice(i, i + 4).length,
+              cutRows,
+            });
+          }
+          return chunks;
+        });
+
+        let ripStockWidthMm: number | null = null;
+        for (const b of groupedBoards) {
+          const nw = nominalStockWidthForBoard(b) ?? parseBoardDims(b).width;
+          if (nw > 0 && nw - width > 0.5) {
+            ripStockWidthMm = ripStockWidthMm === null ? nw : Math.max(ripStockWidthMm, nw);
+          }
+        }
+
+        return {
+          key,
+          color,
+          boardType,
+          boardWidth: width,
+          totalLength: parseTotalLength(sample.board_size),
+          trimSetting: 5,
+          patterns,
+          needsWidthRip: ripStockWidthMm !== null,
+          ripStockWidthMm,
+        };
+      });
   };
 
   /* ── Build engineering groups: group by strip_width AND board type ── */
@@ -338,6 +491,32 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     });
   }, [boards, machineLang]);
 
+  const displayGroups = useMemo(() => {
+    const usedT0Sheets = new Set<string>();
+    const groups: Array<EngineeringGroup & { displayBoards: Board[]; displayT0Sheets: MachineT0Sheet[] }> = [];
+
+    for (const grp of engineeringGroups) {
+      const sheetIds = Array.from(new Set(grp.boards.map((b) => b.t0_sheet_id).filter(Boolean) as string[]));
+      if (sheetIds.length > 0 && sheetIds.some((sheetId) => usedT0Sheets.has(sheetId))) {
+        continue;
+      }
+
+      const displayT0Sheets = sheetIds.map((sheetId) => t0SheetById[sheetId]).filter(Boolean);
+      const displayBoards = sheetIds.length > 0
+        ? Array.from(new Map(
+            sheetIds
+              .flatMap((sheetId) => t0BoardStripsBySheetId[sheetId] || [])
+              .map(({ board }) => [board.board_id, board])
+          ).values())
+        : grp.boards;
+
+      for (const sheetId of sheetIds) usedT0Sheets.add(sheetId);
+      groups.push({ ...grp, displayBoards, displayT0Sheets });
+    }
+
+    return groups.map((grp, idx) => ({ ...grp, engNo: idx + 1 }));
+  }, [engineeringGroups, t0BoardStripsBySheetId, t0SheetById]);
+
   /* ── Build a dedicated print window: clone actual DOM for pixel-perfect color output ── */
   const handlePrint = () => {
     const printLang = machineLang === "zh" ? "zh-CN" : machineLang === "es" ? "es" : "en";
@@ -350,12 +529,13 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     const styleSheets = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
       .map((el) => el.cloneNode(true) as HTMLElement);
 
-    /* 2. Build one page per engineering group by cloning the rendered group DOM */
+    /* 2. Build one page per engineering group. T0 rip steps are embedded in their matching group. */
     const pageContainer = document.createElement("div");
 
-    const totalPages = engineeringGroups.length;
+    const totalPages = displayGroups.length;
+    let printPageIndex = 0;
 
-    for (const [pageIdx, grp] of engineeringGroups.entries()) {
+    for (const grp of displayGroups) {
       const groupEl = document.querySelector(`[data-print-group="${grp.engNo}"]`);
       if (!groupEl) continue;
 
@@ -372,7 +552,8 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
 
       const footer = document.createElement("div");
       footer.className = "print-page-footer";
-      footer.textContent = `${pageIdx + 1}/${totalPages}`;
+      printPageIndex += 1;
+      footer.textContent = `${printPageIndex}/${totalPages}`;
       page.appendChild(footer);
 
       pageContainer.appendChild(page);
@@ -552,7 +733,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       }
       return true;
     });
-  }, [cutResult]);
+  }, [cutResult, boards]);
   const [issuesOpen, setIssuesOpen] = useState(false);
 
   if (boards.length === 0) {
@@ -616,7 +797,18 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
           </div>
         )}
 
-        {(engineeringGroups as (EngineeringGroup & { inconsistent?: boolean })[]).map((grp) => (
+        {(displayGroups as (EngineeringGroup & { inconsistent?: boolean; displayBoards: Board[]; displayT0Sheets: MachineT0Sheet[] })[]).map((grp) => {
+          const groupT0Sheets = grp.displayT0Sheets;
+          const hasT0RipStep = groupT0Sheets.length > 0;
+          const setupStepTitle = hasT0RipStep
+            ? mt("stepCutTitle").replace("{stepNum}", "2").replace("{patternNo}", mt("machineSetup"))
+            : mt("step1Title");
+          const cutStepBase = hasT0RipStep ? 3 : 2;
+          const cutSections = buildCutSections(grp.displayBoards);
+          const tileItems = cutSections.flatMap((section) =>
+            section.patterns.map((pattern) => ({ section, pattern }))
+          );
+          return (
           <MachineCutErrorBoundary key={grp.key} label={`group ${grp.engNo}`}>
           <div data-print-group={grp.engNo} className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
 
@@ -638,10 +830,10 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
             {/* TOP ROW: Cut Layout Images ONLY */}
             <div data-print-tiles-wrap={grp.engNo} className="p-5 border-b border-border/40 bg-slate-50/50">
               <div data-print-tiles-row={grp.engNo} className="flex flex-wrap gap-6 pb-2">
-                {grp.patterns.map((pattern, pIdx) => {
+                {tileItems.map(({ section, pattern }, pIdx) => {
                   const numLabel = indexToNumberStr(pIdx);
                   const nw = nominalStockWidthForBoard(pattern.sampleBoard);
-                  const patternNeedsRip = nw != null && (nw - grp.boardWidth > 0.5);
+                  const patternNeedsRip = nw != null && (nw - section.boardWidth > 0.5);
                   
                   const stackBadge = pattern.boardCount > 1 && (
                     <span data-print-board-count className="ml-2 text-[11px] font-semibold text-blue-700">
@@ -653,54 +845,28 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
 
                   if (patternNeedsRip) {
                     return (
-                      <div key={`${pIdx}-combined`} data-print-tile={`${grp.engNo}-${pIdx}`} className="flex flex-col items-center gap-2">
-                        <div className="flex items-center">
-                          <span className="text-[13px] font-bold text-slate-700">{`${mt("boardWord")} ${numLabel}-1`}</span>
-                          <span className="mx-1 text-slate-300">→</span>
-                          <span className="text-[13px] font-bold text-slate-700">{`${mt("boardWord")} ${numLabel}-2`}</span>
+                      <div key={`${pIdx}-final`} data-print-tile={`${grp.engNo}-${pIdx}`} className="flex flex-col items-center gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[13px] font-bold text-slate-700">{patternLabel}</span>
+                          <span className="px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-100 text-[10px] font-bold">
+                            {mt("widthRipBadge")} {section.boardWidth}mm
+                          </span>
                           {stackBadge}
                         </div>
-                        <div className="flex gap-4 items-end">
-                          {/* Step 1: Width rip (rotated, full board) */}
-                          <div className="flex flex-col items-center gap-1">
-                            <span className="text-[10px] text-slate-400 font-medium">{mt("widthRipBadge")}</span>
-                            <BoardTile 
-                              board={pattern.sampleBoard}
-                              index={pIdx}
-                              color={{ bg: "#fad2a4", border: "#f47820", text: "#c2410c", light: "#ffffff" }}
-                              stackInfo={{ groupSize: pattern.boardCount, stackOf: pattern.boardCount, isLeader: true }}
-                              onClick={() => {}}
-                              disableHover={true}
-                              isRotated={true}
-                              hideUtilization={true}
-                              showDimensions={true}
-                              hideStackBadge={true}
-                              hidePreviousStripShade={true}
-                            />
-                          </div>
-                          {/* Arrow between steps */}
-                          <div className="flex items-center pb-8 text-slate-300">
-                            <span className="text-[18px]">→</span>
-                          </div>
-                          {/* Step 2: Cross-cut (not rotated, width waste removed) */}
-                          <div className="flex flex-col items-center gap-1">
-                            <span className="text-[10px] text-slate-400 font-medium">{mt("cutLength").split(" ")[0]}</span>
-                            <BoardTile 
-                              board={pattern.sampleBoard}
-                              index={pIdx}
-                              color={{ bg: "#fad2a4", border: "#f47820", text: "#c2410c", light: "#ffffff" }}
-                              stackInfo={{ groupSize: pattern.boardCount, stackOf: pattern.boardCount, isLeader: true }}
-                              onClick={() => {}}
-                              disableHover={true}
-                              hideWidthWaste={true}
-                              isRotated={false}
-                              hideUtilization={true}
-                              showDimensions={true}
-                              hideStackBadge={true}
-                              hidePreviousStripShade={true}
-                            />
-                          </div>
-                        </div>
+                        <BoardTile
+                          board={pattern.sampleBoard}
+                          index={pIdx}
+                          color={{ bg: "#fad2a4", border: "#f47820", text: "#c2410c", light: "#ffffff" }}
+                          stackInfo={{ groupSize: pattern.boardCount, stackOf: pattern.boardCount, isLeader: true }}
+                          onClick={() => {}}
+                          disableHover={true}
+                          hideWidthWaste={true}
+                          isRotated={false}
+                          hideUtilization={true}
+                          showDimensions={true}
+                          hideStackBadge={true}
+                          hidePreviousStripShade={true}
+                        />
                       </div>
                     );
                   } else {
@@ -733,15 +899,42 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
 
             {/* CONTENT SECTION */}
             <div data-print-content className="p-5 space-y-6">
+              {hasT0RipStep && (
+                <div data-print-t0-rip={grp.engNo}>
+                  <h4 data-print-step-title className="text-[15px] font-bold text-slate-800 mb-2">{mt("t0RipTitle")}</h4>
+                  <div data-print-step-box className="bg-emerald-50/30 p-4 rounded-xl border border-emerald-100 space-y-3">
+                    <p className="text-[13px] text-slate-600">{mt("t0RipDesc")}</p>
+                    <div className="grid gap-3 xl:grid-cols-2">
+                      {groupT0Sheets.map((sheet, sheetIdx) => (
+                        <T0SheetCard
+                          key={sheet.sheet_id}
+                          sheetId={sheet.sheet_id}
+                          strips={t0BoardStripsBySheetId[sheet.sheet_id] || []}
+                          sizeColorMap={sizeColorMap}
+                          onBoardClick={() => {}}
+                          recoveredStrips={(sheet.recovered_strips || [])
+                            .filter((r) => typeof r.width === "number" && !!r.board_type)
+                            .map((r) => ({ width: r.width as number, board_type: r.board_type as string, label: r.label }))}
+                          patternNumbering={patternNumbering}
+                          compactHeader={true}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Step 1: Machine Setup */}
               <div data-print-setup={grp.engNo}>
-                <h4 data-print-step-title className="text-[15px] font-bold text-slate-800 mb-2">{mt("step1Title")}</h4>
-                <div data-print-setup-box className="text-[13px] text-slate-600 bg-black/[0.02] p-4 rounded-xl border border-black/[0.05]">
-                  <p>
-                    {mt("step1Desc1")} <strong className="text-black font-semibold">{grp.boardType}</strong>{mt("step1Desc2")} <strong className="text-black font-semibold">{grp.totalLength} mm</strong>{mt("step1Desc3")} <strong className="text-black font-semibold">{grp.boardWidth} mm</strong>{mt("step1Desc4")} <strong className="text-black font-semibold">{grp.trimSetting} mm</strong>。
-                  </p>
-                  {grp.needsWidthRip && grp.ripStockWidthMm != null && (
-                    <div className="mt-3 bg-white p-3 rounded-xl border border-border/60">
+                <h4 data-print-step-title className="text-[15px] font-bold text-slate-800 mb-2">{setupStepTitle}</h4>
+                <div className="space-y-3">
+                  {cutSections.map((section) => (
+                    <div key={section.key} data-print-setup-box className="text-[13px] text-slate-600 bg-black/[0.02] p-4 rounded-xl border border-black/[0.05]">
+                      <p>
+                        {mt("step1Desc1")} <strong className="text-black font-semibold">{section.boardType}</strong>{mt("step1Desc2")} <strong className="text-black font-semibold">{section.totalLength} mm</strong>{mt("step1Desc3")} <strong className="text-black font-semibold">{section.boardWidth} mm</strong>{mt("step1Desc4")} <strong className="text-black font-semibold">{section.trimSetting} mm</strong>。
+                      </p>
+                      {section.needsWidthRip && section.ripStockWidthMm != null && (
+                        <div className="mt-3 bg-white p-3 rounded-xl border border-border/60">
 
                       <table className="w-full text-[13px] rounded-lg overflow-hidden border border-border/40">
                         <thead>
@@ -755,20 +948,22 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                         <tbody>
                           <tr className="hover:bg-black/[0.01]">
                             <td className="text-center py-2.5 px-4 text-apple-gray">1</td>
-                            <td className="text-center py-2.5 px-4 font-mono text-[15px]">{grp.boardWidth}</td>
+                            <td className="text-center py-2.5 px-4 font-mono text-[15px]">{section.boardWidth}</td>
                             <td className="text-center py-2.5 px-4 text-[15px]">1</td>
                             <td className="py-2.5 px-4"></td>
                           </tr>
                         </tbody>
                       </table>
+                        </div>
+                      )}
                     </div>
-                  )}
+                  ))}
                 </div>
               </div>
 
               {/* Step 2+: Cutting steps */}
-              {grp.patterns.map((pattern, pIdx) => {
-                const stepNum = pIdx + 2;
+              {tileItems.map(({ pattern }, pIdx) => {
+                const stepNum = pIdx + cutStepBase;
                 const numLabel = indexToNumberStr(pIdx);
                 
                 const nw = nominalStockWidthForBoard(pattern.sampleBoard);
@@ -822,7 +1017,8 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
 
           </div>
           </MachineCutErrorBoundary>
-        ))}
+        );
+        })}
       </div>
     </MachineCutErrorBoundary>
   );

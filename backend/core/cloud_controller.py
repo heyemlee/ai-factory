@@ -240,10 +240,14 @@ def process_order(order: dict):
         from agents.engine_agent import run_engine, deduct_inventory_supabase
 
         cut_result_path = os.path.join(tempfile.gettempdir(), f"{job_id}_cut_result.json")
+        force_t0_start = order.get("cut_mode") == "t0_start" or bool(order.get("force_t0_start"))
+        if force_t0_start:
+            print("  🟧 Production mode: T0 Start (ignore T1 inventory)")
         result = run_engine(
             parts_path=parts_path,
             output_path=cut_result_path,
             cabinet_breakdown=cabinet_breakdown,
+            force_t0_start=force_t0_start,
         )
 
         update_progress(95, "生成最终排版报告...")
@@ -296,10 +300,12 @@ def process_order(order: dict):
             "total_parts": summary["total_parts_placed"],
             "cabinets_summary": cab_summary,
             "cut_result_json": result,
+            "cut_mode": "t0_start" if force_t0_start else "inventory_first",
             "completed_at": datetime.now().isoformat(),
         }).eq("id", order["id"]).execute()
 
         # 6. Insert BOM history
+        supabase.table("bom_history").delete().eq("job_id", job_id).execute()
         supabase.table("bom_history").insert({
             "job_id": job_id,
             "boards_used": summary["boards_used"],

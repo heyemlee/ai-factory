@@ -45,6 +45,22 @@ CREATE TABLE IF NOT EXISTS material_options (
   updated_at timestamptz DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS board_specs (
+  id bigserial PRIMARY KEY,
+  board_type text UNIQUE NOT NULL,
+  level text NOT NULL CHECK (level IN ('T0', 'T1')),
+  name text NOT NULL,
+  width float NOT NULL,
+  height float NOT NULL,
+  thickness float NOT NULL DEFAULT 18,
+  is_raw boolean NOT NULL DEFAULT false,
+  is_recoverable boolean NOT NULL DEFAULT false,
+  is_active boolean NOT NULL DEFAULT true,
+  sort_order int NOT NULL DEFAULT 0,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
 -- 1. Inventory table (replaces data/t1_inventory.xlsx)
 CREATE TABLE IF NOT EXISTS inventory (
   id serial PRIMARY KEY,
@@ -68,12 +84,16 @@ CREATE TABLE IF NOT EXISTS orders (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   job_id text UNIQUE NOT NULL,
   filename text,
-  status text DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+  status text DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'cut_done', 'failed')),
+  cut_mode text NOT NULL DEFAULT 'inventory_first' CHECK (cut_mode IN ('inventory_first', 't0_start')),
   cabinets_summary text,
   utilization float,
   boards_used int,
   total_parts int,
   cut_result_json jsonb,
+  cut_confirmed_at timestamptz,
+  t0_start_requested_at timestamptz,
+  extra_boards_used jsonb DEFAULT '[]',
   file_url text,
   created_at timestamptz DEFAULT now(),
   completed_at timestamptz
@@ -88,6 +108,28 @@ CREATE TABLE IF NOT EXISTS bom_history (
   overall_utilization float,
   total_waste_mm float,
   total_cost float DEFAULT 0,
+  created_at timestamptz DEFAULT now()
+);
+
+-- 4. Inventory transaction history
+CREATE TABLE IF NOT EXISTS inventory_transactions (
+  id bigserial PRIMARY KEY,
+  order_id uuid REFERENCES orders(id) ON DELETE SET NULL,
+  job_id text,
+  board_type text NOT NULL,
+  color text NOT NULL DEFAULT 'WhiteBirch' REFERENCES box_colors(key) ON UPDATE CASCADE,
+  quantity_delta int NOT NULL,
+  action text NOT NULL CHECK (
+    action IN (
+      'consume_stock',
+      'recover_stock',
+      'revert_consume',
+      'revert_recover',
+      'manual_adjust'
+    )
+  ),
+  notes text,
+  metadata jsonb DEFAULT '{}',
   created_at timestamptz DEFAULT now()
 );
 
@@ -118,12 +160,20 @@ CREATE TRIGGER trg_material_options_updated
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS trg_board_specs_updated ON board_specs;
+CREATE TRIGGER trg_board_specs_updated
+  BEFORE UPDATE ON board_specs
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at();
+
 -- Enable RLS but allow all for now (will tighten later with auth)
 ALTER TABLE inventory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bom_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE box_colors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE material_options ENABLE ROW LEVEL SECURITY;
+ALTER TABLE board_specs ENABLE ROW LEVEL SECURITY;
 
 -- Permissive policies (open for development)
 DO $$
@@ -137,11 +187,17 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'allow_all_bom') THEN
     CREATE POLICY allow_all_bom ON bom_history FOR ALL USING (true) WITH CHECK (true);
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'allow_all_inventory_transactions') THEN
+    CREATE POLICY allow_all_inventory_transactions ON inventory_transactions FOR ALL USING (true) WITH CHECK (true);
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'allow_all_box_colors') THEN
     CREATE POLICY allow_all_box_colors ON box_colors FOR ALL USING (true) WITH CHECK (true);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'allow_all_material_options') THEN
     CREATE POLICY allow_all_material_options ON material_options FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'allow_all_board_specs') THEN
+    CREATE POLICY allow_all_board_specs ON board_specs FOR ALL USING (true) WITH CHECK (true);
   END IF;
 END $$;
 """
@@ -155,6 +211,19 @@ SEED_MATERIAL_OPTIONS = [
     {"key": "MDF",       "name_en": "MDF",        "name_zh": "中密度纤维板", "name_es": "MDF",           "sort_order": 1},
     {"key": "Plywood",   "name_en": "Plywood",    "name_zh": "胶合板",       "name_es": "Contrachapado", "sort_order": 2},
     {"key": "SolidWood", "name_en": "Solid Wood", "name_zh": "实木",         "name_es": "Madera Maciza", "sort_order": 3},
+]
+
+SEED_BOARD_SPECS = [
+    {"board_type": "T0-1219.2x2438.4", "level": "T0", "name": "T0 Full Sheet", "width": 1219.2, "height": 2438.4, "thickness": 18, "is_raw": True, "is_recoverable": False, "sort_order": 0},
+    {"board_type": "T1-304.8x2438.4", "level": "T1", "name": "T1 Recovered 304.8mm", "width": 304.8, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 10},
+    {"board_type": "T1-609.6x2438.4", "level": "T1", "name": "T1 Recovered 609.6mm", "width": 609.6, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 20},
+    {"board_type": "T1-101.6x2438.4", "level": "T1", "name": "T1 Recovered 101.6mm", "width": 101.6, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 30},
+    {"board_type": "T1-286.8x2438.4", "level": "T1", "name": "T1 Recovered 286.8mm", "width": 286.8, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 40},
+    {"board_type": "T1-266.8x2438.4", "level": "T1", "name": "T1 Recovered 266.8mm", "width": 266.8, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 50},
+    {"board_type": "T1-591.6x2438.4", "level": "T1", "name": "T1 Recovered 591.6mm", "width": 591.6, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 60},
+    {"board_type": "T1-571.6x2438.4", "level": "T1", "name": "T1 Recovered 571.6mm", "width": 571.6, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 70},
+    {"board_type": "T1-762x2438.4", "level": "T1", "name": "T1 Recovered 762mm", "width": 762.0, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 80},
+    {"board_type": "T1-838.2x2438.4", "level": "T1", "name": "T1 Recovered 838.2mm", "width": 838.2, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 90},
 ]
 
 SEED_INVENTORY = [
@@ -225,6 +294,43 @@ SEED_INVENTORY = [
     },
 ]
 
+COMMON_RECOVERY_WIDTHS = [304.8, 609.6, 101.6, 286.8, 266.8, 591.6, 571.6, 762.0, 838.2]
+
+
+def _width_code(width: float) -> str:
+    text = f"{float(width):.1f}"
+    return text[:-2] if text.endswith(".0") else text
+
+
+for seed_color in ("WhiteBirch", "WhiteMelamine"):
+    SEED_INVENTORY.append({
+        "board_type": "T0-1219.2x2438.4",
+        "color": seed_color,
+        "name": "T0 Full Sheet",
+        "material": "MDF",
+        "category": "main",
+        "height": 2438.4,
+        "width": 1219.2,
+        "thickness": 18,
+        "stock": 0,
+        "threshold": 10,
+        "unit": "pcs",
+    })
+    for seed_width in COMMON_RECOVERY_WIDTHS:
+        SEED_INVENTORY.append({
+            "board_type": f"T1-{_width_code(seed_width)}x2438.4",
+            "color": seed_color,
+            "name": f"T1 Recovered {_width_code(seed_width)}mm",
+            "material": "MDF",
+            "category": "main",
+            "height": 2438.4,
+            "width": seed_width,
+            "thickness": 18,
+            "stock": 0,
+            "threshold": 5,
+            "unit": "pcs",
+        })
+
 
 def run():
     service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -280,6 +386,13 @@ def run():
             print(f"✅ Material options ready ({len(SEED_MATERIAL_OPTIONS)} default materials)")
         except Exception as mat_err:
             print(f"⚠️  Material options upsert failed (table may not exist yet): {mat_err}")
+
+        print("📝 Seeding board specs...")
+        try:
+            supabase.table("board_specs").upsert(SEED_BOARD_SPECS, on_conflict="board_type").execute()
+            print(f"✅ Board specs ready ({len(SEED_BOARD_SPECS)} default specs)")
+        except Exception as spec_err:
+            print(f"⚠️  Board specs upsert failed (table may not exist yet): {spec_err}")
 
         result = supabase.table("inventory").select("*").execute()
         print(f"✅ Connected! inventory table has {len(result.data)} rows")

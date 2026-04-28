@@ -4,11 +4,16 @@ import { CheckCircle2, Plus, Minus, Loader2 } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
 import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
-import type { Board, Order } from "./types";
+import {
+  adjustInventoryStock,
+  calculatePlannedBoardUsage,
+  logInventoryTransaction,
+  summarizeRecoveredInventory,
+} from "@/lib/inventory_movements";
+import type { Order } from "./types";
 
-export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
+export function ConfirmCutModal({ order, onConfirmed, onClose }: {
   order: Order;
-  boards: Board[];
   onConfirmed: () => void;
   onClose: () => void;
 }) {
@@ -16,16 +21,8 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
   const { getColor } = useBoxColors();
   /* Compute board usage by board_type + color */
   const boardUsage = useMemo(() => {
-    const usage: Record<string, { board_type: string; color: string; planned: number }> = {};
-    for (const b of boards) {
-      const bt = b.board;
-      const color = b.color || DEFAULT_BOX_COLOR;
-      const key = `${bt}|${color}`;
-      if (!usage[key]) usage[key] = { board_type: bt, color, planned: 0 };
-      usage[key].planned += 1;
-    }
-    return Object.entries(usage).map(([key, row]) => ({ key, ...row }));
-  }, [boards]);
+    return calculatePlannedBoardUsage(order.cut_result_json);
+  }, [order.cut_result_json]);
 
   const [extras, setExtras] = useState<Record<string, number>>(() => {
     const init: Record<string, number> = {};
@@ -35,11 +32,25 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stockByKey, setStockByKey] = useState<Record<string, number | null>>({});
+  const [stockManagedColors, setStockManagedColors] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let alive = true;
     async function loadStock() {
       const entries: Record<string, number | null> = {};
+      const colors = Array.from(new Set(boardUsage.map((u) => u.color || DEFAULT_BOX_COLOR)));
+      if (colors.length > 0) {
+        const { data: colorRows } = await supabase
+          .from("inventory")
+          .select("color")
+          .eq("category", "main")
+          .in("color", colors);
+        if (alive) {
+          setStockManagedColors(new Set((colorRows || []).map((row) => row.color as string)));
+        }
+      } else if (alive) {
+        setStockManagedColors(new Set());
+      }
       await Promise.all(boardUsage.map(async (u) => {
         const { data } = await supabase
           .from("inventory")
@@ -65,72 +76,95 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
   };
 
   const recoveredCounts = useMemo(() => {
-    const recovered = order.cut_result_json?.recovered_inventory ?? [];
-    const counts: Record<string, { board_type: string; color: string; count: number }> = {};
-    for (const r of recovered) {
-      const color = r.color || DEFAULT_BOX_COLOR;
-      const key = `${r.board_type}|${color}`;
-      if (!counts[key]) counts[key] = { board_type: r.board_type, color, count: 0 };
-      counts[key].count += 1;
-    }
-    return Object.entries(counts).map(([key, row]) => ({ key, ...row }));
+    return summarizeRecoveredInventory(order.cut_result_json);
   }, [order.cut_result_json]);
+
+  const byOrderLabel = locale === "zh" ? "按单处理" : locale === "es" ? "Por pedido" : "By Order";
+  const managedRecoveredCounts = useMemo(() => {
+    return recoveredCounts.filter((row) => stockManagedColors.has(row.color || DEFAULT_BOX_COLOR));
+  }, [recoveredCounts, stockManagedColors]);
+
+  const isT0StartOrder = order.cut_mode === "t0_start"
+    || order.cut_result_json?.cut_mode === "t0_start"
+    || order.cut_result_json?.summary?.cut_mode === "t0_start";
+
+  const resetInitialT1StockIfNeeded = async () => {
+    if (!isT0StartOrder) return;
+
+    const { count, error: countError } = await supabase
+      .from("orders")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "cut_done");
+    if (countError || (count || 0) > 0) return;
+
+    const colors = Array.from(new Set([
+      ...boardUsage.map((u) => u.color || DEFAULT_BOX_COLOR),
+      ...recoveredCounts.map((r) => r.color || DEFAULT_BOX_COLOR),
+    ]));
+    if (colors.length === 0) return;
+
+    const { data: rows, error } = await supabase
+      .from("inventory")
+      .select("board_type, color, stock")
+      .eq("category", "main")
+      .in("color", colors);
+    if (error || !rows) return;
+
+    for (const row of rows as Array<{ board_type: string; color: string; stock: number }>) {
+      if (row.board_type.toUpperCase().startsWith("T0") || !row.stock) continue;
+      await adjustInventoryStock(row.board_type, row.color || DEFAULT_BOX_COLOR, -row.stock, { createIfMissing: true });
+      await logInventoryTransaction("manual_adjust", row.board_type, row.color || DEFAULT_BOX_COLOR, -row.stock, {
+        order_id: order.id,
+        job_id: order.job_id,
+        notes: "Initial T0 Start baseline reset",
+        metadata: { reset_before_first_cut_done: true },
+      });
+    }
+  };
 
   const handleConfirm = async () => {
     setConfirming(true);
     setError(null);
 
     try {
+      await resetInitialT1StockIfNeeded();
+
       // 1. Deduct inventory for each board_type (planned + extra)
       for (const u of boardUsage) {
+        if (!stockManagedColors.has(u.color || DEFAULT_BOX_COLOR)) continue;
         const totalUsed = u.planned + (extras[u.key] || 0);
         if (totalUsed <= 0) continue;
 
-        // Get current stock
-        const { data: invData } = await supabase
-          .from("inventory")
-          .select("stock")
-          .eq("board_type", u.board_type)
-          .eq("color", u.color)
-          .single();
-
-        if (invData) {
-          const newStock = Math.max(0, invData.stock - totalUsed);
-          await supabase
-            .from("inventory")
-            .update({ stock: newStock })
-            .eq("board_type", u.board_type)
-            .eq("color", u.color);
-        }
+        const movement = await adjustInventoryStock(u.board_type, u.color, -totalUsed, { createIfMissing: true });
+        await logInventoryTransaction("consume_stock", u.board_type, u.color, -totalUsed, {
+          order_id: order.id,
+          job_id: order.job_id,
+          notes: "Confirmed cut done",
+          metadata: {
+            planned: u.planned,
+            extra: extras[u.key] || 0,
+            stock_before: movement.before,
+            stock_after: movement.after,
+          },
+        });
       }
 
       // 2. Increment inventory for recovered scrap pieces (T0 leftover → T1 stock)
-      const recovered = order.cut_result_json?.recovered_inventory ?? [];
-      if (recovered.length > 0) {
-        const recoveredCounts: Record<string, { board_type: string; color: string; count: number }> = {};
-        for (const r of recovered) {
-          const color = r.color || DEFAULT_BOX_COLOR;
-          const key = `${r.board_type}|${color}`;
-          if (!recoveredCounts[key]) recoveredCounts[key] = { board_type: r.board_type, color, count: 0 };
-          recoveredCounts[key].count += 1;
-        }
-        for (const row of Object.values(recoveredCounts)) {
-          const { data: invData } = await supabase
-            .from("inventory")
-            .select("stock")
-            .eq("board_type", row.board_type)
-            .eq("color", row.color)
-            .single();
-          if (invData) {
-            await supabase
-              .from("inventory")
-              .update({ stock: invData.stock + row.count })
-              .eq("board_type", row.board_type)
-              .eq("color", row.color);
-          } else {
-            console.warn(`Recovered board_type "${row.board_type}" (${row.color}) not found in inventory; skipping increment.`);
-          }
-        }
+      for (const row of managedRecoveredCounts) {
+        const movement = await adjustInventoryStock(row.board_type, row.color, row.count, {
+          width: row.width,
+          createIfMissing: true,
+        });
+        await logInventoryTransaction("recover_stock", row.board_type, row.color, row.count, {
+          order_id: order.id,
+          job_id: order.job_id,
+          notes: "Recovered from T0 offcut",
+          metadata: {
+            width: row.width,
+            stock_before: movement.before,
+            stock_after: movement.after,
+          },
+        });
       }
 
       // 3. Insert cutting_stats
@@ -174,6 +208,7 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
             count,
           };
         });
+      const stockManagedExtraBoardsUsed = extraBoardsUsed.filter((row) => stockManagedColors.has(row.color || DEFAULT_BOX_COLOR));
 
       // 5. Update order status → cut_done
       await supabase
@@ -181,7 +216,7 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
         .update({
           status: "cut_done",
           cut_confirmed_at: new Date().toISOString(),
-          extra_boards_used: extraBoardsUsed,
+          extra_boards_used: stockManagedExtraBoardsUsed,
         })
         .eq("id", order.id);
 
@@ -235,7 +270,8 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
                 const extra = extras[u.key] || 0;
                 const total = u.planned + extra;
                 const stock = stockByKey[u.key];
-                const shortage = stock == null ? total : Math.max(0, total - stock);
+                const isStockManaged = stockManagedColors.has(u.color || DEFAULT_BOX_COLOR);
+                const shortage = !isStockManaged ? 0 : stock == null ? total : Math.max(0, total - stock);
                 const after = stock == null ? null : Math.max(0, stock - total);
                 const boxColor = getColor(u.color);
                 return (
@@ -248,15 +284,15 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
                       </div>
                     </td>
                     <td className="py-3 text-center text-apple-gray">
-                      {stock == null ? "0" : stock}
-                      {after !== null && <span className="block text-[10px] text-black/35">→ {after}</span>}
+                      {!isStockManaged ? byOrderLabel : stock == null ? "0" : stock}
+                      {isStockManaged && after !== null && <span className="block text-[10px] text-black/35">→ {after}</span>}
                     </td>
                     <td className="py-3 text-center text-apple-gray">{u.planned}</td>
                     <td className="py-3">
                       <div className="flex items-center justify-center gap-2">
                         <button
                           onClick={() => adjustExtra(u.key, -1)}
-                          disabled={extra <= 0}
+                          disabled={!isStockManaged || extra <= 0}
                           className="w-6 h-6 rounded-full bg-black/5 hover:bg-black/10 flex items-center justify-center text-apple-gray disabled:opacity-30 transition-colors"
                         >
                           <Minus size={12} />
@@ -266,6 +302,7 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
                         </span>
                         <button
                           onClick={() => adjustExtra(u.key, 1)}
+                          disabled={!isStockManaged}
                           className="w-6 h-6 rounded-full bg-black/5 hover:bg-black/10 flex items-center justify-center text-apple-gray transition-colors"
                         >
                           <Plus size={12} />
@@ -274,7 +311,7 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
                     </td>
                     <td className="py-3 text-center font-bold text-foreground">{total}</td>
                     <td className={`py-3 text-center font-bold ${shortage > 0 ? "text-apple-red" : "text-apple-green"}`}>
-                      {shortage}
+                      {!isStockManaged ? "—" : shortage}
                     </td>
                   </tr>
                 );
@@ -284,25 +321,25 @@ export function ConfirmCutModal({ order, boards, onConfirmed, onClose }: {
         </div>
 
         {/* Recovered Inventory section */}
-        {recoveredCounts.length > 0 && (
+        {managedRecoveredCounts.length > 0 && (
           <div className="px-6 pb-6">
             <div className="rounded-xl border border-apple-green/20 bg-apple-green/5 overflow-hidden">
               <div className="p-3 border-b border-apple-green/10 flex items-center gap-2">
                 <Plus size={16} className="text-apple-green" />
                 <h4 className="text-[14px] font-semibold text-apple-green">
-                  {t("orderDetail.modalRecoveredTitle" as any)}
+                  {t("orderDetail.modalRecoveredTitle")}
                 </h4>
               </div>
               <div className="p-1">
                 <table className="w-full text-[13px]">
                   <thead>
                     <tr className="border-b border-apple-green/10">
-                      <th className="text-left py-2 px-3 font-semibold text-apple-green/80">{t("orderDetail.modalThBoardType" as any)}</th>
-                      <th className="text-center py-2 px-3 font-semibold text-apple-green/80">{t("orderDetail.modalThRecovered" as any)}</th>
+                      <th className="text-left py-2 px-3 font-semibold text-apple-green/80">{t("orderDetail.modalThBoardType")}</th>
+                      <th className="text-center py-2 px-3 font-semibold text-apple-green/80">{t("orderDetail.modalThRecovered")}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {recoveredCounts.map((r) => (
+                    {managedRecoveredCounts.map((r) => (
                       <tr key={r.key} className="border-b border-apple-green/5 last:border-0">
                         <td className="py-2.5 px-3 font-medium text-apple-green/90">{r.board_type} <span className="text-[11px] opacity-70">[{r.color}]</span></td>
                         <td className="py-2.5 px-3 text-center font-bold text-apple-green">+{r.count}</td>

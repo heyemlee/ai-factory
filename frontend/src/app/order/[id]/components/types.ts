@@ -79,6 +79,7 @@ export interface CutResult {
     total_parts_placed: number;
     overall_utilization: number;
     total_waste: number;
+    cut_mode?: "inventory_first" | "t0_start";
     inventory_shortage?: InventoryShortage[];
     inventory_used?: Record<string, number>;
     board_type_breakdown?: Record<string, number>;
@@ -93,6 +94,7 @@ export interface CutResult {
     }>;
   };
   boards: Board[];
+  cut_mode?: "inventory_first" | "t0_start";
   recovered_inventory?: RecoveredStrip[];
   t0_plan?: {
     t0_sheets?: Array<{
@@ -118,6 +120,7 @@ export interface Order {
   job_id: string;
   filename?: string | null;
   status: string;
+  cut_mode?: "inventory_first" | "t0_start";
   cut_result_json: CutResult | null;
   cabinets_summary: string;
   extra_boards_used?: { board_type: string; color?: string; count: number }[];
