@@ -47,7 +47,6 @@ DEFAULT_BOARD_T1_WIDE   = "T1-609.6-INV"
 COMMON_RECOVERY_WIDTHS = [
     304.8,
     609.6,
-    101.6,
     286.8,
     266.8,
     591.6,

@@ -217,7 +217,6 @@ SEED_BOARD_SPECS = [
     {"board_type": "T0-1219.2x2438.4", "level": "T0", "name": "T0 Full Sheet", "width": 1219.2, "height": 2438.4, "thickness": 18, "is_raw": True, "is_recoverable": False, "sort_order": 0},
     {"board_type": "T1-304.8x2438.4", "level": "T1", "name": "T1 Recovered 304.8mm", "width": 304.8, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 10},
     {"board_type": "T1-609.6x2438.4", "level": "T1", "name": "T1 Recovered 609.6mm", "width": 609.6, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 20},
-    {"board_type": "T1-101.6x2438.4", "level": "T1", "name": "T1 Recovered 101.6mm", "width": 101.6, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 30},
     {"board_type": "T1-286.8x2438.4", "level": "T1", "name": "T1 Recovered 286.8mm", "width": 286.8, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 40},
     {"board_type": "T1-266.8x2438.4", "level": "T1", "name": "T1 Recovered 266.8mm", "width": 266.8, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 50},
     {"board_type": "T1-591.6x2438.4", "level": "T1", "name": "T1 Recovered 591.6mm", "width": 591.6, "height": 2438.4, "thickness": 18, "is_raw": False, "is_recoverable": True, "sort_order": 60},
@@ -294,7 +293,7 @@ SEED_INVENTORY = [
     },
 ]
 
-COMMON_RECOVERY_WIDTHS = [304.8, 609.6, 101.6, 286.8, 266.8, 591.6, 571.6, 762.0, 838.2]
+COMMON_RECOVERY_WIDTHS = [304.8, 609.6, 286.8, 266.8, 591.6, 571.6, 762.0, 838.2]
 
 
 def _width_code(width: float) -> str:

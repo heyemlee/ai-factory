@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-export const DEFAULT_MATERIAL = "MDF";
+export const DEFAULT_MATERIAL = "Plywood";
 
 export interface MaterialOption {
   key: string;

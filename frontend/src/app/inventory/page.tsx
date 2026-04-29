@@ -5,6 +5,7 @@ import clsx from "clsx";
 import { supabase } from "@/lib/supabase";
 import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
 import { DEFAULT_MATERIAL, materialLabel, useMaterialOptions } from "@/lib/material_options";
+import { FREQUENT_BOARD_SIZES, presetLabel } from "@/lib/board_size_presets";
 import { useLanguage } from "@/lib/i18n";
 
 type ItemCategory = "main" | "sub" | "aux";
@@ -123,14 +124,15 @@ export default function Inventory() {
     name: "",
     material: DEFAULT_MATERIAL,
     category: "main",
-    height: 2438.4,
-    width: 0,
-    thickness: 18,
+    height: FREQUENT_BOARD_SIZES[0].height,
+    width: FREQUENT_BOARD_SIZES[0].width,
+    thickness: FREQUENT_BOARD_SIZES[0].thickness,
     stock: 0,
     threshold: 10,
     unit: "pcs",
     color: DEFAULT_BOX_COLOR,
   });
+  const [sizePresetIdx, setSizePresetIdx] = useState<number | "custom">(0);
 
   const confirmDelete = async () => {
     if (!deleteTarget) return;
@@ -174,8 +176,11 @@ export default function Inventory() {
       setShowAddModal(false);
       setCategoryDropdownOpen(false);
       setAddForm({
-        board_type: "", name: "", material: DEFAULT_MATERIAL, category: activeTab, height: 2438.4, width: 0, thickness: 18, stock: 0, threshold: 10, unit: "pcs", color: DEFAULT_BOX_COLOR
+        board_type: "", name: "", material: DEFAULT_MATERIAL, category: activeTab,
+        height: FREQUENT_BOARD_SIZES[0].height, width: FREQUENT_BOARD_SIZES[0].width, thickness: FREQUENT_BOARD_SIZES[0].thickness,
+        stock: 0, threshold: 10, unit: "pcs", color: DEFAULT_BOX_COLOR
       });
+      setSizePresetIdx(0);
       setAdding(false);
     } catch (e: unknown) {
       setAddFormError(e instanceof Error ? e.message : "Unknown error");
@@ -513,6 +518,27 @@ export default function Inventory() {
 
               {(addForm.category === "main" || addForm.category === "sub") && (
                 <div>
+                  <label className="block text-[13px] font-medium text-apple-gray mb-1">Size Preset</label>
+                  <select
+                    value={sizePresetIdx === "custom" ? "custom" : String(sizePresetIdx)}
+                    onChange={e => {
+                      const v = e.target.value;
+                      if (v === "custom") {
+                        setSizePresetIdx("custom");
+                        return;
+                      }
+                      const idx = Number(v);
+                      const preset = FREQUENT_BOARD_SIZES[idx];
+                      setSizePresetIdx(idx);
+                      setAddForm({ ...addForm, width: preset.width, height: preset.height, thickness: preset.thickness });
+                    }}
+                    className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white focus:shadow-apple border border-transparent focus:border-apple-blue/30 transition-all text-foreground mb-3"
+                  >
+                    {FREQUENT_BOARD_SIZES.map((p, i) => (
+                      <option key={i} value={i}>{presetLabel(p)}</option>
+                    ))}
+                    <option value="custom">Custom…</option>
+                  </select>
                   <label className="block text-[13px] font-medium text-apple-gray mb-1">Dimensions (Width × Height/Length × Thickness) mm</label>
                   <div className="flex items-center gap-2">
                     <div className="text-center flex-1">
