@@ -55,6 +55,8 @@ COMMON_RECOVERY_WIDTHS = [
     838.2,
 ]
 
+MIN_RECOVERABLE_WIDTH = 200.0
+
 
 def _cut_length(part: dict) -> float:
     return float(part.get("cut_length") or part.get("Height") or 0)
@@ -89,7 +91,7 @@ def load_recovery_specs_from_supabase() -> list:
         for row in result.data or []:
             height = float(row.get("height") or 0)
             width = float(row.get("width") or 0)
-            if width > 0 and height + 1e-3 >= BOARD_HEIGHT:
+            if width >= MIN_RECOVERABLE_WIDTH and height + 1e-3 >= BOARD_HEIGHT:
                 specs.append({"board_type": row["board_type"], "width": width})
         if specs:
             return specs
@@ -1119,7 +1121,7 @@ def _run_pipeline_for_color(parts: list, inventory: dict, color: str,
             if info.get("Height", 0) + 1e-3 < BOARD_HEIGHT:
                 continue
             w = float(info.get("Width", 0))
-            if w <= 0:
+            if w < MIN_RECOVERABLE_WIDTH:
                 continue
             recovery_by_width[round(w, 1)] = {"board_type": bt, "width": w}
         recovery_candidates = sorted(recovery_by_width.values(), key=lambda c: -c["width"])

@@ -5,7 +5,7 @@ import type { Board, SizeColor } from "./types";
 import { SIZE_COLORS } from "./constants";
 import { parseBoardDims, safeNum, clamp, getRipWidth } from "./utils";
 
-export function BoardTile({ board, index, color, stackInfo, onClick, disableHover = false, overrideUtilNum, hideWidthWaste = false, isRotated = false, hideUtilization = false, showDimensions = false, hideStackBadge = false, hidePreviousStripShade = false }: {
+export function BoardTile({ board, index, color, stackInfo, onClick, disableHover = false, overrideUtilNum, hideWidthWaste = false, isRotated = false, hideUtilization = false, showDimensions = false, hideStackBadge = false, hidePreviousStripShade = false, hideBoardId = false }: {
   board: Board;
   index: number;
   color: SizeColor;
@@ -19,6 +19,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
   showDimensions?: boolean;
   hideStackBadge?: boolean;
   hidePreviousStripShade?: boolean;
+  hideBoardId?: boolean;
 }) {
   const { t } = useLanguage();
   const [isHovered, setIsHovered] = useState(false);
@@ -122,14 +123,16 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
 
   const tileContent = (
     <>
-      <div className="px-2 pt-2 pb-1 flex items-center justify-between gap-1">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-[10px] font-semibold text-foreground truncate">{board.board_id}</span>
+      {(!hideBoardId || !hideUtilization) && (
+        <div className="px-2 pt-2 pb-1 flex items-center justify-between gap-1">
+          <div className="flex items-center gap-1.5 min-w-0">
+            {!hideBoardId && <span className="text-[10px] font-semibold text-foreground truncate">{board.board_id}</span>}
+          </div>
+          {!hideUtilization && <span className="text-[10px] font-bold tabular-nums shrink-0" style={{ color: utilColor }}>{utilPct}%</span>}
         </div>
-        {!hideUtilization && <span className="text-[10px] font-bold tabular-nums shrink-0" style={{ color: utilColor }}>{utilPct}%</span>}
-      </div>
+      )}
 
-      <div className={`px-2 pb-2 flex justify-center ${showDimensions ? (isRotated ? 'mt-5 mb-3 ml-8 mr-8' : 'mt-2 mb-5 ml-8 mr-8') : ''}`}>
+      <div className={`px-2 pb-2 flex justify-center ${showDimensions ? (isRotated ? 'mt-6 mb-4 ml-8 mr-10' : 'mt-3 mb-4 ml-8 mr-10') : ''}`}>
         <div className="relative rounded-sm overflow-visible" style={{
           width: isRotated ? `${tileH}px` : `${tileW}px`,
           height: isRotated ? `${tileW}px` : `${tileH}px`,
@@ -138,14 +141,14 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
             <>
               {/* Length label */}
               <div 
-                className={`absolute text-[10px] text-gray-500 font-mono whitespace-nowrap ${isRotated ? 'top-1/2 -right-[30px] -translate-y-1/2' : 'bottom-[-16px] left-1/2 -translate-x-1/2'}`}
+                className={`absolute text-[10px] text-gray-500 font-mono whitespace-nowrap ${isRotated ? 'top-1/2 -right-[36px] -translate-y-1/2' : 'bottom-[-22px] left-1/2 -translate-x-1/2'}`}
                 style={isRotated ? { writingMode: 'vertical-rl' } : {}}
               >
                 {boardDims.height}
               </div>
               {/* Width label (styled identically to length label) */}
               <div 
-                className={`absolute text-[10px] text-gray-500 font-mono whitespace-nowrap ${isRotated ? 'top-[-16px] left-1/2 -translate-x-1/2' : 'right-[-30px] top-1/2 -translate-y-1/2'}`}
+                className={`absolute text-[10px] text-gray-500 font-mono whitespace-nowrap ${isRotated ? 'top-[-22px] left-1/2 -translate-x-1/2' : 'right-[-36px] top-1/2 -translate-y-1/2'}`}
                 style={!isRotated ? { writingMode: 'vertical-rl', transform: 'rotate(180deg)' } : {}}
               >
                 {boardDims.width}
@@ -262,7 +265,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
   const cardContainer = (
     <div
       className={`relative transition-all duration-300 ${activeHover ? 'z-50' : 'z-0'} ${onClick.toString() === "() => {}" ? "" : "cursor-pointer"}`}
-      style={{ width: `${containerW + (showDimensions ? 80 : 24)}px`, height: `${containerH + (showDimensions ? 56 : 46)}px` }}
+      style={{ width: `${containerW + (showDimensions ? 80 : 24)}px`, height: `${containerH + (showDimensions ? 60 : 46)}px` }}
       onClick={onClick.toString() === "() => {}" ? undefined : onClick}
       onMouseEnter={() => !disableHover && setIsHovered(true)}
       onMouseLeave={() => !disableHover && setIsHovered(false)}

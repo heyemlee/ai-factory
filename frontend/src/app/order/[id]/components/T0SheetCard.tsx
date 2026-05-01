@@ -55,24 +55,7 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-4 shadow-sm">
-      {/* Header */}
-      <div className="flex items-center justify-between px-1">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-slate-500" />
-          <span className="text-[14px] font-bold text-foreground">{compactHeader ? compactSheetLabel : sheetId}</span>
-          {!compactHeader && (
-            <span className="text-[11px] text-apple-gray font-medium">
-              · {totalStrips} cuts · 1 T0
-            </span>
-          )}
-        </div>
-        <span
-          className="text-[13px] font-bold tabular-nums"
-          style={{ color: sheetUtil > 0.8 ? "#10b981" : sheetUtil > 0.6 ? "#f59e0b" : "#ef4444" }}
-        >
-          {(sheetUtil * 100).toFixed(1)}%
-        </span>
-      </div>
+
 
       <div className="flex justify-center pt-1">
         <div className="w-full max-w-[340px]">

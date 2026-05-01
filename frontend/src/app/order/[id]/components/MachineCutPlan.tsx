@@ -120,7 +120,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     stepCutDescNext: "请继续取 {count} 张板材进行 {patternNo} 的裁切。机器的总长度和宽度无需更改，请清除之前数据，重新从序号 1 开始输入：",
     boardWord: "板材",
     singleSheet: "1 张",
-    stackBadge: "叠切 x{n}",
+    stackBadge: "叠切 {n} 张",
     color: "颜色",
     t0RipTitle: "Step 1：T0 原板纵裁",
     t0RipDesc: "本图纸先从下列 T0 原板纵裁出对应条料；绿色为回收库存，斜纹为不可回收废料。",
@@ -128,8 +128,8 @@ const machineI18n: Record<string, Record<string, string>> = {
     recovered: "回收",
     waste: "废料",
     fromLeft: "从左到右",
-    phaseATitle: "Step A：T0 → T1 原板纵裁",
-    phaseBTitle: "Step B：T1 → T2 条料裁件",
+    phaseATitle: "Step A",
+    phaseBTitle: "Step B",
     subStepSetup: "① 机器设定",
     subStepInput: "② 板材输入",
     subStepLayout: "③ 排版图",
@@ -185,7 +185,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     stepCutDescNext: "Take the next {count} board(s) for {patternNo}. Total Length and Width do not need to be changed. Clear previous data and restart from Row 1:",
     boardWord: "Board",
     singleSheet: "1 Sheet",
-    stackBadge: "Stack x{n}",
+    stackBadge: "Stack {n} sheets",
     color: "Color",
     t0RipTitle: "Step 1: T0 Raw Sheet Rip",
     t0RipDesc: "Rip the matching strips for this pattern from the T0 raw sheets below. Green is recovered stock; hatching is non-recoverable waste.",
@@ -193,8 +193,8 @@ const machineI18n: Record<string, Record<string, string>> = {
     recovered: "Recovered",
     waste: "Waste",
     fromLeft: "Left to right",
-    phaseATitle: "Step A: T0 → T1 Sheet Rip",
-    phaseBTitle: "Step B: T1 → T2 Strip Cutting",
+    phaseATitle: "Step A",
+    phaseBTitle: "Step B",
     subStepSetup: "① Machine Setup",
     subStepInput: "② Board Input",
     subStepLayout: "③ Layout",
@@ -250,7 +250,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     stepCutDescNext: "Tome {count} tablero(s) para {patternNo}. Longitud y Ancho no cambian. Limpie datos y reinicie de Fila 1:",
     boardWord: "Tablero",
     singleSheet: "1 Hoja",
-    stackBadge: "Apilado x{n}",
+    stackBadge: "Apilar {n} hojas",
     color: "Color",
     t0RipTitle: "Paso 1: Rip de Hoja T0",
     t0RipDesc: "Corte primero las tiras correspondientes de las hojas T0 abajo. Verde es material recuperado; rayado es desperdicio.",
@@ -258,8 +258,8 @@ const machineI18n: Record<string, Record<string, string>> = {
     recovered: "Recuperado",
     waste: "Desperdicio",
     fromLeft: "Izquierda a derecha",
-    phaseATitle: "Paso A: T0 → T1 Corte de Tablero",
-    phaseBTitle: "Paso B: T1 → T2 Corte de Piezas",
+    phaseATitle: "Paso A",
+    phaseBTitle: "Paso B",
     subStepSetup: "① Configuración",
     subStepInput: "② Entrada de Tablero",
     subStepLayout: "③ Diagrama",
@@ -590,34 +590,40 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     const styleSheets = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
       .map((el) => el.cloneNode(true) as HTMLElement);
 
-    /* 2. Build one page per engineering group. T0 rip steps are embedded in their matching group. */
+    /* 2. Build a continuous layout — page breaks between groups, not forced per-group pages.
+       This ensures content (header + Step A) flows together on the first page. */
     const pageContainer = document.createElement("div");
+    pageContainer.className = "print-container";
 
-    const totalPages = displayGroups.length;
-    let printPageIndex = 0;
+    const totalGroups = displayGroups.length;
+    let renderedCount = 0;
 
     for (const grp of displayGroups) {
       const groupEl = document.querySelector(`[data-print-group="${grp.engNo}"]`);
       if (!groupEl) continue;
 
-      const page = document.createElement("div");
-      page.className = "print-page";
-
       const groupClone = groupEl.cloneNode(true) as HTMLElement;
       groupClone.classList.add("print-group-clone");
+
+      // Add page break before each group EXCEPT the first
+      if (renderedCount > 0) {
+        groupClone.style.pageBreakBefore = "always";
+        (groupClone.style as unknown as Record<string, string>)["breakBefore"] = "page";
+      }
+
       const titleEl = groupClone.querySelector("[data-print-group-title]");
       if (titleEl) {
         titleEl.textContent = `${mt("engineeringNo")} ${grp.engNo}${printOrderInline}`;
       }
-      page.appendChild(groupClone);
 
+      // Append a footer inside the group clone
       const footer = document.createElement("div");
       footer.className = "print-page-footer";
-      printPageIndex += 1;
-      footer.textContent = `${printPageIndex}/${totalPages}`;
-      page.appendChild(footer);
+      renderedCount += 1;
+      footer.textContent = `${renderedCount}/${totalGroups}`;
+      groupClone.appendChild(footer);
 
-      pageContainer.appendChild(page);
+      pageContainer.appendChild(groupClone);
     }
 
     /* 3. Write the document shell */
@@ -667,17 +673,50 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         font-family: var(--font-sans);
       }
 
-      .print-page {
-        width: 100%;
-        min-height: 100vh;
+      .print-container {
         padding: 4mm 5mm 3mm;
-        display: flex;
-        flex-direction: column;
-        page-break-after: always;
-        break-after: page;
-        box-sizing: border-box;
       }
-      .print-page:last-child { page-break-after: auto; break-after: auto; }
+
+      .print-group-clone {
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        overflow: visible !important;
+        font-size: 18px !important;
+      }
+
+      /* Scale up all text in print for readability */
+      .print-group-clone h3 {
+        font-size: 26px !important;
+      }
+      .print-group-clone h4 {
+        font-size: 22px !important;
+      }
+      .print-group-clone h5 {
+        font-size: 20px !important;
+      }
+      .print-group-clone h6 {
+        font-size: 18px !important;
+      }
+      .print-group-clone p,
+      .print-group-clone span,
+      .print-group-clone div {
+        font-size: inherit;
+      }
+      .print-group-clone table {
+        font-size: 18px !important;
+      }
+      .print-group-clone th {
+        font-size: 16px !important;
+        padding: 12px 14px !important;
+      }
+      .print-group-clone td {
+        font-size: 20px !important;
+        padding: 10px 14px !important;
+      }
+      .print-group-clone [data-print-board-count] {
+        font-size: 19px !important;
+      }
+
       table { page-break-inside: avoid; }
 
       /* Keep individual diagrams (T0SheetCard, BoardTile layout box) together.
@@ -688,11 +727,6 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         page-break-inside: avoid;
         break-inside: avoid;
       }
-      /* Keep each Phase A strip sub-flow and each Phase B pattern sub-flow together when possible. */
-      .print-group-clone [data-print-step] {
-        page-break-inside: avoid;
-        break-inside: avoid;
-      }
       /* Phase title must stay attached to its first sub-flow — never end a page on a bare phase heading. */
       .print-group-clone [data-print-phase] > h4,
       .print-group-clone [data-print-step-title] {
@@ -700,12 +734,6 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         break-after: avoid;
       }
 
-      .print-group-clone {
-        box-shadow: none !important;
-        border-radius: 0 !important;
-        overflow: visible !important;
-        flex: 1 1 auto;
-      }
 
       .print-group-clone [data-print-group-header] {
         padding: 8px 12px !important;
@@ -733,7 +761,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       }
 
       .print-page-footer {
-        margin-top: auto;
+        margin-top: 12px;
         padding-top: 2mm;
         text-align: right;
         font-size: 10px;
@@ -752,7 +780,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
 
       @media print {
         @page { size: A4; margin: 6mm 5mm; }
-        .print-page { padding: 0; min-height: auto; }
+        .print-container { padding: 0; }
       }
     `;
     pw.document.head.appendChild(printStyle);
@@ -924,7 +952,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                       <div key={sheet.sheet_id} data-print-step={`${grp.engNo}-A-${sheetIdx}`} className="space-y-3 border-l-4 border-emerald-200/70 pl-4">
                         <div data-print-step-header className="flex items-center gap-2 flex-wrap">
                           <h5 className="text-[15px] font-bold text-slate-800">{sheetLabel}</h5>
-                          <span data-print-board-count className="text-[14px] font-semibold text-red-600">
+                          <span data-print-board-count className="text-[14px] font-semibold text-emerald-600">
                             {sheetBadge}
                           </span>
                         </div>
@@ -990,22 +1018,19 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                   const nw = nominalStockWidthForBoard(pattern.sampleBoard);
                   const patternNeedsRip = nw != null && (nw - section.boardWidth > 0.5);
                   const boardLabel = `${mt("boardWord")} ${numLabel}`;
-                  const badgeText = pattern.boardCount === 1
+                  const isSingle = pattern.boardCount === 1;
+                  const badgeText = isSingle
                     ? mt("singleSheet")
-                    : `${pattern.boardCount} ${mt("sheetsUnit")}`;
+                    : mt("stackBadge").replace("{n}", String(pattern.boardCount));
 
                   return (
                     <div key={pIdx} data-print-step={`${grp.engNo}-B-${pIdx}`} className="space-y-3 border-l-4 border-blue-200/60 pl-4">
                       <div data-print-step-header className="flex items-center gap-2 flex-wrap">
                         <h5 className="text-[15px] font-bold text-slate-800">{boardLabel}</h5>
-                        <span data-print-board-count className="text-[14px] font-semibold text-red-600">
+                        <span data-print-board-count className={`text-[14px] font-semibold ${isSingle ? "text-emerald-600" : "text-red-600"}`}>
                           {badgeText}
                         </span>
-                        {patternNeedsRip && (
-                          <span className="px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-100 text-[10px] font-bold">
-                            {mt("widthRipBadge")} {section.boardWidth}mm
-                          </span>
-                        )}
+
                       </div>
 
                       <div data-print-substep="setup" className="text-[13px] text-slate-600 bg-black/[0.02] p-4 rounded-xl border border-black/[0.05]">
@@ -1057,6 +1082,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                             showDimensions={true}
                             hideStackBadge={true}
                             hidePreviousStripShade={true}
+                            hideBoardId={true}
                           />
                         </div>
                       </div>
