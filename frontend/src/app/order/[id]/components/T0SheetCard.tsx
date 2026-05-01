@@ -166,11 +166,11 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
                 return (
                   <div
                     key={`recovered-${rIdx}`}
-                    className="absolute top-0 h-full bg-apple-green/35 border-x border-apple-green/80 flex items-center justify-center"
+                    className="absolute top-0 h-full bg-[#a1f2c6] border-x border-emerald-500 flex items-center justify-center"
                     title={`${rs.board_type} · ${rs.width}mm`}
                     style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
                   >
-                    <div className="-rotate-90 whitespace-nowrap text-[10px] font-bold text-apple-green">
+                    <div className="-rotate-90 whitespace-nowrap text-[10px] font-bold text-emerald-700">
                       {rs.width}mm recovered
                     </div>
                   </div>

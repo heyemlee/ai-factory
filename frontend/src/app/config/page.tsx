@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Edit2, Palette, Power, Save, Settings2, X } from "lucide-react";
+import { Edit2, Palette, Power, Ruler, Save, Settings2, X, Plus, Trash2, RefreshCw } from "lucide-react";
 import clsx from "clsx";
 import { supabase } from "@/lib/supabase";
 import { BoxColor, colorLabel, useBoxColors } from "@/lib/box_colors";
 import { MaterialOption, materialLabel, useMaterialOptions } from "@/lib/material_options";
 import { useLanguage } from "@/lib/i18n";
 
-type ConfigTab = "colors" | "materials";
+type ConfigTab = "colors" | "materials" | "boardSpecs";
 type ColorForm = Partial<BoxColor>;
 type MaterialForm = Partial<MaterialOption>;
 
@@ -36,6 +36,26 @@ export default function ConfigPage() {
 
   useEffect(() => setColorRows(colors), [colors]);
   useEffect(() => setMaterialRows(materials), [materials]);
+
+  /* ── Board Specs state ── */
+  type BoardSpecRow = { id: number; board_type: string; width: number; name: string; color: string };
+  const [specRows, setSpecRows] = useState<BoardSpecRow[]>([]);
+  const [editingSpec, setEditingSpec] = useState<number | null>(null);
+  const [specForm, setSpecForm] = useState<Partial<BoardSpecRow>>({});
+  const [addingSpec, setAddingSpec] = useState(false);
+  const [newSpec, setNewSpec] = useState<Partial<BoardSpecRow>>({ width: 0, name: "", board_type: "" });
+  const [syncing, setSyncing] = useState(false);
+
+  async function refreshSpecs() {
+    const { data } = await supabase
+      .from("inventory")
+      .select("id,board_type,width,name,color")
+      .like("board_type", "T1-%x2438%")
+      .eq("color", "WhiteBirch")
+      .order("width");
+    if (data) setSpecRows(data as BoardSpecRow[]);
+  }
+  useEffect(() => { refreshSpecs(); }, []);
 
   async function refreshColors() {
     const { data } = await supabase.from("box_colors").select("*").order("sort_order").order("key");
@@ -145,6 +165,9 @@ export default function ConfigPage() {
         <button onClick={() => setActiveTab("materials")} className={clsx("px-5 py-2 rounded-lg text-[14px] font-medium transition-all flex items-center gap-2", activeTab === "materials" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground")}>
           <Settings2 size={16} /> {t("config.materials")}
         </button>
+        <button onClick={() => setActiveTab("boardSpecs")} className={clsx("px-5 py-2 rounded-lg text-[14px] font-medium transition-all flex items-center gap-2", activeTab === "boardSpecs" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground")}>
+          <Ruler size={16} /> {t("config.boardSpecs")}
+        </button>
       </div>
 
       {error && <div className="rounded-xl bg-apple-red/10 text-apple-red px-4 py-3 text-[13px] font-medium">{error}</div>}
@@ -252,6 +275,124 @@ export default function ConfigPage() {
           </div>
           <div className="p-4 flex flex-wrap gap-2 border-t border-border">
             {materialRows.map((row) => <span key={row.key} className="px-3 py-1.5 rounded-full bg-black/[0.04] text-[13px]">{materialLabel(row, locale)}</span>)}
+          </div>
+        </div>
+      )}
+
+      {activeTab === "boardSpecs" && (
+        <div className="bg-card rounded-xl shadow-apple border border-border overflow-hidden">
+          <div className="p-4 border-b border-border flex items-center justify-between">
+            <div>
+              <h2 className="text-[15px] font-semibold">{t("boardSpecs.title")}</h2>
+              <p className="text-[12px] text-apple-gray mt-0.5">{t("boardSpecs.subtitle")}</p>
+            </div>
+            <button onClick={() => { setAddingSpec(true); setNewSpec({ width: 0, name: "", board_type: "" }); setError(null); }} className="bg-apple-blue text-white px-4 py-2 rounded-full text-[13px] font-medium flex items-center gap-1.5">
+              <Plus size={14} /> {t("boardSpecs.add")}
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="bg-black/[0.02]"><tr>
+                <th className="py-3 px-4 text-[12px] uppercase text-apple-gray">{t("boardSpecs.boardType")}</th>
+                <th className="py-3 px-4 text-[12px] uppercase text-apple-gray">{t("boardSpecs.width")}</th>
+                <th className="py-3 px-4 text-[12px] uppercase text-apple-gray">{t("boardSpecs.description")}</th>
+                <th className="py-3 px-4 text-[12px] uppercase text-apple-gray text-right">Actions</th>
+              </tr></thead>
+              <tbody className="divide-y divide-border">
+                {addingSpec && (
+                  <tr className="bg-apple-blue/5">
+                    <td className="py-3 px-4"><span className="text-[13px] text-apple-gray font-mono">T1-<em>auto</em></span></td>
+                    <td className="py-3 px-4"><input type="number" step="0.1" value={newSpec.width || ""} onChange={(e) => setNewSpec({ ...newSpec, width: parseFloat(e.target.value) || 0 })} className="w-32 bg-white border border-border rounded-lg px-2 py-1.5 text-[13px] font-mono focus:outline-none focus:border-apple-blue" placeholder="e.g. 303.8" /></td>
+                    <td className="py-3 px-4"><input value={newSpec.name || ""} onChange={(e) => setNewSpec({ ...newSpec, name: e.target.value })} className="w-full bg-white border border-border rounded-lg px-2 py-1.5 text-[13px] focus:outline-none focus:border-apple-blue" placeholder="e.g. Wall Side Panel 12″-1mm" /></td>
+                    <td className="py-3 px-4 text-right">
+                      <button onClick={async () => {
+                        if (!newSpec.width || newSpec.width <= 0) { setError("Width must be > 0"); return; }
+                        const w = newSpec.width;
+                        const wCode = w % 1 === 0 ? `${w}` : `${w}`;
+                        const bt = `T1-${wCode}x2438.4`;
+                        const name = newSpec.name || `T1 Recovered ${wCode}mm`;
+                        // Insert for both colors
+                        for (const color of ["WhiteBirch", "WhiteMelamine"]) {
+                          await supabase.from("inventory").upsert({
+                            board_type: bt,
+                            color,
+                            name,
+                            material: "MDF",
+                            category: "main",
+                            height: 2438.4,
+                            width: w,
+                            thickness: 18,
+                            stock: 0,
+                            threshold: 5,
+                            unit: "pcs",
+                          }, { onConflict: "board_type,color" });
+                        }
+                        setAddingSpec(false); setError(null); await refreshSpecs();
+                      }} className="p-2 rounded-full bg-apple-blue text-white"><Save size={15} /></button>
+                      <button onClick={() => setAddingSpec(false)} className="p-2 rounded-full bg-black/5 text-apple-gray ml-2"><X size={15} /></button>
+                    </td>
+                  </tr>
+                )}
+                {specRows.map((row) => {
+                  const editing = editingSpec === row.id;
+                  return <tr key={row.id} className={editing ? "bg-apple-blue/5" : "hover:bg-black/[0.01]"}>
+                    <td className="py-3 px-4 font-mono text-[13px]">{editing ? <span className="text-apple-gray">{specForm.board_type}</span> : row.board_type}</td>
+                    <td className="py-3 px-4">
+                      {editing ? <input type="number" step="0.1" value={specForm.width || ""} onChange={(e) => setSpecForm({ ...specForm, width: parseFloat(e.target.value) || 0 })} className="w-32 bg-white border border-border rounded-lg px-2 py-1.5 text-[13px] font-mono focus:outline-none focus:border-apple-blue" />
+                      : <span className="font-mono text-[14px] font-semibold">{row.width} mm</span>}
+                    </td>
+                    <td className="py-3 px-4">
+                      {editing ? <input value={specForm.name || ""} onChange={(e) => setSpecForm({ ...specForm, name: e.target.value })} className="w-full bg-white border border-border rounded-lg px-2 py-1.5 text-[13px] focus:outline-none focus:border-apple-blue" />
+                      : <span className="text-[14px]">{row.name}</span>}
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      {editing ? <>
+                        <button onClick={async () => {
+                          if (!specForm.width || specForm.width <= 0) { setError("Width must be > 0"); return; }
+                          const w = specForm.width;
+                          const wCode = w % 1 === 0 ? `${w}` : `${w}`;
+                          const newBt = `T1-${wCode}x2438.4`;
+                          const name = specForm.name || `T1 Recovered ${wCode}mm`;
+                          // Update all colors for this old board_type
+                          const { data: allRows } = await supabase.from("inventory").select("id").eq("board_type", row.board_type);
+                          for (const r of allRows || []) {
+                            await supabase.from("inventory").update({ board_type: newBt, width: w, name }).eq("id", r.id);
+                          }
+                          setEditingSpec(null); setError(null); await refreshSpecs();
+                        }} className="p-2 rounded-full bg-apple-blue text-white"><Save size={15} /></button>
+                        <button onClick={() => setEditingSpec(null)} className="p-2 rounded-full bg-black/5 text-apple-gray ml-2"><X size={15} /></button>
+                      </> : <>
+                        <button onClick={() => { setEditingSpec(row.id); setSpecForm({ ...row }); }} className="p-2 rounded-full text-apple-gray hover:text-apple-blue hover:bg-apple-blue/10"><Edit2 size={15} /></button>
+                        <button onClick={async () => {
+                          if (!confirm(t("boardSpecs.confirmDelete"))) return;
+                          await supabase.from("inventory").delete().eq("board_type", row.board_type);
+                          await refreshSpecs();
+                        }} className="p-2 rounded-full text-apple-gray hover:text-apple-red hover:bg-apple-red/10 ml-1"><Trash2 size={15} /></button>
+                      </>}
+                    </td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="p-4 border-t border-border flex items-center justify-between">
+            <span className="text-[12px] text-apple-gray">{specRows.length} recovery specs configured</span>
+            <button
+              disabled={syncing}
+              onClick={async () => {
+                setSyncing(true);
+                try {
+                  const resp = await fetch("/api/sync-board-config", { method: "POST" });
+                  if (resp.ok) setError(null);
+                  else setError(`Sync failed: ${await resp.text()}`);
+                } catch (e: unknown) {
+                  setError(`Sync failed: ${e instanceof Error ? e.message : e}`);
+                } finally { setSyncing(false); }
+              }}
+              className="flex items-center gap-2 px-4 py-2 rounded-full bg-apple-green text-white text-[13px] font-medium disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={syncing ? "animate-spin" : ""} /> {t("boardSpecs.syncBtn")}
+            </button>
           </div>
         </div>
       )}

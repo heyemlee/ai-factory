@@ -35,10 +35,9 @@ GROOVE_DEPTH = 3.0           # 通槽深度 (each side)
 SHELF_INSET = 20.0           # 活动层板前方内缩
 STRETCHER_DEPTH = 101.6      # 拉条深度 (4")
 INCHES_TO_MM = 25.4
-# Edge-banding allowance: the saw cuts the piece undersized by this much on
-# each banded edge so the finished cabinet (board + 1mm PVC banding) lands
-# at the nominal exterior dimension.
-EDGE_BAND_THICKNESS = 1.0    # 封边厚度
+# Edge-banding allowance: loaded from config/board_config.json
+from config.board_config_loader import BOARD_CFG
+EDGE_BAND_THICKNESS = BOARD_CFG.EDGE_BAND_THICKNESS
 
 # ─── Box Color (driven by Supabase box_colors table) ────
 DEFAULT_BOX_COLOR = "WhiteBirch"

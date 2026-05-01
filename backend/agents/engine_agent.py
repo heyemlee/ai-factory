@@ -7,13 +7,13 @@
 
 Board Hierarchy:
   T0-RAW:         1219.2 × 2438.4 mm (full raw sheet, 用于混排裁切)
-  T1-304.8-INV:   304.8 × 2438.4 mm  (wall cabinet stock, 库存板)
-  T1-609.6-INV:   609.6 × 2438.4 mm  (base/tall cabinet stock, 库存板)
+  T1-303.8-INV:   303.8 × 2438.4 mm  (wall cabinet stock, 12″-1mm封边)
+  T1-608.6-INV:   608.6 × 2438.4 mm  (base/tall cabinet stock, 24″-1mm封边)
   T2:             Final cabinet parts (side panels, top/bottom, back, shelves)
 
 ⚠️ 命名规则:
   - 不允许自定义板材名称 (禁止 CUSTOM-876.3-T0 等)
-  - 所有板材统一使用: T0-RAW / T1-304.8-INV / T1-609.6-INV
+  - 所有板材统一使用: T0-RAW / T1-303.8-INV / T1-608.6-INV
 
 重构流程 (v5):
   STEP 1: parts → strip_demand  (把零件转成条料需求，标记来源)
@@ -30,32 +30,32 @@ from collections import defaultdict
 import pandas as pd
 
 
-# ── Factory Parameters (mm) ─────────────────────────────
-TRIM_LOSS = 5.0   # trim per board edge
-SAW_KERF  = 5.0   # kerf per cut
+# ── Factory Parameters — loaded from config/board_config.json ───
+from config.board_config_loader import BOARD_CFG
 
-# Strip width thresholds
-STRIP_WIDTH_NARROW = 304.8    # T1 narrow (wall cabinet)
-STRIP_WIDTH_WIDE   = 609.6    # T1 wide (base/tall cabinet)
-BOARD_HEIGHT       = 2438.4   # Standard board height (96″)
+TRIM_LOSS = BOARD_CFG.T0_TRIM
+SAW_KERF  = BOARD_CFG.SAW_KERF
 
-# ⚠️ 动态命名 — 将从库存表中自动匹配名称
-DEFAULT_BOARD_T0        = "T0-RAW"
-DEFAULT_BOARD_T1_NARROW = "T1-304.8-INV"
-DEFAULT_BOARD_T1_WIDE   = "T1-609.6-INV"
+STRIP_WIDTH_NARROW = BOARD_CFG.STRIP_WIDTH_NARROW
+STRIP_WIDTH_WIDE   = BOARD_CFG.STRIP_WIDTH_WIDE
+BOARD_HEIGHT       = BOARD_CFG.BOARD_HEIGHT
 
-COMMON_RECOVERY_WIDTHS = [
-    304.8,
-    609.6,
-    286.8,
-    266.8,
-    591.6,
-    571.6,
-    762.0,
-    838.2,
-]
+DEFAULT_BOARD_T0        = BOARD_CFG.BOARD_T0_RAW
+DEFAULT_BOARD_T1_NARROW = BOARD_CFG.BOARD_T1_NARROW
+DEFAULT_BOARD_T1_WIDE   = BOARD_CFG.BOARD_T1_WIDE
 
-MIN_RECOVERABLE_WIDTH = 200.0
+COMMON_RECOVERY_WIDTHS = BOARD_CFG.COMMON_RECOVERY_WIDTHS
+
+MIN_RECOVERABLE_WIDTH = BOARD_CFG.MIN_RECOVERABLE_WIDTH
+
+EDGE_BANDED_RECOVERY_WIDTHS = {
+    304.8: 303.8,
+    609.6: 608.6,
+    286.8: 285.8,
+    266.8: 264.8,
+    591.6: 590.6,
+    571.6: 569.6,
+}
 
 
 def _cut_length(part: dict) -> float:
@@ -75,6 +75,25 @@ def common_recovery_board_type(width: float) -> str:
     return f"T1-{_format_width_for_code(width)}x2438.4"
 
 
+def _width_from_board_type(board_type: str) -> float | None:
+    try:
+        return float(str(board_type).split("T1-", 1)[1].split("x", 1)[0])
+    except (IndexError, ValueError):
+        return None
+
+
+def normalize_recovery_spec(board_type: str, width: float) -> dict:
+    """Return the canonical recoverable spec after edge-banding allowance."""
+    width = round(float(width), 1)
+    code_width = _width_from_board_type(board_type)
+    mapped_width = EDGE_BANDED_RECOVERY_WIDTHS.get(round(code_width, 1)) if code_width is not None else None
+    if mapped_width is None:
+        mapped_width = EDGE_BANDED_RECOVERY_WIDTHS.get(width, width)
+    if mapped_width != width or (code_width is not None and round(code_width, 1) != mapped_width):
+        return {"board_type": common_recovery_board_type(mapped_width), "width": mapped_width}
+    return {"board_type": board_type, "width": width}
+
+
 def load_recovery_specs_from_supabase() -> list:
     """Load recoverable T1 board specs from Supabase board_specs."""
     try:
@@ -92,7 +111,7 @@ def load_recovery_specs_from_supabase() -> list:
             height = float(row.get("height") or 0)
             width = float(row.get("width") or 0)
             if width >= MIN_RECOVERABLE_WIDTH and height + 1e-3 >= BOARD_HEIGHT:
-                specs.append({"board_type": row["board_type"], "width": width})
+                specs.append(normalize_recovery_spec(row["board_type"], width))
         if specs:
             return specs
     except Exception as e:
@@ -340,7 +359,7 @@ def build_strip_demand(parts: list, inventory: dict = None, force_t0_start: bool
          e.g.: Width=101.6 → T1-101.6x2438.4 (库存有就用)
       2. 旋转匹配: 零件 Height 精确匹配库存 Width (±0.5mm)
          且旋转后原 Width 作为新 Height ≤ 可用长度 (2433.4mm)
-         e.g.: Height=304.8, Width=600 → 旋转后 Width=304.8 匹配 T1-304.8
+         e.g.: Height=303.8, Width=600 → 旋转后 Width=303.8 匹配 T1-303.8
       3. 没有精确匹配 → T0 裁切
 
     Returns:
@@ -647,8 +666,8 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
 
     Args:
       parts: list of part dicts with Height/Width and optional cut_length/cut_width
-      strip_width: width of the strip (304.8 / 609.6 / custom)
-      board_type: unified board label (T1-304.8-INV / T1-609.6-INV / T0-RAW)
+      strip_width: width of the strip (303.8 / 608.6 / custom)
+      board_type: unified board label (T1-303.8-INV / T1-608.6-INV / T0-RAW)
       board_height: total length of the strip
 
     Returns:
@@ -1123,7 +1142,8 @@ def _run_pipeline_for_color(parts: list, inventory: dict, color: str,
             w = float(info.get("Width", 0))
             if w < MIN_RECOVERABLE_WIDTH:
                 continue
-            recovery_by_width[round(w, 1)] = {"board_type": bt, "width": w}
+            spec = normalize_recovery_spec(bt, w)
+            recovery_by_width.setdefault(round(spec["width"], 1), spec)
         recovery_candidates = sorted(recovery_by_width.values(), key=lambda c: -c["width"])
         if recovery_candidates:
             cand_desc = ", ".join(f"{c['board_type']}={c['width']}mm" for c in recovery_candidates)

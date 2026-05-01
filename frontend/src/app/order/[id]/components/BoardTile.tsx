@@ -198,7 +198,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
                   data-part-h={p.Height}
                   data-part-w={p.Width}
                   style={{
-                    left: `${lengthWasteWidth + p.left}%`, bottom: `${visualBottomOffset}%`, width: `${p.width}%`, height: `${p.height}%`,
+                    left: `${p.left}%`, bottom: `${visualBottomOffset}%`, width: `${p.width}%`, height: `${p.height}%`,
                     backgroundColor: color.bg,
                     borderRight: `1px solid ${color.border}`,
                     borderTop: p.height < 100 ? `1px solid ${color.border}` : undefined,
@@ -207,7 +207,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
                 {/* Upper Waste */}
                 {p.height < stripHeight && (
                   <div className="absolute" style={{
-                    left: `${lengthWasteWidth + p.left}%`, bottom: `${visualBottomOffset + p.height}%`, width: `${p.width}%`, height: `${stripHeight - p.height}%`,
+                    left: `${p.left}%`, bottom: `${visualBottomOffset + p.height}%`, width: `${p.width}%`, height: `${stripHeight - p.height}%`,
                     backgroundColor: "#f8fafc",
                     backgroundImage: wastePattern,
                     borderRight: `1px dashed #94a3b8`,
@@ -220,11 +220,11 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
             {/* Length Leftover area (ALWAYS Waste) */}
             {lengthWasteWidth > 0.5 && (
               <div className="absolute" style={{
-                left: 0, width: `${lengthWasteWidth}%`,
+                left: `${wasteLeft}%`, width: `${lengthWasteWidth}%`,
                 bottom: `${visualBottomOffset}%`, height: `${stripHeight}%`,
                 backgroundColor: "#f8fafc",
                 backgroundImage: wastePattern,
-                borderRight: `1.5px dashed #94a3b8`,
+                borderLeft: `1.5px dashed #94a3b8`,
                 borderBottom: visualBottomOffset > 0 ? `1px solid ${color.border}40` : undefined,
                 borderTop: `1px solid ${color.border}`,
               }} />

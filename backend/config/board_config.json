@@ -1,0 +1,42 @@
+{
+  "_comment": "板材规格配置 — 修改此文件即可更新所有回收/库存宽度，无需改代码",
+
+  "t0_sheet": {
+    "width": 1219.2,
+    "height": 2438.4,
+    "trim": 5.0,
+    "saw_kerf": 5.0
+  },
+
+  "edge_band_thickness": 1.0,
+
+  "recovery_thresholds": {
+    "_comment": "回收优先级: wide → narrow → rail",
+    "wide": 608.6,
+    "narrow": 303.8,
+    "rail_min": 200.0
+  },
+
+  "board_names": {
+    "t0_raw": "T0-RAW",
+    "t1_narrow": "T1-303.8-INV",
+    "t1_wide": "T1-608.6-INV",
+    "strip_recovered": "STRIP-RECOVERED"
+  },
+
+  "common_recovery_widths": [
+    { "width": 303.8, "comment": "Wall 侧板深度 12″ - 1mm封边" },
+    { "width": 608.6, "comment": "Base/Tall 侧板深度 24″ - 1mm封边" },
+    { "width": 285.8, "comment": "Wall 顶/底板 D-18 - 1mm封边" },
+    { "width": 264.8, "comment": "Wall 活动层板 D-18-20 - 2mm封边(两边)" },
+    { "width": 590.6, "comment": "Base 底板 D-18 - 1mm封边" },
+    { "width": 569.6, "comment": "Base 活动层板 D-18-20 - 2mm封边(两边)" },
+    { "width": 762.0, "comment": "背板 30″ (不封边)" },
+    { "width": 838.2, "comment": "背板 33″ (不封边)" }
+  ],
+
+  "strip_width_narrow": 303.8,
+  "strip_width_wide": 608.6,
+  "board_height": 2438.4,
+  "min_recoverable_width": 200.0
+}

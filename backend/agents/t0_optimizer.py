@@ -7,8 +7,8 @@ T0 raw sheet: 1219.2 × 2438.4 mm (48″ × 96″)
 ⚠️ 命名规则 (v3):
   - T0 板统一叫 T0-RAW (不允许 CUSTOM-xxx-T0)
   - 回收的条料使用库存命名:
-    - T1-609.6-INV  (回收的宽条料)
-    - T1-304.8-INV  (回收的窄条料)
+    - T1-608.6-INV  (回收的宽条料, 24″-1mm封边)
+    - T1-303.8-INV  (回收的窄条料, 12″-1mm封边)
     - STRIP-RECOVERED (拉条回收)
 
 核心逻辑:
@@ -28,28 +28,28 @@ T0 raw sheet: 1219.2 × 2438.4 mm (48″ × 96″)
   - 按宽度降序排列 (FFD)
 
 回收规则 (STEP 4):
-  - remaining ≥ 609.6  → 回收 T1-609.6-INV
-  - remaining ≥ 304.8  → 回收 T1-304.8-INV
+  - remaining ≥ 608.6  → 回收 T1-608.6-INV
+  - remaining ≥ 303.8  → 回收 T1-303.8-INV
   - remaining ≥ 200    → 回收 STRIP-RECOVERED (拉条)
   - remaining < 200    → 废料
 """
 
-# ── T0 Sheet Constants (mm) ─────────────────
-T0_WIDTH  = 1219.2   # 48″ — the cutting axis
-T0_HEIGHT = 2438.4   # 96″ — strip runs along this direction
-T0_TRIM   = 5.0      # edge trim on T0 sheet
-SAW_KERF  = 5.0      # kerf per cut
+# ── Load from centralized config ─────────────
+from config.board_config_loader import BOARD_CFG
 
-# Recovery thresholds
-RECOVERY_WIDE   = 609.6   # can recover a T1-609.6-INV strip
-RECOVERY_NARROW = 304.8   # can recover a T1-304.8-INV strip
-RECOVERY_RAIL   = 200.0   # minimum for rail (拉条) recovery
+T0_WIDTH  = BOARD_CFG.T0_WIDTH
+T0_HEIGHT = BOARD_CFG.T0_HEIGHT
+T0_TRIM   = BOARD_CFG.T0_TRIM
+SAW_KERF  = BOARD_CFG.SAW_KERF
 
-# ⚠️ 统一命名
-BOARD_T0_RAW       = "T0-RAW"
-BOARD_T1_NARROW    = "T1-304.8-INV"
-BOARD_T1_WIDE      = "T1-609.6-INV"
-BOARD_STRIP_RECOV  = "STRIP-RECOVERED"
+RECOVERY_WIDE   = BOARD_CFG.RECOVERY_WIDE
+RECOVERY_NARROW = BOARD_CFG.RECOVERY_NARROW
+RECOVERY_RAIL   = BOARD_CFG.RECOVERY_RAIL
+
+BOARD_T0_RAW       = BOARD_CFG.BOARD_T0_RAW
+BOARD_T1_NARROW    = BOARD_CFG.BOARD_T1_NARROW
+BOARD_T1_WIDE      = BOARD_CFG.BOARD_T1_WIDE
+BOARD_STRIP_RECOV  = BOARD_CFG.BOARD_STRIP_RECOV
 
 
 # ─────────────────────────────────────────────

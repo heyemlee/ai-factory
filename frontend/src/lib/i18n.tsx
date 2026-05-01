@@ -186,8 +186,21 @@ const translations = {
     "config.subtitle": "Manage configurable options used by inventory and orders.",
     "config.colors": "Box Colors",
     "config.materials": "Materials",
+    "config.boardSpecs": "Board Specs",
     "materials.add": "Add Material",
-    "materials.key": "Key"
+    "materials.key": "Key",
+    "boardSpecs.title": "Recovery Board Specs",
+    "boardSpecs.subtitle": "Manage recoverable T1 strip widths used during T0 sheet recovery.",
+    "boardSpecs.boardType": "Board Type",
+    "boardSpecs.width": "Width (mm)",
+    "boardSpecs.description": "Description",
+    "boardSpecs.add": "Add Spec",
+    "boardSpecs.save": "Save",
+    "boardSpecs.cancel": "Cancel",
+    "boardSpecs.delete": "Delete",
+    "boardSpecs.confirmDelete": "Delete this board spec?",
+    "boardSpecs.syncSuccess": "Board specs synced to backend config.",
+    "boardSpecs.syncBtn": "Sync to Backend"
   },
   zh: {
     "nav.dashboard": "仪表盘",
@@ -371,8 +384,21 @@ const translations = {
     "config.subtitle": "管理库存和订单使用的可配置选项。",
     "config.colors": "箱体颜色",
     "config.materials": "材料",
+    "config.boardSpecs": "板材规格",
     "materials.add": "新增材料",
-    "materials.key": "Key"
+    "materials.key": "Key",
+    "boardSpecs.title": "回收板材规格",
+    "boardSpecs.subtitle": "管理 T0 原板回收时使用的 T1 条料宽度。",
+    "boardSpecs.boardType": "板材类型",
+    "boardSpecs.width": "宽度 (mm)",
+    "boardSpecs.description": "说明",
+    "boardSpecs.add": "新增规格",
+    "boardSpecs.save": "保存",
+    "boardSpecs.cancel": "取消",
+    "boardSpecs.delete": "删除",
+    "boardSpecs.confirmDelete": "确定要删除此板材规格吗？",
+    "boardSpecs.syncSuccess": "板材规格已同步到后端配置。",
+    "boardSpecs.syncBtn": "同步到后端"
   },
   es: {
     "nav.dashboard": "Panel",
@@ -556,8 +582,21 @@ const translations = {
     "config.subtitle": "Gestionar opciones configurables usadas por inventario y pedidos.",
     "config.colors": "Colores de Caja",
     "config.materials": "Materiales",
+    "config.boardSpecs": "Especificaciones",
     "materials.add": "Agregar Material",
-    "materials.key": "Clave"
+    "materials.key": "Clave",
+    "boardSpecs.title": "Especificaciones de Tablero Recuperable",
+    "boardSpecs.subtitle": "Gestionar anchos de tiras T1 recuperables durante la recuperación de hojas T0.",
+    "boardSpecs.boardType": "Tipo de Tablero",
+    "boardSpecs.width": "Ancho (mm)",
+    "boardSpecs.description": "Descripción",
+    "boardSpecs.add": "Agregar Spec",
+    "boardSpecs.save": "Guardar",
+    "boardSpecs.cancel": "Cancelar",
+    "boardSpecs.delete": "Eliminar",
+    "boardSpecs.confirmDelete": "¿Eliminar esta especificación?",
+    "boardSpecs.syncSuccess": "Especificaciones sincronizadas.",
+    "boardSpecs.syncBtn": "Sincronizar"
   }
 };
 
