@@ -110,6 +110,24 @@ def fetch_pending_orders():
     return result.data or []
 
 
+def claim_order(order: dict) -> bool:
+    """Atomically claim a pending order so duplicate pollers do not process it."""
+    result = (
+        supabase.table("orders")
+        .update({
+            "status": "processing",
+            "cut_result_json": {"progress": 5, "message": "开始处理订单..."},
+        })
+        .eq("id", order["id"])
+        .eq("status", "pending")
+        .execute()
+    )
+    if result.data:
+        return True
+    print(f"  ↪️  Order {order['job_id']} was already claimed by another worker; skipping")
+    return False
+
+
 def download_order_file(order: dict) -> str | None:
     """Download the order Excel from Supabase Storage to a temp file."""
     file_url = order.get("file_url")
@@ -149,8 +167,8 @@ def process_order(order: dict):
             "cut_result_json": {"progress": pct, "message": msg}
         }).eq("id", order["id"]).execute()
 
-    # Mark as processing
-    update_progress(5, "开始处理订单...")
+    if order.get("status") == "pending" and not claim_order(order):
+        return
 
     try:
         update_progress(10, "正在下载订单文件...")

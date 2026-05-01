@@ -45,6 +45,7 @@ export default function ConfigPage() {
   const [addingSpec, setAddingSpec] = useState(false);
   const [newSpec, setNewSpec] = useState<Partial<BoardSpecRow>>({ width: 0, name: "", board_type: "" });
   const [syncing, setSyncing] = useState(false);
+  const [deletingSpecBt, setDeletingSpecBt] = useState<string | null>(null);
 
   async function refreshSpecs() {
     const { data } = await supabase
@@ -362,12 +363,19 @@ export default function ConfigPage() {
                         }} className="p-2 rounded-full bg-apple-blue text-white"><Save size={15} /></button>
                         <button onClick={() => setEditingSpec(null)} className="p-2 rounded-full bg-black/5 text-apple-gray ml-2"><X size={15} /></button>
                       </> : <>
-                        <button onClick={() => { setEditingSpec(row.id); setSpecForm({ ...row }); }} className="p-2 rounded-full text-apple-gray hover:text-apple-blue hover:bg-apple-blue/10"><Edit2 size={15} /></button>
-                        <button onClick={async () => {
-                          if (!confirm(t("boardSpecs.confirmDelete"))) return;
-                          await supabase.from("inventory").delete().eq("board_type", row.board_type);
-                          await refreshSpecs();
-                        }} className="p-2 rounded-full text-apple-gray hover:text-apple-red hover:bg-apple-red/10 ml-1"><Trash2 size={15} /></button>
+                        <button onClick={() => { setEditingSpec(row.id); setSpecForm({ ...row }); setDeletingSpecBt(null); }} className="p-2 rounded-full text-apple-gray hover:text-apple-blue hover:bg-apple-blue/10"><Edit2 size={15} /></button>
+                        {deletingSpecBt === row.board_type ? (
+                          <>
+                            <button onClick={async () => {
+                              await supabase.from("inventory").delete().eq("board_type", row.board_type);
+                              setDeletingSpecBt(null);
+                              await refreshSpecs();
+                            }} className="px-3 py-1.5 rounded-full bg-apple-red text-white text-[12px] font-medium ml-2">{t("boardSpecs.delete")}</button>
+                            <button onClick={() => setDeletingSpecBt(null)} className="p-2 rounded-full bg-black/5 text-apple-gray ml-1"><X size={15} /></button>
+                          </>
+                        ) : (
+                          <button onClick={() => setDeletingSpecBt(row.board_type)} className="p-2 rounded-full text-apple-gray hover:text-apple-red hover:bg-apple-red/10 ml-1"><Trash2 size={15} /></button>
+                        )}
                       </>}
                     </td>
                   </tr>;

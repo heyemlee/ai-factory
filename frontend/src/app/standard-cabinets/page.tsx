@@ -1,13 +1,12 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, Fragment, useEffect } from "react";
 import {
   AlertCircle,
   CheckCircle2,
   Database,
   Layers3,
-  Ruler,
   Search,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -18,8 +17,6 @@ import {
   cabinetCategories,
   resolveCabinetDimensions,
 } from "@/lib/cabinet_catalog";
-
-const visibleRowLimit = 150;
 
 function formatInches(value: number | null) {
   if (value === null) return "N/A";
@@ -43,11 +40,23 @@ function shelvesTotal(record: CabinetCatalogRecord) {
   return (record.adjustableShelfQty ?? 0) + (record.fixedShelfQty ?? 0);
 }
 
+function formatNumber(value: number | null) {
+  if (value === null) return "N/A";
+  return String(Number(value.toFixed(2)));
+}
+
 export default function StandardCabinetsPage() {
   const [query, setQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const rowsPerPage = 150;
+  const [expandedItem, setExpandedItem] = useState<string | null>(null);
 
   const trimmedQuery = query.trim();
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [query, selectedCategory]);
   const resolution = useMemo(
     () => (trimmedQuery ? resolveCabinetDimensions(trimmedQuery) : null),
     [trimmedQuery]
@@ -67,23 +76,22 @@ export default function StandardCabinetsPage() {
     });
   }, [selectedCategory, trimmedQuery]);
 
-  const visibleRecords = filteredRecords.slice(0, visibleRowLimit);
-  const recordsWithDepth = cabinetCatalog.filter((record) => record.depth !== null).length;
+  const totalPages = Math.ceil(filteredRecords.length / rowsPerPage);
+  const startIndex = (currentPage - 1) * rowsPerPage;
+  const visibleRecords = filteredRecords.slice(startIndex, startIndex + rowsPerPage);
 
   return (
     <div className="w-full space-y-6 py-4">
       <div className="flex flex-col gap-2">
-        <h1 className="text-[32px] font-semibold tracking-tight">标准柜数据库</h1>
+        <h1 className="text-[32px] font-semibold tracking-tight">Standard Cabinets Database</h1>
         <p className="text-apple-gray text-[15px]">
-          ABC Item 尺寸、价格和生产参数。
+          ABC Item dimensions, prices, and production parameters.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <MetricCard icon={Database} label="数据库 Item" value={cabinetCatalog.length.toLocaleString()} />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <MetricCard icon={Database} label="Database Items" value={cabinetCatalog.length.toLocaleString()} />
         <MetricCard icon={Layers3} label="Category" value={cabinetCategories.length.toLocaleString()} />
-        <MetricCard icon={CheckCircle2} label="规则覆盖" value="100%" accent="green" />
-        <MetricCard icon={Ruler} label="含 D 尺寸" value={recordsWithDepth.toLocaleString()} />
       </div>
 
       <div className="bg-card rounded-xl shadow-apple border border-border overflow-hidden">
@@ -186,20 +194,49 @@ export default function StandardCabinetsPage() {
             </thead>
             <tbody className="divide-y divide-border">
               {visibleRecords.map((record) => (
-                <tr key={record.abcItem} className="hover:bg-black/[0.015]">
-                  <td className="py-3 px-4 font-mono text-[13px] font-semibold whitespace-nowrap">
-                    {record.abcItem}
-                  </td>
-                  <td className="py-3 px-4 text-[13px] text-foreground/80">{record.category}</td>
-                  <td className="py-3 px-4 text-[13px] text-right">{formatInches(record.width)}</td>
-                  <td className="py-3 px-4 text-[13px] text-right">{formatInches(record.height)}</td>
-                  <td className="py-3 px-4 text-[13px] text-right">{formatInches(record.depth)}</td>
-                  <td className="py-3 px-4 text-[13px] text-right">{formatMoney(record.listPrice)}</td>
-                  <td className="py-3 px-4 text-[13px] text-right">{formatQty(record.doorQty)}</td>
-                  <td className="py-3 px-4 text-[13px] text-right">{formatQty(record.drawerQty)}</td>
-                  <td className="py-3 px-4 text-[13px] text-right">{shelvesTotal(record)}</td>
-                  <td className="py-3 px-4 text-[13px] text-right">{formatQty(record.hingeQty)}</td>
-                </tr>
+                <Fragment key={record.abcItem}>
+                  <tr 
+                    onClick={() => setExpandedItem(expandedItem === record.abcItem ? null : record.abcItem)}
+                    className="hover:bg-black/[0.02] cursor-pointer transition-colors"
+                  >
+                    <td className="py-3 px-4 font-mono text-[13px] font-semibold whitespace-nowrap">
+                      {record.abcItem}
+                    </td>
+                    <td className="py-3 px-4 text-[13px] text-foreground/80">{record.category}</td>
+                    <td className="py-3 px-4 text-[13px] text-right">{formatInches(record.width)}</td>
+                    <td className="py-3 px-4 text-[13px] text-right">{formatInches(record.height)}</td>
+                    <td className="py-3 px-4 text-[13px] text-right">{formatInches(record.depth)}</td>
+                    <td className="py-3 px-4 text-[13px] text-right">{formatMoney(record.listPrice)}</td>
+                    <td className="py-3 px-4 text-[13px] text-right">{formatQty(record.doorQty)}</td>
+                    <td className="py-3 px-4 text-[13px] text-right">{formatQty(record.drawerQty)}</td>
+                    <td className="py-3 px-4 text-[13px] text-right">{shelvesTotal(record)}</td>
+                    <td className="py-3 px-4 text-[13px] text-right">{formatQty(record.hingeQty)}</td>
+                  </tr>
+                  {expandedItem === record.abcItem && (
+                    <tr className="bg-black/[0.01]">
+                      <td colSpan={10} className="px-4 py-6 border-b border-border shadow-inner">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-y-6 gap-x-4">
+                          <DetailItem label="Adj. Shelf Qty" value={formatQty(record.adjustableShelfQty)} />
+                          <DetailItem label="Fixed Shelf Qty" value={formatQty(record.fixedShelfQty)} />
+                          <DetailItem label="Door Plank Area" value={formatNumber(record.doorPlankArea)} />
+                          <DetailItem label="Left Panel Area" value={formatNumber(record.leftPanelArea)} />
+                          <DetailItem label="Right Panel Area" value={formatNumber(record.rightPanelArea)} />
+                          <DetailItem label="Top Panel Area" value={formatNumber(record.topPanelArea)} />
+                          <DetailItem label="Base Panel Area" value={formatNumber(record.basePanelArea)} />
+                          <DetailItem label="Backboard Area" value={formatNumber(record.backboardArea)} />
+                          <DetailItem label="Laminate Area" value={formatNumber(record.laminateArea)} />
+                          <DetailItem label="Box Face Area" value={formatNumber(record.boxFaceArea)} />
+                          <DetailItem label="Door Edge Banding" value={formatNumber(record.doorEdgeBandingLength)} />
+                          <DetailItem label="Cabinet Edge Banding" value={formatNumber(record.cabinetEdgeBandingLength)} />
+                          <DetailItem label="Straight Blind Hinge" value={formatQty(record.straightBlindHinge)} />
+                          <DetailItem label="155° Hinge" value={formatQty(record.lazySusan155Hinge)} />
+                          <DetailItem label="Pie Cut Hinge" value={formatQty(record.lazySusanPieCut)} />
+                          <DetailItem label="Pentagon Hinge" value={formatQty(record.pentagonHinge)} />
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
 
               {visibleRecords.length === 0 && (
@@ -213,9 +250,41 @@ export default function StandardCabinetsPage() {
           </table>
         </div>
 
-        {filteredRecords.length > visibleRowLimit && (
-          <div className="px-5 py-4 border-t border-border text-[13px] text-apple-gray">
-            Showing first {visibleRowLimit.toLocaleString()} of {filteredRecords.length.toLocaleString()} matching rows.
+        {totalPages > 1 && (
+          <div className="px-5 py-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4">
+            <span className="text-[13px] text-apple-gray">
+              Showing {startIndex + 1} to {Math.min(startIndex + rowsPerPage, filteredRecords.length)} of {filteredRecords.length.toLocaleString()} entries
+            </span>
+            <div className="flex flex-wrap items-center gap-1">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 h-8 rounded-lg text-[13px] font-medium flex items-center justify-center transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed bg-black/[0.04] hover:bg-black/[0.08] text-foreground"
+              >
+                Prev
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                <button
+                  key={page}
+                  onClick={() => setCurrentPage(page)}
+                  className={clsx(
+                    "w-8 h-8 rounded-lg text-[13px] font-medium flex items-center justify-center transition-colors cursor-pointer",
+                    currentPage === page
+                      ? "bg-apple-blue text-white"
+                      : "bg-black/[0.04] hover:bg-black/[0.08] text-foreground"
+                  )}
+                >
+                  {page}
+                </button>
+              ))}
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 h-8 rounded-lg text-[13px] font-medium flex items-center justify-center transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed bg-black/[0.04] hover:bg-black/[0.08] text-foreground"
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -279,5 +348,14 @@ function TableHeader({
     >
       {children}
     </th>
+  );
+}
+
+function DetailItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-[11px] text-apple-gray font-semibold uppercase">{label}</span>
+      <span className="text-[13px] text-foreground font-medium mt-0.5">{value}</span>
+    </div>
   );
 }
