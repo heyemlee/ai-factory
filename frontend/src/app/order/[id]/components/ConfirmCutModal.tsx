@@ -33,6 +33,7 @@ export function ConfirmCutModal({ order, onConfirmed, onClose }: {
   const [error, setError] = useState<string | null>(null);
   const [stockByKey, setStockByKey] = useState<Record<string, number | null>>({});
   const [stockManagedColors, setStockManagedColors] = useState<Set<string>>(new Set());
+  const [nonRecoverableBTs, setNonRecoverableBTs] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let alive = true;
@@ -50,6 +51,15 @@ export function ConfirmCutModal({ order, onConfirmed, onClose }: {
         }
       } else if (alive) {
         setStockManagedColors(new Set());
+      }
+      // Load non-recoverable board types from board_specs (e.g. T1-101.6x2438.4)
+      const { data: nonRecRows } = await supabase
+        .from("board_specs")
+        .select("board_type")
+        .eq("is_active", true)
+        .eq("is_recoverable", false);
+      if (alive && nonRecRows) {
+        setNonRecoverableBTs(new Set(nonRecRows.map((r) => r.board_type as string)));
       }
       await Promise.all(boardUsage.map(async (u) => {
         const { data } = await supabase
@@ -81,8 +91,10 @@ export function ConfirmCutModal({ order, onConfirmed, onClose }: {
 
   const byOrderLabel = locale === "zh" ? "按单处理" : locale === "es" ? "Por pedido" : "By Order";
   const managedRecoveredCounts = useMemo(() => {
-    return recoveredCounts.filter((row) => stockManagedColors.has(row.color || DEFAULT_BOX_COLOR));
-  }, [recoveredCounts, stockManagedColors]);
+    return recoveredCounts
+      .filter((row) => stockManagedColors.has(row.color || DEFAULT_BOX_COLOR))
+      .filter((row) => !nonRecoverableBTs.has(row.board_type));
+  }, [recoveredCounts, stockManagedColors, nonRecoverableBTs]);
 
   const isT0StartOrder = order.cut_mode === "t0_start"
     || order.cut_result_json?.cut_mode === "t0_start"

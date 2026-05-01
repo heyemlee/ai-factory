@@ -12,6 +12,23 @@ export function clamp(n: number, lo = 0, hi = 100): number {
   return Math.min(hi, Math.max(lo, n));
 }
 
+/**
+ * Effective rip width for a strip — the saw's actual rip setting after
+ * accounting for edge-banding allowance. Falls back to strip_width if the
+ * board doesn't carry rip_width or per-part cut_width data.
+ */
+export function getRipWidth(board: Board): number {
+  const explicit = safeNum(board.rip_width);
+  if (explicit > 0) return explicit;
+  if (Array.isArray(board.parts) && board.parts.length > 0) {
+    const widths = board.parts
+      .map((p) => safeNum(p.cut_width) || safeNum(p.Width))
+      .filter((w) => w > 0);
+    if (widths.length > 0) return Math.max(...widths);
+  }
+  return safeNum(board.strip_width);
+}
+
 /** Parse "1219.2×2438.4" / "1219x2438" from board.board or board.board_size. */
 export function parseBoardDims(board: { board?: string; board_size?: string }):
   { width: number; height: number; ok: boolean } {

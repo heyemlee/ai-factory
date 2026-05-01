@@ -3,7 +3,7 @@ import React, { useState, useMemo } from "react";
 import { useLanguage } from "@/lib/i18n";
 import type { Board, SizeColor } from "./types";
 import { SIZE_COLORS } from "./constants";
-import { parseBoardDims, safeNum, clamp } from "./utils";
+import { parseBoardDims, safeNum, clamp, getRipWidth } from "./utils";
 
 export function BoardTile({ board, index, color, stackInfo, onClick, disableHover = false, overrideUtilNum, hideWidthWaste = false, isRotated = false, hideUtilization = false, showDimensions = false, hideStackBadge = false, hidePreviousStripShade = false }: {
   board: Board;
@@ -28,8 +28,9 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
     const parsed = parseBoardDims(board);
     let parsedWidth = parsed.width;
     const parsedHeight = parsed.height;
-    if (hideWidthWaste && safeNum(board.strip_width) > 0) {
-      parsedWidth = safeNum(board.strip_width);
+    if (hideWidthWaste) {
+      const ripW = getRipWidth(board);
+      if (ripW > 0) parsedWidth = ripW;
     }
     return { width: parsedWidth, height: parsedHeight, ok: parsed.ok };
   }, [board, hideWidthWaste]);
@@ -49,7 +50,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
     const laid: Array<typeof board.parts[number] & { top: number; left: number; width: number; height: number; idx: number; _dropped?: boolean }> = [];
     board.parts.forEach((p, idx) => {
       const pH = safeNum(p.cut_length) || safeNum(p.Height);
-      const pW = safeNum(p.Width);
+      const pW = safeNum(p.cut_width) || safeNum(p.Width);
       if (pH <= 0 || pW <= 0) {
         console.warn("[BoardTile] dropping part with invalid dims", { board_id: board.board_id, part_id: p.part_id, Height: p.Height, Width: p.Width });
         laid.push({ ...p, top: 0, left: 0, width: 0, height: 0, idx, _dropped: true });

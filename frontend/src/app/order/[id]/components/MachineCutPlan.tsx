@@ -5,7 +5,7 @@ import type { Board, EngineeringGroup, CutResult, IntegrityIssue } from "./types
 import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
 import { useLanguage } from "@/lib/i18n";
 import { SIZE_COLORS } from "./constants";
-import { boardFingerprint, nominalStockWidthForBoard, parseBoardDims } from "./utils";
+import { boardFingerprint, getRipWidth, nominalStockWidthForBoard, parseBoardDims } from "./utils";
 import { BoardTile } from "./BoardTile";
 import { T0SheetCard } from "./T0SheetCard";
 import { MachineCutErrorBoundary } from "./MachineCutErrorBoundary";
@@ -399,7 +399,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
           key,
           color,
           boardType,
-          boardWidth: width,
+          boardWidth: getRipWidth(sample) || width,
           totalLength: parseTotalLength(sample.board_size),
           trimSetting: 5,
           patterns,
@@ -515,7 +515,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         engNo: idx + 1,
         color,
         boardType,
-        boardWidth: width,
+        boardWidth: getRipWidth(sample) || width,
         totalLength,
         trimSetting,
         sourceBoardCount: grpBoards.length,
@@ -532,32 +532,51 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
   const displayGroups = useMemo(() => {
     const usedT0Sheets = new Set<string>();
     const groups: Array<EngineeringGroup & { displayBoards: Board[]; displayT0Sheets: MachineT0Sheet[] }> = [];
+    const t0SheetOrder = new Map(t0Sheets.map((sheet, idx) => [sheet.sheet_id, idx]));
 
     for (const grp of engineeringGroups) {
-      const allSheetIds = Array.from(new Set(grp.boards.map((b) => b.t0_sheet_id).filter(Boolean) as string[]));
-      // Only keep sheet IDs that haven't been claimed by a previous group
-      const newSheetIds = allSheetIds.filter((sheetId) => !usedT0Sheets.has(sheetId));
+      const allSheetIds = Array.from(new Set(grp.boards.map((b) => b.t0_sheet_id).filter(Boolean) as string[]))
+        .sort((a, b) => (t0SheetOrder.get(a) ?? Number.MAX_SAFE_INTEGER) - (t0SheetOrder.get(b) ?? Number.MAX_SAFE_INTEGER));
+      const nonT0Boards = grp.boards.filter((board) => !board.t0_sheet_id);
 
-      // If ALL sheets were already claimed, skip this group
-      if (allSheetIds.length > 0 && newSheetIds.length === 0) {
+      if (allSheetIds.length === 0) {
+        groups.push({ ...grp, displayBoards: grp.boards, displayT0Sheets: [] });
         continue;
       }
 
-      const displayT0Sheets = newSheetIds.map((sheetId) => t0SheetById[sheetId]).filter(Boolean);
-      const displayBoards = newSheetIds.length > 0
-        ? Array.from(new Map(
-            newSheetIds
-              .flatMap((sheetId) => t0BoardStripsBySheetId[sheetId] || [])
-              .map(({ board }) => [board.board_id, board])
-          ).values())
-        : grp.boards;
+      for (const sheetId of allSheetIds) {
+        if (usedT0Sheets.has(sheetId)) continue;
+        const displayBoards = Array.from(new Map(
+          (t0BoardStripsBySheetId[sheetId] || []).map(({ board }) => [board.board_id, board])
+        ).values());
+        if (displayBoards.length === 0) continue;
 
-      for (const sheetId of newSheetIds) usedT0Sheets.add(sheetId);
-      groups.push({ ...grp, displayBoards, displayT0Sheets });
+        const sheet = t0SheetById[sheetId];
+        usedT0Sheets.add(sheetId);
+        groups.push({
+          ...grp,
+          key: `${grp.key}::${sheetId}`,
+          sourceBoardCount: displayBoards.length,
+          boards: displayBoards,
+          displayBoards,
+          displayT0Sheets: sheet ? [sheet] : [],
+        });
+      }
+
+      if (nonT0Boards.length > 0) {
+        groups.push({
+          ...grp,
+          key: `${grp.key}::stock`,
+          sourceBoardCount: nonT0Boards.length,
+          boards: nonT0Boards,
+          displayBoards: nonT0Boards,
+          displayT0Sheets: [],
+        });
+      }
     }
 
     return groups.map((grp, idx) => ({ ...grp, engNo: idx + 1 }));
-  }, [engineeringGroups, t0BoardStripsBySheetId, t0SheetById]);
+  }, [engineeringGroups, t0BoardStripsBySheetId, t0SheetById, t0Sheets]);
 
   /* ── Build a dedicated print window: clone actual DOM for pixel-perfect color output ── */
   const handlePrint = () => {
@@ -893,7 +912,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                     const ripRows = [
                       ...sheetStrips.map(({ board }, stripIdx) => ({
                         key: board.board_id || `strip-${stripIdx}`,
-                        width: board.strip_width || board.actual_strip_width || 0,
+                        width: getRipWidth(board) || board.actual_strip_width || 0,
                         pieces: 1,
                       })),
                       ...recoveredRows,

@@ -7,6 +7,7 @@ const translations = {
   en: {
     "nav.dashboard": "Dashboard",
     "nav.orders": "Orders",
+    "nav.standardCabinets": "Standard Cabinets",
     "nav.inventory": "Inventory",
     "nav.colors": "Box Colors",
     "nav.config": "Configuration",
@@ -191,6 +192,7 @@ const translations = {
   zh: {
     "nav.dashboard": "仪表盘",
     "nav.orders": "订单管理",
+    "nav.standardCabinets": "标准柜数据库",
     "nav.inventory": "库存管理",
     "nav.colors": "箱体颜色",
     "nav.config": "配置",
@@ -375,6 +377,7 @@ const translations = {
   es: {
     "nav.dashboard": "Panel",
     "nav.orders": "Pedidos",
+    "nav.standardCabinets": "Gabinetes estándar",
     "nav.inventory": "Inventario",
     "nav.colors": "Colores",
     "nav.config": "Configuración",

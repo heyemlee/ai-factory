@@ -35,6 +35,10 @@ GROOVE_DEPTH = 3.0           # 通槽深度 (each side)
 SHELF_INSET = 20.0           # 活动层板前方内缩
 STRETCHER_DEPTH = 101.6      # 拉条深度 (4")
 INCHES_TO_MM = 25.4
+# Edge-banding allowance: the saw cuts the piece undersized by this much on
+# each banded edge so the finished cabinet (board + 1mm PVC banding) lands
+# at the nominal exterior dimension.
+EDGE_BAND_THICKNESS = 1.0    # 封边厚度
 
 # ─── Box Color (driven by Supabase box_colors table) ────
 DEFAULT_BOX_COLOR = "WhiteBirch"
@@ -178,64 +182,79 @@ def calculate_panels(
     g = GROOVE_DEPTH
 
     parts = []
+    eb = EDGE_BAND_THICKNESS
 
-    # ── Side Panels (左右侧板) ── always 2
+    # ── Side Panels (左右侧板) ── always 2; front edge banded
     parts.append({
         "component": "Side Panel",
         "length": r1(H),
         "width": r1(D),
+        "cut_length": r1(H),
+        "cut_width": r1(D - eb),
         "qty": 2,
     })
 
-    # ── Top Panel (顶板) ── wall & tall only
+    # ── Top Panel (顶板) ── wall & tall only; front edge banded
     if cab_type in ("wall", "tall"):
         parts.append({
             "component": "Top Panel",
             "length": r1(W - t * 2),           # W - 36
             "width": r1(D - t),                 # D - 18
+            "cut_length": r1(W - t * 2),
+            "cut_width": r1(D - t - eb),
             "qty": 1,
         })
 
-    # ── Bottom Panel (底板) ── all types
+    # ── Bottom Panel (底板) ── all types; front edge banded
     parts.append({
         "component": "Bottom Panel",
         "length": r1(W - t * 2),               # W - 36
         "width": r1(D - t),                     # D - 18
+        "cut_length": r1(W - t * 2),
+        "cut_width": r1(D - t - eb),
         "qty": 1,
     })
 
-    # ── Back Panel (背板) ── all types, +6mm for grooves
+    # ── Back Panel (背板) ── all types, +6mm for grooves; no banding
     parts.append({
         "component": "Back Panel",
         "length": r1(H),
         "width": r1(W - t * 2 + g * 2),        # W - 30
+        "cut_length": r1(H),
+        "cut_width": r1(W - t * 2 + g * 2),
         "qty": 1,
     })
 
-    # ── Stretcher Rails (拉条) ── base only, × 2
+    # ── Stretcher Rails (拉条) ── base only, × 2; no banding
     if cab_type == "base":
         parts.append({
             "component": "Stretcher",
             "length": r1(W - t * 2),           # W - 36
             "width": STRETCHER_DEPTH,            # 101.6
+            "cut_length": r1(W - t * 2),
+            "cut_width": STRETCHER_DEPTH,
             "qty": 2,
         })
 
-    # ── Adjustable Shelves (活动层板) ── with 20mm inset
+    # ── Adjustable Shelves (活动层板) ── 20mm inset; all 4 edges banded
     if adj_shelf > 0:
         parts.append({
             "component": "Adjustable Shelf",
             "length": r1(W - t * 2),           # W - 36
             "width": r1(D - t - SHELF_INSET),   # D - 38
+            "cut_length": r1(W - t * 2 - 2 * eb),
+            "cut_width": r1(D - t - SHELF_INSET - 2 * eb),
             "qty": adj_shelf,
         })
 
-    # ── Fixed Shelves (固定层板) ── no inset
+    # ── Fixed Shelves (固定层板) ── no inset; front edge banded
     if fixed_shelf > 0:
         parts.append({
             "component": "Fixed Shelf",
             "length": r1(W - t * 2),           # W - 36
             "width": r1(D - t),                 # D - 18
+            "cut_length": r1(W - t * 2),
+            "cut_width": r1(D - t - eb),
             "qty": fixed_shelf,
         })
 
@@ -301,31 +320,30 @@ def process_order(order_path: str, output_path: str = None, include_skipped_item
     all_parts = []
     skipped_items: list[dict] = []
 
-    # Pre-scan: count how many times each ABC Item code appears
-    # so we only add a disambiguating suffix when there are duplicates.
+    def _read_qty(row) -> int:
+        try:
+            q = int(row.get(col_map.get("Qty", ""), 1) or 1)
+        except (ValueError, TypeError):
+            q = 1
+        return max(q, 1)
+
+    # Pre-scan: count total cabinet INSTANCES per ABC Item code (sum of Qty),
+    # so we only add a disambiguating suffix when more than one instance exists.
     item_counts: dict[str, int] = {}
     for _, row in df.iterrows():
         item_val = str(row.get(col_map.get("Item", ""), "")).strip()
-        if item_val:
-            item_counts[item_val] = item_counts.get(item_val, 0) + 1
-    # Running counters for duplicate items
+        if not item_val:
+            continue
+        item_counts[item_val] = item_counts.get(item_val, 0) + _read_qty(row)
+    # Running counters: increment per cabinet instance, not per row
     item_seen: dict[str, int] = {}
 
     for idx, row in df.iterrows():
-        # ── Cabinet ID ──
+        # ── Cabinet identification (per-row constants) ──
         cab_no = row.get(col_map.get("CabNo", ""), idx + 1)
         item = str(row.get(col_map.get("Item", ""), "")).strip()
-        # Use ABC Item code directly (e.g. "W2745T").
-        # When the same item appears multiple times, append a counter
-        # suffix to ensure uniqueness (e.g. "W3045T", "W3045T(2)").
-        if item:
-            item_seen[item] = item_seen.get(item, 0) + 1
-            if item_counts.get(item, 1) > 1:
-                cab_id = f"{item}({item_seen[item]})" if item_seen[item] > 1 else item
-            else:
-                cab_id = item
-        else:
-            cab_id = f"C{cab_no}"
+        # Used only for skipped-row reporting before the per-instance loop kicks in
+        report_cab_id = item if item else f"C{cab_no}"
 
         # ── Cabinet Type ──
         if has_type_col:
@@ -335,7 +353,7 @@ def process_order(order_path: str, output_path: str = None, include_skipped_item
 
         if cab_type not in VALID_CABINET_TYPES:
             skipped_items.append({
-                "cab_id": cab_id,
+                "cab_id": report_cab_id,
                 "item": item,
                 "type": cab_type or "(blank)",
                 "row": int(idx) + 2,
@@ -347,7 +365,7 @@ def process_order(order_path: str, output_path: str = None, include_skipped_item
         color_key, is_default = normalize_box_color(raw_color, color_alias_map)
         if color_key not in set(color_alias_map.values()):
             skipped_items.append({
-                "cab_id": cab_id,
+                "cab_id": report_cab_id,
                 "item": item,
                 "type": cab_type,
                 "row": int(idx) + 2,
@@ -355,7 +373,7 @@ def process_order(order_path: str, output_path: str = None, include_skipped_item
             })
             continue
         if is_default and has_color_col:
-            print(f"  ℹ️  {cab_id}: Box Color 空 → 使用默认 {DEFAULT_BOX_COLOR}")
+            print(f"  ℹ️  {report_cab_id}: Box Color 空 → 使用默认 {DEFAULT_BOX_COLOR}")
 
         # ── Dimensions (inches → mm) ──
         W_in = parse_imperial(row.get(col_map.get("W", ""), 0))
@@ -374,7 +392,7 @@ def process_order(order_path: str, output_path: str = None, include_skipped_item
                 D_mm = BASE_DEFAULT_DEPTH      # 609.6mm (24")
             elif cab_type == "tall":
                 D_mm = TALL_DEFAULT_DEPTH      # 609.6mm (24")
-            print(f"  ℹ️  {cab_id}: D=0 → 使用默认深度 {D_mm}mm ({cab_type})")
+            print(f"  ℹ️  {report_cab_id}: D=0 → 使用默认深度 {D_mm}mm ({cab_type})")
 
         if H_mm <= 0:
             if cab_type == "base":
@@ -382,27 +400,35 @@ def process_order(order_path: str, output_path: str = None, include_skipped_item
             elif cab_type == "tall":
                 H_mm = TALL_DEFAULT_HEIGHT     # 2387.6mm (94")
             if H_mm > 0:
-                print(f"  ℹ️  {cab_id}: H=0 → 使用默认高度 {H_mm}mm ({cab_type})")
+                print(f"  ℹ️  {report_cab_id}: H=0 → 使用默认高度 {H_mm}mm ({cab_type})")
 
         # ── Shelf counts ──
-        qty = int(row.get(col_map.get("Qty", ""), 1))
+        qty = _read_qty(row)
         adj_shelf = int(row.get(col_map.get("AdjShelf", ""), 0))
         fixed_shelf = int(row.get(col_map.get("FixedShelf", ""), 0))
 
-        # ── Calculate panels for this cabinet ──
-        panels = calculate_panels(
-            width_mm=W_mm,
-            depth_mm=D_mm,
-            height_mm=H_mm,
-            cab_type=cab_type,
-            adj_shelf=adj_shelf,
-            fixed_shelf=fixed_shelf,
-            cab_id=cab_id,
-            color=color_key,
-        )
+        # ── Per-instance: distinct cab_id + its own panel set ──
+        for q_idx in range(qty):
+            if item:
+                item_seen[item] = item_seen.get(item, 0) + 1
+                seen_idx = item_seen[item]
+                if item_counts.get(item, 1) > 1:
+                    inst_cab_id = f"{item}({seen_idx})" if seen_idx > 1 else item
+                else:
+                    inst_cab_id = item
+            else:
+                inst_cab_id = f"C{cab_no}({q_idx + 1})" if qty > 1 else f"C{cab_no}"
 
-        # Expand by cabinet Qty (e.g. if Qty=2, duplicate all panels)
-        for _ in range(qty):
+            panels = calculate_panels(
+                width_mm=W_mm,
+                depth_mm=D_mm,
+                height_mm=H_mm,
+                cab_type=cab_type,
+                adj_shelf=adj_shelf,
+                fixed_shelf=fixed_shelf,
+                cab_id=inst_cab_id,
+                color=color_key,
+            )
             all_parts.extend(panels)
 
     # ── Build output DataFrame ──
@@ -419,6 +445,8 @@ def process_order(order_path: str, output_path: str = None, include_skipped_item
                 "component": p["component"],
                 "Height": p["length"],    # Length direction (along board)
                 "Width": p["width"],      # Width direction
+                "cut_length": p.get("cut_length", p["length"]),
+                "cut_width": p.get("cut_width", p["width"]),
                 "qty": 1,
                 "color": p.get("color", DEFAULT_BOX_COLOR),
             }
@@ -435,6 +463,8 @@ def process_order(order_path: str, output_path: str = None, include_skipped_item
                 "component": p["component"],
                 "Height": p["length"],
                 "Width": p["width"],
+                "cut_length": p.get("cut_length", p["length"]),
+                "cut_width": p.get("cut_width", p["width"]),
             })
             part_counter += 1
 

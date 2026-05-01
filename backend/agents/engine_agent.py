@@ -56,6 +56,14 @@ COMMON_RECOVERY_WIDTHS = [
 ]
 
 
+def _cut_length(part: dict) -> float:
+    return float(part.get("cut_length") or part.get("Height") or 0)
+
+
+def _cut_width(part: dict) -> float:
+    return float(part.get("cut_width") or part.get("Width") or 0)
+
+
 def _format_width_for_code(width: float) -> str:
     text = f"{float(width):.1f}"
     return text[:-2] if text.endswith(".0") else text
@@ -88,6 +96,27 @@ def load_recovery_specs_from_supabase() -> list:
     except Exception as e:
         print(f"⚠️  Could not load board_specs recovery sizes ({e}); using fallback sizes")
     return [{"board_type": common_recovery_board_type(w), "width": w} for w in COMMON_RECOVERY_WIDTHS]
+
+
+def load_non_recoverable_board_types() -> set:
+    """Load T1 board_types explicitly marked is_recoverable=false in board_specs.
+
+    Used as a deny-list so that inventory rows for these spec entries are not
+    treated as recovery candidates by the T0 optimizer (e.g. 101.6mm stretchers
+    that the shop doesn't actually stock as a recoverable strip).
+    """
+    try:
+        from config.supabase_client import supabase
+        result = (
+            supabase.table("board_specs")
+            .select("board_type")
+            .eq("is_active", True)
+            .eq("is_recoverable", False)
+            .execute()
+        )
+        return {row["board_type"] for row in (result.data or []) if row.get("board_type")}
+    except Exception:
+        return set()
 
 
 # ─────────────────────────────────────────────
@@ -137,11 +166,27 @@ def load_parts(path: str):
         if "color" not in extra:
             extra["color"] = DEFAULT_BOX_COLOR
 
+        # Carry over banding cut dimensions if present (default to nominal Height/Width)
+        cl_val: float = h
+        cw_val: float = d
+        if "cut_length" in row and pd.notna(row["cut_length"]):
+            try:
+                cl_val = float(row["cut_length"])
+            except (ValueError, TypeError):
+                pass
+        if "cut_width" in row and pd.notna(row["cut_width"]):
+            try:
+                cw_val = float(row["cut_width"])
+            except (ValueError, TypeError):
+                pass
+
         for _ in range(q):
             parts.append({
                 "part_id": pid,
                 "Height": h,
                 "Width": d,
+                "cut_length": cl_val,
+                "cut_width": cw_val,
                 **extra,
             })
 
@@ -278,9 +323,9 @@ def deduct_inventory_supabase(board_results: list):
 # STEP 1: Build Strip Demand
 # ─────────────────────────────────────────────
 
-def build_strip_demand(parts: list, inventory: dict = None) -> list:
+def build_strip_demand(parts: list, inventory: dict = None, force_t0_start: bool = False) -> list:
     """
-    Convert all parts into strip demands based on part Width.
+    Convert all parts into strip demands based on actual saw-cut width.
 
     ⚠️ 扫边规则: 所有 Height=2438.4mm 的库存板材(t0,t1), 拿到手第一下
        扫边 5mm (Height方向, 单边, 只扫一次)
@@ -331,8 +376,18 @@ def build_strip_demand(parts: list, inventory: dict = None) -> list:
     rotated_count = 0
 
     for p in parts:
-        part_width = p["Width"]
-        part_height = p["Height"]
+        part_width = _cut_width(p)
+        part_height = _cut_length(p)
+
+        if force_t0_start:
+            t0_name = DEFAULT_BOARD_T0
+            if inventory:
+                for bt_inv in inventory.keys():
+                    if bt_inv.startswith("T0"):
+                        t0_name = bt_inv
+                        break
+            strip_groups[(round(part_width, 1), t0_name, True)].append(p)
+            continue
 
         # Strategy 1: exact match Width → inventory
         exact_w, exact_bt = find_exact_inv(part_width)
@@ -342,11 +397,18 @@ def build_strip_demand(parts: list, inventory: dict = None) -> list:
 
         # Strategy 2: rotation match — part Height matches inventory Width
         # After rotation: new Width = original Height, new Height = original Width
-        # Condition: original Width (new Height after rotation) must fit in usable length
+        # Condition: original cut Width (new cut Height after rotation) must fit in usable length
         rot_w, rot_bt = find_exact_inv(part_height)
         if rot_w is not None and part_width <= usable_length:
-            # Rotate: swap Height ↔ Width
-            rotated_part = {**p, "Height": part_width, "Width": part_height, "rotated": True}
+            # Rotate: swap Height ↔ Width (cut dims rotate with them)
+            rotated_part = {
+                **p,
+                "Height": p["Width"],
+                "Width": p["Height"],
+                "cut_length": part_width,
+                "cut_width": part_height,
+                "rotated": True,
+            }
             strip_groups[(rot_w, rot_bt, False)].append(rotated_part)
             rotated_count += 1
             continue
@@ -504,12 +566,12 @@ def apply_inventory(strip_demand: list, inventory: dict, force_t0_start: bool = 
 def _count_strips_needed(parts: list, strip_width: float) -> int:
     """Quick FFD to count how many strips are needed for these parts."""
     usable = BOARD_HEIGHT - TRIM_LOSS
-    sorted_parts = sorted(parts, key=lambda p: p["Height"], reverse=True)
+    sorted_parts = sorted(parts, key=_cut_length, reverse=True)
 
     strips = []  # each is remaining length
 
     for p in sorted_parts:
-        cl = p["Height"]
+        cl = _cut_length(p)
         placed = False
         for i, remaining in enumerate(strips):
             needed = cl + SAW_KERF
@@ -530,13 +592,13 @@ def _split_parts_for_strips(parts: list, strip_width: float, max_strips: int):
     Returns (parts_in_strips, parts_remaining).
     """
     usable = BOARD_HEIGHT - TRIM_LOSS
-    sorted_parts = sorted(parts, key=lambda p: p["Height"], reverse=True)
+    sorted_parts = sorted(parts, key=_cut_length, reverse=True)
 
     strips = []  # list of {remaining, parts}
     overflow = []
 
     for p in sorted_parts:
-        cl = p["Height"]
+        cl = _cut_length(p)
         placed = False
 
         for strip in strips:
@@ -582,7 +644,7 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
     This is used for BOTH inventory strips AND T0-cut strips.
 
     Args:
-      parts: list of part dicts with Height, Width
+      parts: list of part dicts with Height/Width and optional cut_length/cut_width
       strip_width: width of the strip (304.8 / 609.6 / custom)
       board_type: unified board label (T1-304.8-INV / T1-609.6-INV / T0-RAW)
       board_height: total length of the strip
@@ -591,12 +653,12 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
       list of strip results, each with parts and utilization
     """
     usable = board_height - TRIM_LOSS  # Height方向扫边: 2438.4 - 5 = 2433.4mm
-    sorted_parts = sorted(parts, key=lambda p: p["Height"], reverse=True)
+    sorted_parts = sorted(parts, key=_cut_length, reverse=True)
 
     open_strips = []  # each: {remaining, parts}
 
     for part in sorted_parts:
-        cl = part["Height"]
+        cl = _cut_length(part)
         needed = cl + SAW_KERF
 
         if needed > usable:
@@ -622,27 +684,36 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
     results = []
     prefix = id_prefix if id_prefix is not None else f"{board_type}-{color}"
     for idx, strip in enumerate(open_strips, 1):
-        parts_total_len = sum(p["Height"] for p in strip["parts"])
-        parts_total_area = sum(p["Height"] * p["Width"] for p in strip["parts"])
+        parts_total_len = sum(_cut_length(p) for p in strip["parts"])
+        parts_total_area = sum(_cut_length(p) * _cut_width(p) for p in strip["parts"])
         k = len(strip["parts"])
         kerf_total = (k - 1) * SAW_KERF if k > 1 else 0
         waste_area = (usable * strip_width) - parts_total_area - (kerf_total * strip_width)
 
         utilization = parts_total_area / strip_area if strip_area > 0 else 0
 
+        # Effective rip width: the saw's actual rip setting. For unbanded parts
+        # this equals strip_width; for banded parts it shrinks by the banding
+        # allowance so the rip leaves no internal scrap inside the strip.
+        rip_width = max(
+            (_cut_width(p) or float(strip_width) for p in strip["parts"]),
+            default=float(strip_width),
+        )
         results.append({
             "board_id": f"{prefix}-{idx:03d}",
             "board": board_type,
             "board_type": board_type,
             "board_size": f"{strip_width} × {board_height}",
             "strip_width": strip_width,
+            "rip_width": round(rip_width, 1),
             "color": color,
             "parts": [
                 {
                     "part_id": p["part_id"],
                     "Height": p["Height"],
                     "Width": p["Width"],
-                    "cut_length": p["Height"],
+                    "cut_length": p.get("cut_length", p["Height"]),
+                    "cut_width": p.get("cut_width", p["Width"]),
                     "component": p.get("component", ""),
                     "cab_id": p.get("cab_id", ""),
                     "cab_type": p.get("cab_type", ""),
@@ -688,7 +759,8 @@ def match_parts_to_boards(parts: list, boards: dict):
             if p_width <= board["Width"] and p_height <= board["Height"]:
                 matched[board["board_type"]].append({
                     **p,
-                    "cut_length": p_height,
+                    "cut_length": p.get("cut_length", p_height),
+                    "cut_width": p.get("cut_width", p_width),
                 })
                 placed = True
                 break
@@ -744,17 +816,23 @@ def ffd_bin_pack(parts_list: list, board_info: dict):
         waste_area = (usable * board_width) - parts_total_area - (kerf_total * board_width)
         utilization = parts_total_area / board_area if board_area > 0 else 0
 
+        rip_width = max(
+            (float(p.get("cut_width") or p.get("Width") or board_width) for p in board["parts"]),
+            default=float(board_width),
+        )
         results.append({
             "board_id": board_id,
             "board": board_type,
             "board_type": board_type,
             "board_size": f"{board_width} × {board_height}",
+            "rip_width": round(rip_width, 1),
             "parts": [
                 {
                     "part_id": p["part_id"],
                     "Height": p["Height"],
                     "Width": p["Width"],
                     "cut_length": p["cut_length"],
+                    "cut_width": p.get("cut_width", p["Width"]),
                     "component": p.get("component", ""),
                     "cab_id": p.get("cab_id", ""),
                     "cab_type": p.get("cab_type", ""),
@@ -988,7 +1066,7 @@ def _run_pipeline_for_color(parts: list, inventory: dict, color: str,
                 break
 
     # ─── STEP 1: Build strip demand ───
-    strip_demand = build_strip_demand(parts, inventory)
+    strip_demand = build_strip_demand(parts, inventory, force_t0_start=force_t0_start)
 
     # ─── STEP 2: Apply inventory ───
     inv_result = apply_inventory(strip_demand, inventory, force_t0_start=force_t0_start)
@@ -1030,8 +1108,13 @@ def _run_pipeline_for_color(parts: list, inventory: dict, color: str,
                 "board_type": spec["board_type"],
                 "width": float(spec["width"]),
             }
+        # Also consider inventory rows, but exclude board types explicitly
+        # marked as non-recoverable in board_specs (e.g. T1-101.6x2438.4).
+        non_recoverable_bts = load_non_recoverable_board_types()
         for bt, info in inventory.items():
             if bt.startswith("T0"):
+                continue
+            if bt in non_recoverable_bts:
                 continue
             if info.get("Height", 0) + 1e-3 < BOARD_HEIGHT:
                 continue
@@ -1189,8 +1272,12 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
         if fits_normal:
             valid_parts.append(p)
         elif fits_rotated:
+            cl_orig = p.get("cut_length", h)
+            cw_orig = p.get("cut_width", w)
             p["Height"] = w
             p["Width"] = h
+            p["cut_length"] = cw_orig
+            p["cut_width"] = cl_orig
             p["auto_swapped"] = True
             valid_parts.append(p)
         else:

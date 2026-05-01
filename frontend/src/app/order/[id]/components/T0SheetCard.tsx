@@ -3,7 +3,7 @@ import React, { useMemo } from "react";
 import { useLanguage } from "@/lib/i18n";
 import type { Board, SizeColor, PatternNumbering } from "./types";
 import { T0_STRIP_COLORS } from "./constants";
-import { clamp, safeNum } from "./utils";
+import { clamp, getRipWidth, safeNum } from "./utils";
 
 export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [], patternNumbering, compactHeader = false }: {
   sheetId: string;
@@ -96,8 +96,9 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
                 const stripColor = T0_STRIP_COLORS[stripIdx % T0_STRIP_COLORS.length];
                 const stripX = safeNum(board.t0_strip_position);
                 const stripW = safeNum(board.strip_width);
+                const ripW = getRipWidth(board) || stripW;
                 const stripLeftPct = clamp((stripX / T0_FULL_WIDTH) * 100, 0, 100);
-                const stripWidthPct = clamp((stripW / T0_FULL_WIDTH) * 100, 0, 100);
+                const stripWidthPct = clamp((ripW / T0_FULL_WIDTH) * 100, 0, 100);
                 let y = safeNum(board.trim_loss);
 
                 return (
@@ -107,7 +108,7 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
                     data-pattern-no={patternNumbering.byIndex[idx] ?? undefined}
                     onClick={() => onBoardClick(board)}
                     className="absolute top-0 h-full text-left overflow-hidden focus:outline-none focus:ring-2 focus:ring-apple-blue/40"
-                    title={`${board.board_id} · ${stripW}mm`}
+                    title={`${board.board_id} · ${ripW}mm`}
                     style={{
                       left: `${stripLeftPct}%`,
                       width: `${stripWidthPct}%`,
@@ -119,10 +120,10 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
                     <div className="absolute inset-x-0 top-0 h-full opacity-20" style={{ backgroundColor: stripColor.bg }} />
                     {board.parts.map((part, partIdx) => {
                       const partLen = safeNum(part.cut_length) || safeNum(part.Height);
-                      const partWidth = safeNum(part.Width);
+                      const partWidth = safeNum(part.cut_width) || safeNum(part.Width);
                       const topPct = clamp((y / T0_BOARD_HEIGHT) * 100, 0, 100);
                       const heightPct = clamp((partLen / T0_BOARD_HEIGHT) * 100, 0, 100);
-                      const partWidthPct = stripW > 0 ? clamp((partWidth / stripW) * 100, 0, 100) : 100;
+                      const partWidthPct = ripW > 0 ? clamp((partWidth / ripW) * 100, 0, 100) : 100;
                       y += partLen + safeNum(board.saw_kerf);
                       const showLabel = stripWidthPct > 8 && heightPct > 4;
                       return (
@@ -170,7 +171,7 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
                       />
                     )}
                     <div className="absolute left-1 top-1 rounded bg-white/80 px-1 py-0.5 text-[9px] font-bold shadow-sm" style={{ color: stripColor.text }}>
-                      {patternNumbering.byIndex[idx] ? `P${patternNumbering.byIndex[idx]}` : `${stripW}mm`}
+                      {patternNumbering.byIndex[idx] ? `P${patternNumbering.byIndex[idx]}` : `${ripW}mm`}
                     </div>
                   </button>
                 );
@@ -199,10 +200,11 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
           <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
             {strips.map(({ board, index: idx }, stripIdx) => {
           const stripColor = T0_STRIP_COLORS[stripIdx % T0_STRIP_COLORS.length];
+          const legendW = getRipWidth(board) || safeNum(board.strip_width);
           return (
                 <span key={`${board.board_id}-legend-${idx}`} className="inline-flex items-center gap-1 rounded bg-black/[0.03] px-1.5 py-0.5">
                   <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: stripColor.bg, border: `1px solid ${stripColor.border}` }} />
-                  P{patternNumbering.byIndex[idx] ?? stripIdx + 1} · {board.strip_width}mm
+                  P{patternNumbering.byIndex[idx] ?? stripIdx + 1} · {legendW}mm
                 </span>
           );
         })}

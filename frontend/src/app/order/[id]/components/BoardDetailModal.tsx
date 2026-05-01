@@ -36,7 +36,7 @@ export function BoardDetailModal({ board, color, onClose }: {
     let x = board.trim_loss;
     return board.parts.map((p, idx) => {
       const pH = p.cut_length || p.Height;
-      const pW = p.Width;
+      const pW = p.cut_width || p.Width;
       const left = (x / boardDims.height) * 100;
       const width = (pH / boardDims.height) * 100;
       const height = Math.min((pW / boardDims.width) * 100, 100);
@@ -101,8 +101,10 @@ export function BoardDetailModal({ board, color, onClose }: {
                   const partPxH = (p.height / 100) * modalVisualH;
                   const showText = partPxW > 35 && partPxH > 14;
                   const showDims = partPxW > 50 && partPxH > 26;
+                  const dispH = p.cut_length || p.Height;
+                  const dispW = p.cut_width || p.Width;
                   return (
-                    <div key={`${p.part_id}-${p.idx}-group`} title={`Part: ${p.part_id} | Size: ${p.rotated ? `${p.Width}×${p.Height} 🔄` : `${p.Height}×${p.Width}`} | Cab: ${p.cab_id}`}>
+                    <div key={`${p.part_id}-${p.idx}-group`} title={`Part: ${p.part_id} | Size: ${p.rotated ? `${dispW}×${dispH} 🔄` : `${dispH}×${dispW}`} | Cab: ${p.cab_id}`}>
                       <div className="absolute flex items-center justify-center overflow-hidden" style={{
                         left: `${lengthWasteWidth + p.left}%`, bottom: `0%`, width: `${p.width}%`, height: `${p.height}%`,
                         backgroundColor: color.bg,
@@ -112,7 +114,7 @@ export function BoardDetailModal({ board, color, onClose }: {
                         {showText && (
                           <div className="text-center leading-tight select-none px-0.5">
                             <span className="text-[10px] font-bold block truncate" style={{ color: color.text }}>{p.component || p.part_id}</span>
-                            {showDims && <span className="text-[9px] font-medium block truncate" style={{ color: color.text }}>{p.Height}×{p.Width}</span>}
+                            {showDims && <span className="text-[9px] font-medium block truncate" style={{ color: color.text }}>{dispH}×{dispW}</span>}
                           </div>
                         )}
                       </div>
@@ -170,8 +172,8 @@ export function BoardDetailModal({ board, color, onClose }: {
                     </td>
                     <td className="py-2 px-4 text-apple-gray">{p.component || "—"}</td>
                     <td className="py-2 px-4 text-apple-gray">{p.cab_id || "—"}</td>
-                    <td className="py-2 px-4 text-right font-mono">{p.rotated ? p.Width : p.Height}</td>
-                    <td className="py-2 px-4 text-right font-mono">{p.rotated ? p.Height : p.Width}</td>
+                    <td className="py-2 px-4 text-right font-mono">{p.rotated ? (p.cut_width || p.Width) : (p.cut_length || p.Height)}</td>
+                    <td className="py-2 px-4 text-right font-mono">{p.rotated ? (p.cut_length || p.Height) : (p.cut_width || p.Width)}</td>
                   </tr>
                 ))}
               </tbody>

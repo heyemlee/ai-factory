@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Package, History, FileText, BarChart3, Settings2 } from "lucide-react";
+import { LayoutDashboard, Package, History, FileText, BarChart3, Settings2, Database } from "lucide-react";
 import clsx from "clsx";
 import { useLanguage } from "@/lib/i18n";
 
@@ -12,6 +12,7 @@ export default function Sidebar() {
   const navItems = [
     { name: t("nav.dashboard"), href: "/", icon: LayoutDashboard },
     { name: t("nav.orders"), href: "/orders", icon: FileText },
+    { name: t("nav.standardCabinets"), href: "/standard-cabinets", icon: Database },
     { name: t("nav.inventory"), href: "/inventory", icon: Package },
     { name: t("nav.config"), href: "/config", icon: Settings2 },
     { name: t("nav.cutStats"), href: "/cut-stats", icon: BarChart3 },

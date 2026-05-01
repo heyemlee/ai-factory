@@ -70,8 +70,18 @@ export async function revertCut(order: RevertOrder) {
   }
 
   // 3. Decrement inventory for previously-added recovered scrap (symmetric to ConfirmCutModal)
+  // Filter out non-recoverable board types (e.g. T1-101.6x2438.4) that were never
+  // added to inventory in the first place (matching ConfirmCutModal's filter).
+  const { data: nonRecRows } = await supabase
+    .from("board_specs")
+    .select("board_type")
+    .eq("is_active", true)
+    .eq("is_recoverable", false);
+  const nonRecoverableBTs = new Set((nonRecRows || []).map((r) => r.board_type as string));
+
   for (const row of recoveredRows) {
     if (!stockManagedColors.has(row.color || DEFAULT_BOX_COLOR)) continue;
+    if (nonRecoverableBTs.has(row.board_type)) continue;
     await adjustInventoryStock(row.board_type, row.color, -row.count, { width: row.width, createIfMissing: true });
     await logInventoryTransaction("revert_recover", row.board_type, row.color, -row.count, {
       order_id: order.id,

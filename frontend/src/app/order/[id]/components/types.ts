@@ -5,6 +5,7 @@ export interface Part {
   Height: number;
   Width: number;
   cut_length: number;
+  cut_width?: number;
   component: string;
   cab_id: string;
   cab_type: string;
@@ -33,6 +34,7 @@ export interface Board {
   board_type: string;
   board_size: string;
   strip_width: number;
+  rip_width?: number;
   color?: string;
   parts: Part[];
   trim_loss: number;
