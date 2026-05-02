@@ -20,9 +20,11 @@
     "next-intl": "^4.9.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "read-excel-file": "^9.0.9",
     "recharts": "^3.8.1",
     "tailwind-merge": "^3.5.0",
-    "three": "^0.184.0"
+    "three": "^0.184.0",
+    "write-excel-file": "^4.0.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

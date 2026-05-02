@@ -154,7 +154,15 @@ export default function Orders() {
     const randomSuffix = Math.random().toString(36).substring(2, 6);
     const jobId = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}${String(now.getSeconds()).padStart(2,"0")}_${randomSuffix}`;
     const uniqueSuffix = Date.now();
-    const storagePath = `orders/${jobId}_${uniqueSuffix}_${file.name}`;
+    // Sanitize filename for storage path: keep only ASCII-safe chars to avoid
+    // encoding issues with Chinese / special-character filenames.
+    const ext = file.name.replace(/^.*\./, ".") || ".xlsx";
+    const safeName = file.name
+      .replace(/\.[^.]+$/, "")            // strip extension
+      .replace(/[^\w\s-]/g, "")           // drop non-ASCII / special chars
+      .replace(/\s+/g, "_")              // spaces → underscores
+      .substring(0, 60) || "order";       // length cap + fallback
+    const storagePath = `orders/${jobId}_${uniqueSuffix}_${safeName}${ext}`;
 
     // Upload to Supabase Storage (upsert to avoid conflicts)
     const { error: storageError } = await supabase.storage

@@ -6,17 +6,41 @@ import {
   AlertCircle,
   CheckCircle2,
   Database,
+  Download,
+  FileSpreadsheet,
   Layers3,
   Search,
+  Upload,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import clsx from "clsx";
+import readXlsxFile from "read-excel-file/browser";
+import writeXlsxFile from "write-excel-file/browser";
+import type { SheetData } from "write-excel-file/browser";
 import {
   CabinetCatalogRecord,
   cabinetCatalog,
   cabinetCategories,
   resolveCabinetDimensions,
 } from "@/lib/cabinet_catalog";
+
+type ResolvedOrderStatus = "ready" | "skip" | "error";
+
+interface ResolvedOrderRow {
+  rowNumber: number;
+  abcItem: string;
+  width: number | "";
+  height: number | "";
+  depth: number | "";
+  qty: number;
+  adjustableShelfQty: number;
+  fixedShelfQty: number;
+  boxColor: string;
+  type: string;
+  source: string;
+  status: ResolvedOrderStatus;
+  message: string;
+}
 
 function formatInches(value: number | null) {
   if (value === null) return "N/A";
@@ -45,12 +69,149 @@ function formatNumber(value: number | null) {
   return String(Number(value.toFixed(2)));
 }
 
+function normalizeHeader(value: string) {
+  return value.toLowerCase().replace(/[\s"'._-]+/g, "");
+}
+
+function readCell(row: Record<string, unknown>, aliases: string[]) {
+  const wanted = new Set(aliases.map(normalizeHeader));
+  for (const [key, value] of Object.entries(row)) {
+    if (wanted.has(normalizeHeader(key))) return value;
+  }
+  return "";
+}
+
+function asText(value: unknown) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
+function asQty(value: unknown) {
+  const parsed = Number(asText(value));
+  if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+  return Math.max(1, Math.floor(parsed));
+}
+
+function asOptionalNumber(value: unknown) {
+  const text = asText(value);
+  if (!text) return { hasValue: false, value: null };
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed)) return { hasValue: false, value: null };
+  return { hasValue: true, value: parsed };
+}
+
+function displayDimension(value: number | "") {
+  return value === "" ? "N/A" : value;
+}
+
+function resolveOrderRows(rows: Record<string, unknown>[]) {
+  return rows
+    .map((row, index): ResolvedOrderRow => {
+      const abcItem = asText(readCell(row, ["ABC Item", "ABCItem", "Item", "SKU"]));
+      const qty = asQty(readCell(row, ["Qty", "Quantity", "Count", "数量"]));
+      const boxColor = asText(readCell(row, ["Box Color", "BoxColor", "Color", "颜色", "箱体颜色"])) || "WhiteBirch";
+      const inputWidth = asOptionalNumber(readCell(row, ["W", "W\"", "Width", "宽", "宽度"]));
+      const inputHeight = asOptionalNumber(readCell(row, ["H", "H\"", "Height", "高", "高度"]));
+      const inputDepth = asOptionalNumber(readCell(row, ["D", "D\"", "Depth", "深", "深度"]));
+
+      if (!abcItem) {
+        return {
+          rowNumber: index + 2,
+          abcItem: "",
+          width: "",
+          height: "",
+          depth: "",
+          qty,
+          adjustableShelfQty: 0,
+          fixedShelfQty: 0,
+          boxColor,
+          type: "",
+          source: "",
+          status: "error",
+          message: "Missing ABC Item",
+        };
+      }
+
+      if (inputDepth.hasValue && inputDepth.value === 0) {
+        return {
+          rowNumber: index + 2,
+          abcItem,
+          width: inputWidth.value ?? "",
+          height: inputHeight.value ?? "",
+          depth: 0,
+          qty,
+          adjustableShelfQty: 0,
+          fixedShelfQty: 0,
+          boxColor,
+          type: "skip",
+          source: "input",
+          status: "skip",
+          message: "D=0",
+        };
+      }
+
+      const resolution = resolveCabinetDimensions(abcItem);
+      if (!resolution.resolved) {
+        return {
+          rowNumber: index + 2,
+          abcItem: resolution.normalizedItem || abcItem,
+          width: "",
+          height: "",
+          depth: "",
+          qty,
+          adjustableShelfQty: 0,
+          fixedShelfQty: 0,
+          boxColor,
+          type: "",
+          source: "",
+          status: "error",
+          message: resolution.error,
+        };
+      }
+
+      return {
+        rowNumber: index + 2,
+        abcItem: resolution.abcItem,
+        width: inputWidth.value ?? resolution.width,
+        height: inputHeight.value ?? resolution.height,
+        depth: inputDepth.value ?? resolution.depth ?? "",
+        qty,
+        adjustableShelfQty: resolution.record?.adjustableShelfQty ?? 0,
+        fixedShelfQty: resolution.record?.fixedShelfQty ?? 0,
+        boxColor,
+        type: resolution.type ?? "",
+        source: resolution.source,
+        status: resolution.type === "skip" ? "skip" : "ready",
+        message: resolution.type === "skip" ? "Non-cabinet item" : "",
+      };
+    })
+    .filter((row) => row.abcItem || row.status === "error");
+}
+
+function toExportRows(rows: ResolvedOrderRow[]) {
+  return rows.map((row) => ({
+    "ABC Item": row.abcItem,
+    W: row.width,
+    H: row.height,
+    D: row.depth,
+    Qty: row.qty,
+    "Adjustable Shelf Qty": row.adjustableShelfQty,
+    "Fixed Shelf Qty": row.fixedShelfQty,
+    "Box Color": row.boxColor,
+    Type: row.type,
+  }));
+}
+
+
 export default function StandardCabinetsPage() {
   const [query, setQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
   const rowsPerPage = 150;
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
+  const [resolvedRows, setResolvedRows] = useState<ResolvedOrderRow[]>([]);
+  const [uploadName, setUploadName] = useState("");
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const trimmedQuery = query.trim();
 
@@ -79,6 +240,109 @@ export default function StandardCabinetsPage() {
   const totalPages = Math.ceil(filteredRecords.length / rowsPerPage);
   const startIndex = (currentPage - 1) * rowsPerPage;
   const visibleRecords = filteredRecords.slice(startIndex, startIndex + rowsPerPage);
+  const uploadStats = useMemo(() => {
+    return resolvedRows.reduce(
+      (acc, row) => {
+        acc.total += 1;
+        acc[row.status] += 1;
+        return acc;
+      },
+      { total: 0, ready: 0, skip: 0, error: 0 }
+    );
+  }, [resolvedRows]);
+
+  const handleOrderUpload = async (file: File | null) => {
+    if (!file) return;
+    setUploadError(null);
+    setUploadName(file.name);
+
+    try {
+      const sheets = await readXlsxFile(file);
+      const sheetRows = sheets[0]?.data ?? [];
+      const [headerRow, ...bodyRows] = sheetRows;
+      if (!headerRow) throw new Error("No worksheet found");
+
+      const headers = headerRow.map((cell) => asText(cell));
+      const rows = bodyRows.reduce<Record<string, unknown>[]>((acc, row) => {
+        const record: Record<string, unknown> = {};
+        let hasValue = false;
+        headers.forEach((header, index) => {
+          if (!header) return;
+          const value = asText(row[index]);
+          record[header] = value;
+          if (value) hasValue = true;
+        });
+        if (hasValue) acc.push(record);
+        return acc;
+      }, []);
+
+      const resolved = resolveOrderRows(rows);
+      if (resolved.length === 0) throw new Error("No rows found");
+      setResolvedRows(resolved);
+    } catch (error) {
+      setResolvedRows([]);
+      setUploadError(error instanceof Error ? error.message : "Unable to read Excel file");
+    }
+  };
+
+  const handleExportResolvedRows = async () => {
+    if (resolvedRows.length === 0) return;
+    const baseName = uploadName.replace(/\.(xlsx|xls|csv)$/i, "") || "resolved_order";
+    const data: SheetData = [
+      [
+        "ABC Item",
+        "W",
+        "H",
+        "D",
+        "Qty",
+        "Adjustable Shelf Qty",
+        "Fixed Shelf Qty",
+        "Box Color",
+        "Type",
+      ],
+      ...toExportRows(resolvedRows).map((row) => [
+        row["ABC Item"],
+        row.W === "" ? null : row.W,
+        row.H === "" ? null : row.H,
+        row.D === "" ? null : row.D,
+        row.Qty,
+        row["Adjustable Shelf Qty"],
+        row["Fixed Shelf Qty"],
+        row["Box Color"],
+        row.Type,
+      ]),
+    ];
+    await writeXlsxFile(data, {
+      sheet: "Resolved Order",
+      columns: [
+        { width: 18 },
+        { width: 8 },
+        { width: 8 },
+        { width: 8 },
+        { width: 8 },
+        { width: 22 },
+        { width: 18 },
+        { width: 16 },
+        { width: 10 },
+      ],
+    }).toFile(`${baseName}_standard_cabinets.xlsx`);
+  };
+
+  const handleDownloadTemplate = async () => {
+    const data: SheetData = [
+      ["ABC Item", "Qty", "Box Color"],
+      ["FDB24R", 1, "WhiteBirch"],
+      ["W3030L", 2, "WhiteBirch"],
+    ];
+    await writeXlsxFile(data, {
+      sheet: "Order Input",
+      columns: [
+        { width: 18 },
+        { width: 8 },
+        { width: 16 },
+      ],
+    }).toFile("standard_cabinet_order_template.xlsx");
+  };
 
   return (
     <div className="w-full space-y-6 py-4">
@@ -92,6 +356,127 @@ export default function StandardCabinetsPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <MetricCard icon={Database} label="Database Items" value={cabinetCatalog.length.toLocaleString()} />
         <MetricCard icon={Layers3} label="Category" value={cabinetCategories.length.toLocaleString()} />
+      </div>
+
+      <div className="bg-card rounded-xl shadow-apple border border-border overflow-hidden">
+        <div className="p-5 border-b border-border flex flex-col xl:flex-row gap-4 xl:items-center xl:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-apple-blue/10 text-apple-blue flex items-center justify-center shrink-0">
+              <FileSpreadsheet size={19} />
+            </div>
+            <div>
+              <h2 className="text-[18px] font-semibold tracking-tight">Order Excel Resolver</h2>
+              <div className="text-[13px] text-apple-gray mt-0.5">
+                ABC Item, Qty, Box Color
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-2">
+            <button
+              type="button"
+              onClick={() => void handleDownloadTemplate()}
+              className="h-10 px-4 rounded-lg bg-black/[0.04] hover:bg-black/[0.08] text-[13px] font-medium flex items-center justify-center gap-2 transition-colors"
+            >
+              <Download size={16} />
+              Template
+            </button>
+            <label className="h-10 px-4 rounded-lg bg-apple-blue text-white text-[13px] font-medium flex items-center justify-center gap-2 cursor-pointer hover:bg-apple-blue/90 transition-colors">
+              <Upload size={16} />
+              Upload Excel
+              <input
+                type="file"
+                accept=".xlsx"
+                className="hidden"
+                onChange={(event) => {
+                  void handleOrderUpload(event.target.files?.[0] ?? null);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void handleExportResolvedRows()}
+              disabled={resolvedRows.length === 0 || uploadStats.error > 0}
+              className="h-10 px-4 rounded-lg bg-apple-green text-white text-[13px] font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              <Download size={16} />
+              Export Result
+            </button>
+          </div>
+        </div>
+
+        {(resolvedRows.length > 0 || uploadError) && (
+          <div className="p-5 space-y-4">
+            {uploadError && (
+              <div className="rounded-lg border border-apple-red/20 bg-apple-red/5 p-3 text-[13px] text-apple-red flex items-start gap-2">
+                <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                <span>{uploadError}</span>
+              </div>
+            )}
+
+            {resolvedRows.length > 0 && (
+              <>
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                  <div className="text-[13px] text-apple-gray">
+                    {uploadName || "Uploaded file"}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <StatPill label="Rows" value={uploadStats.total} />
+                    <StatPill label="Ready" value={uploadStats.ready} tone="green" />
+                    <StatPill label="Skip" value={uploadStats.skip} tone="gray" />
+                    <StatPill label="Error" value={uploadStats.error} tone="red" />
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto border border-border rounded-lg">
+                  <table className="w-full min-w-[1040px] text-left">
+                    <thead className="bg-black/[0.02] border-b border-border">
+                      <tr>
+                        <TableHeader>ABC Item</TableHeader>
+                        <TableHeader align="right">W</TableHeader>
+                        <TableHeader align="right">H</TableHeader>
+                        <TableHeader align="right">D</TableHeader>
+                        <TableHeader align="right">Qty</TableHeader>
+                        <TableHeader align="right">Adj Shelf</TableHeader>
+                        <TableHeader align="right">Fixed Shelf</TableHeader>
+                        <TableHeader>Box Color</TableHeader>
+                        <TableHeader>Type</TableHeader>
+                        <TableHeader>Status</TableHeader>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {resolvedRows.slice(0, 80).map((row) => (
+                        <tr key={`${row.rowNumber}-${row.abcItem}`} className="hover:bg-black/[0.015]">
+                          <td className="py-3 px-4 font-mono text-[13px] font-semibold whitespace-nowrap">
+                            {row.abcItem || `Row ${row.rowNumber}`}
+                          </td>
+                          <td className="py-3 px-4 text-[13px] text-right">{displayDimension(row.width)}</td>
+                          <td className="py-3 px-4 text-[13px] text-right">{displayDimension(row.height)}</td>
+                          <td className="py-3 px-4 text-[13px] text-right">{displayDimension(row.depth)}</td>
+                          <td className="py-3 px-4 text-[13px] text-right">{row.qty}</td>
+                          <td className="py-3 px-4 text-[13px] text-right">{row.adjustableShelfQty}</td>
+                          <td className="py-3 px-4 text-[13px] text-right">{row.fixedShelfQty}</td>
+                          <td className="py-3 px-4 text-[13px] whitespace-nowrap">{row.boxColor}</td>
+                          <td className="py-3 px-4 text-[13px] whitespace-nowrap">{row.type || "N/A"}</td>
+                          <td className="py-3 px-4 text-[13px]">
+                            <StatusBadge status={row.status} source={row.source} message={row.message} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {resolvedRows.length > 80 && (
+                  <div className="text-[13px] text-apple-gray">
+                    Showing first 80 of {resolvedRows.length.toLocaleString()} resolved rows.
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="bg-card rounded-xl shadow-apple border border-border overflow-hidden">
@@ -182,6 +567,7 @@ export default function StandardCabinetsPage() {
               <tr>
                 <TableHeader>ABC Item</TableHeader>
                 <TableHeader>Category</TableHeader>
+                <TableHeader>Type</TableHeader>
                 <TableHeader align="right">W</TableHeader>
                 <TableHeader align="right">H</TableHeader>
                 <TableHeader align="right">D</TableHeader>
@@ -202,6 +588,7 @@ export default function StandardCabinetsPage() {
                       {record.abcItem}
                     </td>
                     <td className="py-3 px-4 text-[13px] text-foreground/80">{record.category}</td>
+                    <td className="py-3 px-4 text-[13px] text-foreground/80 uppercase">{record.type}</td>
                     <td className="py-3 px-4 text-[13px] text-right">{formatInches(record.width)}</td>
                     <td className="py-3 px-4 text-[13px] text-right">{formatInches(record.height)}</td>
                     <td className="py-3 px-4 text-[13px] text-right">{formatInches(record.depth)}</td>
@@ -212,7 +599,7 @@ export default function StandardCabinetsPage() {
                   </tr>
                   {expandedItem === record.abcItem && (
                     <tr className="bg-black/[0.01]">
-                      <td colSpan={9} className="px-4 py-6 border-b border-border shadow-inner">
+                      <td colSpan={10} className="px-4 py-6 border-b border-border shadow-inner">
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-y-6 gap-x-4">
                           <DetailItem label="List Price" value={formatMoney(record.listPrice)} />
                           <DetailItem label="Adj. Shelf Qty" value={formatQty(record.adjustableShelfQty)} />
@@ -240,7 +627,7 @@ export default function StandardCabinetsPage() {
 
               {visibleRecords.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="py-12 px-4 text-center text-[14px] text-apple-gray">
+                  <td colSpan={10} className="py-12 px-4 text-center text-[14px] text-apple-gray">
                     No matching cabinet items.
                   </td>
                 </tr>
@@ -356,5 +743,54 @@ function DetailItem({ label, value }: { label: string; value: string }) {
       <span className="text-[11px] text-apple-gray font-semibold uppercase">{label}</span>
       <span className="text-[13px] text-foreground font-medium mt-0.5">{value}</span>
     </div>
+  );
+}
+
+function StatPill({
+  label,
+  value,
+  tone = "gray",
+}: {
+  label: string;
+  value: number;
+  tone?: "gray" | "green" | "red";
+}) {
+  return (
+    <div
+      className={clsx(
+        "h-8 px-3 rounded-lg text-[12px] font-semibold flex items-center gap-2",
+        tone === "green" && "bg-apple-green/10 text-apple-green",
+        tone === "red" && "bg-apple-red/10 text-apple-red",
+        tone === "gray" && "bg-black/[0.04] text-apple-gray"
+      )}
+    >
+      <span>{label}</span>
+      <span>{value.toLocaleString()}</span>
+    </div>
+  );
+}
+
+function StatusBadge({
+  status,
+  source,
+  message,
+}: {
+  status: ResolvedOrderStatus;
+  source: string;
+  message: string;
+}) {
+  const label = status === "ready" ? source || "ready" : status;
+  return (
+    <span
+      title={message || label}
+      className={clsx(
+        "inline-flex max-w-[180px] items-center rounded-md px-2 py-1 text-[11px] font-semibold uppercase",
+        status === "ready" && "bg-apple-green/10 text-apple-green",
+        status === "skip" && "bg-black/[0.05] text-apple-gray",
+        status === "error" && "bg-apple-red/10 text-apple-red"
+      )}
+    >
+      <span className="truncate">{message || label}</span>
+    </span>
   );
 }

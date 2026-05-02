@@ -52,10 +52,12 @@ def load_box_colors() -> dict:
     fallback = {
         "whitebirch": "WhiteBirch",
         "white birch plywood": "WhiteBirch",
+        "white birch plywood 18mm": "WhiteBirch",
         "白桦木胶合板": "WhiteBirch",
         "contrachapado de abedul blanco": "WhiteBirch",
         "whitemelamine": "WhiteMelamine",
         "white melamine plywood": "WhiteMelamine",
+        "white melamine plywood 18mm": "WhiteMelamine",
         "白色三聚氰胺板": "WhiteMelamine",
         "melamina blanca": "WhiteMelamine",
     }
@@ -81,13 +83,41 @@ def normalize_box_color(value, alias_map: dict) -> tuple[str, bool]:
 
     Returns (key, is_default). is_default=True means the cell was empty
     and we fell back to the default color.
+
+    Matching strategy (first wins):
+      1. Exact lowercase match against alias_map
+      2. Strip trailing thickness suffixes (e.g. "18mm", '3/4"') and retry
+      3. Substring match: check if any known alias is contained in the
+         input or vice-versa
     """
     s = "" if value is None else str(value).strip()
     if not s or s.lower() == "nan":
         return DEFAULT_BOX_COLOR, True
-    key = alias_map.get(s.lower())
+
+    s_lower = s.lower()
+
+    # 1. Direct match
+    key = alias_map.get(s_lower)
     if key:
         return key, False
+
+    # 2. Strip common trailing thickness / dimension suffixes and retry
+    #    e.g. "White melamine plywood 18mm" → "White melamine plywood"
+    cleaned = re.sub(
+        r'[\s,\-]*\d+(\.\d+)?\s*(mm|cm|"|in|inch(es)?)\s*$',
+        "", s, flags=re.IGNORECASE,
+    ).strip()
+    if cleaned and cleaned.lower() != s_lower:
+        key = alias_map.get(cleaned.lower())
+        if key:
+            return key, False
+
+    # 3. Substring fallback: any known alias wholly inside the input,
+    #    or the input wholly inside a known alias
+    for alias, k in alias_map.items():
+        if alias in s_lower or s_lower in alias:
+            return k, False
+
     return s, False  # caller validates against alias_map for unknowns
 
 # ─── Default dimensions (mm) ────────────────────────────

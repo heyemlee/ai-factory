@@ -1,8 +1,11 @@
 import rawCatalog from "@/lib/cabinet_catalog_data.json";
 
+export type CabinetCatalogType = "base" | "wall" | "tall" | "skip";
+
 export interface CabinetCatalogRecord {
   category: string;
   abcItem: string;
+  type: CabinetCatalogType;
   width: number;
   height: number;
   depth: number | null;
@@ -36,6 +39,7 @@ export interface CabinetDimensionResult {
   abcItem: string;
   normalizedItem: string;
   category: string;
+  type?: CabinetCatalogType;
   width: number;
   height: number;
   depth: number | null;
@@ -67,6 +71,7 @@ interface CabinetRule {
   prefix: string;
   mode: RuleMode;
   category: string;
+  type: CabinetCatalogType;
   defaultHeight?: number;
   defaultDepth?: number | null;
 }
@@ -95,43 +100,48 @@ const ruleDefinitions: CabinetRule[] = [
   ...makeRules(["TCDRB", "TCFDB", "FDRSB", "1DRSB", "1DRB", "2DRB", "3DRB", "2CDB", "1CDB", "FDB", "SPB", "4DB", "MB", "OSB", "BCB", "LSCB"], {
     mode: "widthOnly" as const,
     category: "Base cabinet",
+    type: "base",
     defaultHeight: 34.5,
     defaultDepth: 24,
   }),
-  makeRule({ prefix: "ESB", mode: "widthOnly", category: "End shelf base", defaultHeight: 34.5, defaultDepth: 12 }),
-  makeRule({ prefix: "CSB", mode: "cornerSink", category: "Corner sink base", defaultHeight: 34.5 }),
+  makeRule({ prefix: "ESB", mode: "widthOnly", category: "End shelf base", type: "base", defaultHeight: 34.5, defaultDepth: 12 }),
+  makeRule({ prefix: "CSB", mode: "cornerSink", category: "Corner sink base", type: "base", defaultHeight: 34.5 }),
   ...makeRules(["WBC", "WAC", "WOS", "WES", "WSL", "WBF", "WM", "W"], {
     mode: "widthHeight" as const,
     category: "Wall cabinet",
+    type: "wall",
     defaultDepth: 12,
   }),
-  makeRule({ prefix: "WDC", mode: "widthHeight", category: "Diagonal wall corner", defaultDepth: 24 }),
-  makeRule({ prefix: "RFW", mode: "widthHeight", category: "Refrigerator wall cabinet", defaultDepth: 24 }),
-  makeRule({ prefix: "SO", mode: "widthHeight", category: "Single oven tall cabinet", defaultDepth: 24 }),
-  makeRule({ prefix: "DO", mode: "widthHeight", category: "Double oven tall cabinet", defaultDepth: 24 }),
-  makeRule({ prefix: "TP", mode: "tallPantry", category: "Tall pantry / tall panel" }),
+  makeRule({ prefix: "WDC", mode: "widthHeight", category: "Diagonal wall corner", type: "wall", defaultDepth: 24 }),
+  makeRule({ prefix: "RFW", mode: "widthHeight", category: "Refrigerator wall cabinet", type: "wall", defaultDepth: 24 }),
+  makeRule({ prefix: "SO", mode: "widthHeight", category: "Single oven tall cabinet", type: "tall", defaultDepth: 24 }),
+  makeRule({ prefix: "DO", mode: "widthHeight", category: "Double oven tall cabinet", type: "tall", defaultDepth: 24 }),
+  makeRule({ prefix: "TP", mode: "tallPantry", category: "Tall pantry / tall panel", type: "tall" }),
   ...makeRules(["VFB", "VSB", "V2D", "V3D", "V4D", "V"], {
     mode: "widthOnly" as const,
     category: "Vanity cabinet",
+    type: "base",
     defaultHeight: 34.5,
     defaultDepth: 21,
   }),
   ...makeRules(["VF2D", "VF"], {
     mode: "widthOnly" as const,
     category: "Floating vanity",
+    type: "base",
     defaultHeight: 24,
     defaultDepth: 21,
   }),
-  makeRule({ prefix: "VKD", mode: "widthOnly", category: "Vanity knee drawer", defaultHeight: 6, defaultDepth: 21 }),
+  makeRule({ prefix: "VKD", mode: "widthOnly", category: "Vanity knee drawer", type: "base", defaultHeight: 6, defaultDepth: 21 }),
   ...makeRules(["DWP", "RFP", "BF", "BP", "TF", "WF", "WP", "VP"], {
     mode: "widthHeight" as const,
     category: "Panel / filler",
+    type: "skip",
     defaultDepth: null,
   }),
-  makeRule({ prefix: "IP", mode: "ipPanel", category: "Island panel", defaultDepth: null }),
-  makeRule({ prefix: "RT", mode: "rollOutTray", category: "Roll out tray", defaultDepth: 21 }),
-  makeRule({ prefix: "FLOATING-SHELF ", mode: "floatingShelf", category: "Floating shelf", defaultHeight: 2.25 }),
-  makeRule({ prefix: "TK", mode: "toeKick", category: "Toe kick", defaultDepth: null }),
+  makeRule({ prefix: "IP", mode: "ipPanel", category: "Island panel", type: "skip", defaultDepth: null }),
+  makeRule({ prefix: "RT", mode: "rollOutTray", category: "Roll out tray", type: "skip", defaultDepth: 21 }),
+  makeRule({ prefix: "FLOATING-SHELF ", mode: "floatingShelf", category: "Floating shelf", type: "skip", defaultHeight: 2.25 }),
+  makeRule({ prefix: "TK", mode: "toeKick", category: "Toe kick", type: "skip", defaultDepth: null }),
 ].sort((a, b) => b.prefix.length - a.prefix.length);
 
 function stripKnownSuffix(body: string) {
@@ -305,6 +315,7 @@ function inferCabinetDimensions(normalizedItem: string): CabinetDimensionResult 
     abcItem: normalizedItem,
     normalizedItem,
     category: rule.category,
+    type: rule.type,
     width,
     height,
     depth,
@@ -333,6 +344,7 @@ export function resolveCabinetDimensions(item: string): CabinetDimensionResoluti
       abcItem: record.abcItem,
       normalizedItem,
       category: record.category,
+      type: record.type,
       width: record.width,
       height: record.height,
       depth: record.depth,
