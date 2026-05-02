@@ -362,6 +362,30 @@ export default function OrderDetail() {
     }
   }, [cabinets, selectedCabinetId]);
 
+  const { t0SheetCount, t1StripCount, t2PartCount } = useMemo(() => {
+    let t0Sheets = 0;
+    if (selectedCutResult?.t0_plan?.t0_sheets) {
+      t0Sheets = selectedCutResult.t0_plan.t0_sheets.length;
+    } else {
+      // fallback for legacy: count unique t0_sheet_id + ungrouped
+      const sheetIds = new Set<string>();
+      let ungrouped = 0;
+      boards.forEach(b => {
+        const isT0 = !b.board?.toUpperCase().includes("T1");
+        if (isT0) {
+          if (b.t0_sheet_id) sheetIds.add(b.t0_sheet_id);
+          else ungrouped++;
+        }
+      });
+      t0Sheets = sheetIds.size + ungrouped;
+    }
+
+    return {
+      t0SheetCount: t0Sheets,
+      t1StripCount: boards.length,
+      t2PartCount: selectedPartsPlaced,
+    };
+  }, [boards, selectedCutResult, selectedPartsPlaced]);
 
   const handleCutConfirmed = useCallback(() => {
     // Refetch order to reflect new status
@@ -565,11 +589,11 @@ export default function OrderDetail() {
               <button onClick={() => setViewMode("layout")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors whitespace-nowrap ${viewMode === "layout" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
                 <LayoutGrid size={14} /> {t("orderDetail.layout")}
               </button>
-              <button onClick={() => setViewMode("table")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors whitespace-nowrap ${viewMode === "table" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
-                <Table2 size={14} /> {t("orderDetail.dataTable")}
-              </button>
               <button onClick={() => setViewMode("cabinets")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors whitespace-nowrap ${viewMode === "cabinets" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
                 <Box size={14} /> {t("orderDetail.cabinetView")}
+              </button>
+              <button onClick={() => setViewMode("table")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors whitespace-nowrap ${viewMode === "table" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
+                <Table2 size={14} /> {t("orderDetail.dataTable")}
               </button>
               <button onClick={() => setViewMode("machine")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors whitespace-nowrap ${viewMode === "machine" ? "bg-white text-foreground shadow-sm" : "text-apple-gray hover:text-foreground"}`}>
                 <Scissors size={14} /> {t("machine.tabLabel")}
@@ -597,33 +621,12 @@ export default function OrderDetail() {
       {viewMode === "table" && (
         <>
           {/* ── Summary Stats ── */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <StatCard icon={<Layers size={18} />} label={t("orderDetail.boardsCount")} value={String(selectedBoardsUsed)} color="#3b82f6" />
-            <StatCard icon={<Package size={18} />} label={t("orderDetail.partsCount")} value={String(selectedPartsPlaced)} color="#8b5cf6" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <StatCard icon={<Layers size={18} />} label={locale === "zh" ? "T0 大板 (Raw Sheets)" : "T0 Raw Sheets"} value={String(t0SheetCount)} color="#eab308" />
+            <StatCard icon={<Layers size={18} />} label={locale === "zh" ? "T1 条板 (Strips)" : "T1 Strips"} value={String(t1StripCount)} color="#3b82f6" />
+            <StatCard icon={<Package size={18} />} label={locale === "zh" ? "T2 零件 (Parts)" : "T2 Parts"} value={String(t2PartCount)} color="#8b5cf6" />
             <StatCard icon={<BarChart3 size={18} />} label={t("orderDetail.overallUtil")} value={`${(selectedUtilization * 100).toFixed(1)}%`} color="#10b981" />
           </div>
-
-          {summary?.by_color?.[selectedColor] && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {Object.entries(summary.by_color).filter(([colorKey]) => colorKey === selectedColor).map(([colorKey, data]) => {
-                const boxColor = getColor(colorKey);
-                return (
-                  <div key={colorKey} className="bg-card rounded-xl border border-border/40 p-4 shadow-apple">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="w-3 h-3 rounded-full border border-black/10" style={{ backgroundColor: boxColor.hex_color }} />
-                      <span className="text-[13px] font-semibold">{colorLabel(boxColor, locale)}</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 text-[12px] text-apple-gray">
-                      <span>{data.boards_used} {t("orderDetail.boardsCount")}</span>
-                      <span>{data.total_parts_placed ?? data.parts_placed ?? 0} {t("orderDetail.thParts")}</span>
-                      <span>{((data.overall_utilization || 0) * 100).toFixed(1)}%</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
 
         </>
       )}
