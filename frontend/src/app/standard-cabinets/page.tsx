@@ -185,7 +185,6 @@ export default function StandardCabinetsPage() {
                 <TableHeader align="right">W</TableHeader>
                 <TableHeader align="right">H</TableHeader>
                 <TableHeader align="right">D</TableHeader>
-                <TableHeader align="right">List Price</TableHeader>
                 <TableHeader align="right">Door</TableHeader>
                 <TableHeader align="right">Drawer</TableHeader>
                 <TableHeader align="right">Shelf</TableHeader>
@@ -206,7 +205,6 @@ export default function StandardCabinetsPage() {
                     <td className="py-3 px-4 text-[13px] text-right">{formatInches(record.width)}</td>
                     <td className="py-3 px-4 text-[13px] text-right">{formatInches(record.height)}</td>
                     <td className="py-3 px-4 text-[13px] text-right">{formatInches(record.depth)}</td>
-                    <td className="py-3 px-4 text-[13px] text-right">{formatMoney(record.listPrice)}</td>
                     <td className="py-3 px-4 text-[13px] text-right">{formatQty(record.doorQty)}</td>
                     <td className="py-3 px-4 text-[13px] text-right">{formatQty(record.drawerQty)}</td>
                     <td className="py-3 px-4 text-[13px] text-right">{shelvesTotal(record)}</td>
@@ -214,8 +212,9 @@ export default function StandardCabinetsPage() {
                   </tr>
                   {expandedItem === record.abcItem && (
                     <tr className="bg-black/[0.01]">
-                      <td colSpan={10} className="px-4 py-6 border-b border-border shadow-inner">
+                      <td colSpan={9} className="px-4 py-6 border-b border-border shadow-inner">
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-y-6 gap-x-4">
+                          <DetailItem label="List Price" value={formatMoney(record.listPrice)} />
                           <DetailItem label="Adj. Shelf Qty" value={formatQty(record.adjustableShelfQty)} />
                           <DetailItem label="Fixed Shelf Qty" value={formatQty(record.fixedShelfQty)} />
                           <DetailItem label="Door Plank Area" value={formatNumber(record.doorPlankArea)} />
@@ -241,7 +240,7 @@ export default function StandardCabinetsPage() {
 
               {visibleRecords.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="py-12 px-4 text-center text-[14px] text-apple-gray">
+                  <td colSpan={9} className="py-12 px-4 text-center text-[14px] text-apple-gray">
                     No matching cabinet items.
                   </td>
                 </tr>
