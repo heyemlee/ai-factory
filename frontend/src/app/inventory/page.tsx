@@ -27,7 +27,7 @@ interface InventoryItem {
 
 function inventoryErrorMessage(message: string) {
   if (message.includes("'color' column") || message.includes("schema cache")) {
-    return "Database migration is not applied yet: inventory.color is missing in Supabase. Run backend/config/migration_box_colors.sql in Supabase SQL Editor, then retry.";
+    return "Database schema is not applied yet: inventory.color is missing in Supabase. Run backend/config/schema.sql in Supabase SQL Editor, then retry.";
   }
   return message;
 }
