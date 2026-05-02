@@ -182,3 +182,74 @@ BEGIN
     CREATE POLICY allow_all_board_specs ON board_specs FOR ALL USING (true) WITH CHECK (true);
   END IF;
 END $$;
+
+-- ════════════════════════════════════════════════
+-- Seed Data
+-- ════════════════════════════════════════════════
+
+-- Box Colors
+INSERT INTO box_colors (key, name_en, name_zh, name_es, hex_color, sort_order)
+VALUES
+  ('WhiteBirch',    'White Birch Plywood',   '白桦木胶合板',   'Contrachapado de Abedul Blanco', '#F5DEB3', 1),
+  ('WhiteMelamine', 'White Melamine Plywood', '白色三聚氰胺板', 'Melamina Blanca',                '#FAFAFA', 2)
+ON CONFLICT (key) DO NOTHING;
+
+-- Material Options
+INSERT INTO material_options (key, name_en, name_zh, name_es, sort_order)
+VALUES
+  ('MDF',       'MDF',        '中密度纤维板', 'MDF',           1),
+  ('Plywood',   'Plywood',    '胶合板',       'Contrachapado', 2),
+  ('SolidWood', 'Solid Wood', '实木',         'Madera Maciza', 3)
+ON CONFLICT (key) DO NOTHING;
+
+-- Board Specs (edge-band corrected widths; 101.6mm marked non-recoverable)
+INSERT INTO board_specs (board_type, level, name, width, height, thickness, is_raw, is_recoverable, sort_order)
+VALUES
+  ('T0-1219.2x2438.4', 'T0', 'T0 Full Sheet',          1219.2, 2438.4, 18, true,  false, 0),
+  ('T1-303.8x2438.4',  'T1', 'T1 Recovered 303.8mm',   303.8,  2438.4, 18, false, true,  10),
+  ('T1-608.6x2438.4',  'T1', 'T1 Recovered 608.6mm',   608.6,  2438.4, 18, false, true,  20),
+  ('T1-101.6x2438.4',  'T1', 'T1 Recovered 101.6mm',   101.6,  2438.4, 18, false, false, 30),
+  ('T1-285.8x2438.4',  'T1', 'T1 Recovered 285.8mm',   285.8,  2438.4, 18, false, true,  40),
+  ('T1-264.8x2438.4',  'T1', 'T1 Recovered 264.8mm',   264.8,  2438.4, 18, false, true,  50),
+  ('T1-590.6x2438.4',  'T1', 'T1 Recovered 590.6mm',   590.6,  2438.4, 18, false, true,  60),
+  ('T1-569.6x2438.4',  'T1', 'T1 Recovered 569.6mm',   569.6,  2438.4, 18, false, true,  70),
+  ('T1-762x2438.4',    'T1', 'T1 Recovered 762mm',      762.0,  2438.4, 18, false, true,  80),
+  ('T1-838.2x2438.4',  'T1', 'T1 Recovered 838.2mm',    838.2,  2438.4, 18, false, true,  90)
+ON CONFLICT (board_type) DO UPDATE SET
+  name = EXCLUDED.name,
+  width = EXCLUDED.width,
+  height = EXCLUDED.height,
+  thickness = EXCLUDED.thickness,
+  is_raw = EXCLUDED.is_raw,
+  is_recoverable = EXCLUDED.is_recoverable,
+  is_active = true,
+  sort_order = EXCLUDED.sort_order;
+
+-- Inventory: cross-join board_specs × production colors to seed all rows
+WITH production_colors AS (
+  SELECT key AS color FROM box_colors WHERE key IN ('WhiteBirch', 'WhiteMelamine')
+),
+sizes AS (
+  SELECT board_type, width, height, name
+  FROM board_specs
+  WHERE is_active = true
+)
+INSERT INTO inventory (
+  board_type, color, name, material, category,
+  height, width, thickness, stock, threshold, unit
+)
+SELECT
+  sizes.board_type,
+  production_colors.color,
+  sizes.name,
+  'MDF',
+  'main',
+  sizes.height,
+  sizes.width,
+  18,
+  0,
+  CASE WHEN sizes.board_type LIKE 'T0-%' THEN 10 ELSE 5 END,
+  'pcs'
+FROM production_colors
+CROSS JOIN sizes
+ON CONFLICT (board_type, color) DO NOTHING;

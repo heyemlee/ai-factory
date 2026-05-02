@@ -18,9 +18,9 @@ T0 raw sheet: 1219.2 × 2438.4 mm (48″ × 96″)
 
 参数:
   T0_WIDTH  = 1219.2 mm
-  T0_TRIM   = 5 mm (边缘修边)
+  T0_TRIM   = 5 mm (单条边扫边量)
   SAW_KERF  = 5 mm (锯缝)
-  usable_width = 1219.2 - 5 = 1214.2 mm
+  usable_width = 1219.2 - 2 × 5 = 1209.2 mm  (上来先扫两条长边)
 
 规则:
   - 第一个条料不需要 kerf
@@ -87,7 +87,8 @@ def optimize_t0_from_strips(strip_items: list) -> dict:
     # FFD: sort strips by width descending (biggest first)
     sorted_items = sorted(strip_items, key=lambda x: x["strip_width"], reverse=True)
 
-    usable_width = T0_WIDTH - T0_TRIM
+    # 长边两侧扫边: 沿 1219.2 方向各扣 T0_TRIM
+    usable_width = T0_WIDTH - 2 * T0_TRIM
 
     # Validate: no single strip exceeds usable width
     for item in sorted_items:

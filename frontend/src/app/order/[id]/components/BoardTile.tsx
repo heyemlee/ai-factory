@@ -144,14 +144,14 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
                 className={`absolute text-[10px] text-gray-500 font-mono whitespace-nowrap ${isRotated ? 'top-1/2 -right-[36px] -translate-y-1/2' : 'bottom-[-22px] left-1/2 -translate-x-1/2'}`}
                 style={isRotated ? { writingMode: 'vertical-rl' } : {}}
               >
-                {boardDims.height}
+                {boardDims.height} mm
               </div>
               {/* Width label (styled identically to length label) */}
               <div 
                 className={`absolute text-[10px] text-gray-500 font-mono whitespace-nowrap ${isRotated ? 'top-[-22px] left-1/2 -translate-x-1/2' : 'right-[-36px] top-1/2 -translate-y-1/2'}`}
                 style={!isRotated ? { writingMode: 'vertical-rl', transform: 'rotate(180deg)' } : {}}
               >
-                {boardDims.width}
+                {boardDims.width} mm
               </div>
               {/* Feed direction arrow (ALWAYS on the left, pointing left) */}
               <div className="absolute left-[-26px] top-1/2 -translate-y-1/2">

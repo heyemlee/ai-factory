@@ -66,6 +66,31 @@ def _cut_width(part: dict) -> float:
     return float(part.get("cut_width") or part.get("Width") or 0)
 
 
+# Height-axis trim threshold: if a part's Height exceeds this, the strip
+# cannot be trimmed on its short edges (would leave the part oversized).
+# 96″ panels (Height ≈ 2438.4) trigger this and the strip runs un-trimmed.
+HEIGHT_TRIM_THRESHOLD = BOARD_HEIGHT - 2 * TRIM_LOSS  # 2428.4mm
+
+
+def strip_usable_height(parts) -> float:
+    """Usable Height for a strip given its parts.
+
+    Default: both short edges trimmed (BOARD_HEIGHT - 2 * TRIM_LOSS).
+    If any part needs Height > HEIGHT_TRIM_THRESHOLD, skip short-edge
+    trimming so the part fits — operator trims long edges only.
+    """
+    if any(_cut_length(p) > HEIGHT_TRIM_THRESHOLD for p in parts):
+        return float(BOARD_HEIGHT)
+    return float(BOARD_HEIGHT - 2 * TRIM_LOSS)
+
+
+def strip_height_trim(parts) -> float:
+    """Total short-edge trim mm applied to this strip (0 or 2 * TRIM_LOSS)."""
+    if any(_cut_length(p) > HEIGHT_TRIM_THRESHOLD for p in parts):
+        return 0.0
+    return float(2 * TRIM_LOSS)
+
+
 def _format_width_for_code(width: float) -> str:
     text = f"{float(width):.1f}"
     return text[:-2] if text.endswith(".0") else text
@@ -358,14 +383,16 @@ def build_strip_demand(parts: list, inventory: dict = None, force_t0_start: bool
       1. 先查库存: 精确匹配 Width (±0.5mm 容差)
          e.g.: Width=101.6 → T1-101.6x2438.4 (库存有就用)
       2. 旋转匹配: 零件 Height 精确匹配库存 Width (±0.5mm)
-         且旋转后原 Width 作为新 Height ≤ 可用长度 (2433.4mm)
+         且旋转后原 Width 作为新 Height ≤ 物理板长 (2438.4mm)
          e.g.: Height=303.8, Width=600 → 旋转后 Width=303.8 匹配 T1-303.8
       3. 没有精确匹配 → T0 裁切
 
     Returns:
       list of strip demand dicts
     """
-    usable_length = BOARD_HEIGHT - TRIM_LOSS  # 2433.4mm
+    # Rotation feasibility uses the physical board length: a 96″ part can still
+    # fit by skipping the short-edge trim on its strip.
+    usable_length = float(BOARD_HEIGHT)
 
     # Build a sorted list of inventory widths for matching
     inv_widths = []  # [(width, board_type), ...]
@@ -586,7 +613,6 @@ def apply_inventory(strip_demand: list, inventory: dict, force_t0_start: bool = 
 
 def _count_strips_needed(parts: list, strip_width: float) -> int:
     """Quick FFD to count how many strips are needed for these parts."""
-    usable = BOARD_HEIGHT - TRIM_LOSS
     sorted_parts = sorted(parts, key=_cut_length, reverse=True)
 
     strips = []  # each is remaining length
@@ -601,7 +627,9 @@ def _count_strips_needed(parts: list, strip_width: float) -> int:
                 placed = True
                 break
         if not placed:
-            # New strip: first part no kerf
+            # New strip: first part no kerf; usable depends on whether this
+            # part forces skipping short-edge trim.
+            usable = strip_usable_height([p])
             strips.append(usable - cl)
 
     return len(strips)
@@ -612,7 +640,6 @@ def _split_parts_for_strips(parts: list, strip_width: float, max_strips: int):
     Pack parts into max_strips strips using FFD.
     Returns (parts_in_strips, parts_remaining).
     """
-    usable = BOARD_HEIGHT - TRIM_LOSS
     sorted_parts = sorted(parts, key=_cut_length, reverse=True)
 
     strips = []  # list of {remaining, parts}
@@ -632,6 +659,7 @@ def _split_parts_for_strips(parts: list, strip_width: float, max_strips: int):
 
         if not placed:
             if len(strips) < max_strips:
+                usable = strip_usable_height([p])
                 strips.append({"remaining": usable - cl, "parts": [p]})
             else:
                 overflow.append(p)
@@ -660,7 +688,9 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
     """
     FFD bin packing of parts within a strip along the Height (2438.4mm) axis.
 
-    ⚠️ 扫边: Height方向扫边 5mm (2438.4 → 2433.4mm), Width方向不扫边.
+    ⚠️ 扫边: 默认两端各扫 TRIM_LOSS (2438.4 → 2428.4mm).
+       如果零件 Height > board_height − 2 × TRIM_LOSS,该条 strip 跳过短边扫边
+       (整条独占, usable = board_height).
 
     This is used for BOTH inventory strips AND T0-cut strips.
 
@@ -673,7 +703,8 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
     Returns:
       list of strip results, each with parts and utilization
     """
-    usable = board_height - TRIM_LOSS  # Height方向扫边: 2438.4 - 5 = 2433.4mm
+    usable = board_height - 2 * TRIM_LOSS         # 2438.4 − 10 = 2428.4mm
+    no_trim_threshold = board_height - 2 * TRIM_LOSS
     sorted_parts = sorted(parts, key=_cut_length, reverse=True)
 
     open_strips = []  # each: {remaining, parts, no_trim}
@@ -681,9 +712,12 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
     for part in sorted_parts:
         cl = _cut_length(part)
 
-        # Full-height parts (96" = board_height): skip trim, dedicated strip
-        is_full_height = part.get("skip_trim") or abs(cl - board_height) < 0.5
+        # Tall parts (> usable after 2-edge trim): solo strip, skip short-edge trim.
+        is_full_height = part.get("skip_trim") or cl > no_trim_threshold
         if is_full_height:
+            if cl > board_height + 0.5:
+                print(f"  ⚠️  Part {part['part_id']} Height {cl}mm > board {board_height}mm, skip")
+                continue
             open_strips.append({
                 "remaining": 0,
                 "parts": [part],
@@ -719,6 +753,8 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
     prefix = id_prefix if id_prefix is not None else f"{board_type}-{color}"
     for idx, strip in enumerate(open_strips, 1):
         no_trim = strip.get("no_trim", False)
+        # trim_loss reports the per-edge value (machine setting). Operator runs
+        # it twice for both short edges, so usable_height already reflects 2×.
         effective_trim = 0 if no_trim else TRIM_LOSS
         effective_usable = board_height if no_trim else usable
 
@@ -815,7 +851,7 @@ def ffd_bin_pack(parts_list: list, board_info: dict):
     board_width  = board_info["Width"]
     board_type   = board_info["board_type"]
     max_qty      = board_info["qty"]
-    usable       = board_height - TRIM_LOSS
+    usable       = board_height - 2 * TRIM_LOSS
 
     sorted_parts = sorted(parts_list, key=lambda p: p["cut_length"], reverse=True)
     open_boards = []
@@ -954,7 +990,8 @@ def _validate_cut_result(output: dict, cabinet_breakdown: dict, total_parts_requ
         for p in b.get("parts", []):
             parts_sum += (p.get("cut_length") or p.get("Height") or 0)
         kerf_sum = max(0, (len(b.get("parts", [])) - 1)) * sk
-        usable_len = (b.get("usable_length") or 0) or (BOARD_HEIGHT - tl)
+        # tl is per-edge trim (5 or 0); both short edges are trimmed when tl > 0.
+        usable_len = (b.get("usable_length") or 0) or (BOARD_HEIGHT - 2 * tl)
         used_len = parts_sum + kerf_sum
         if used_len > usable_len + 0.5:
             integrity.append({
@@ -1294,7 +1331,9 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
         raise RuntimeError("Inventory is empty")
 
     # ─── 检测超板零件 (跨颜色,T0 dim 假设各色一致) ───
-    usable_height = BOARD_HEIGHT - TRIM_LOSS  # 2433.4mm
+    # 物理上限 = BOARD_HEIGHT (2438.4); 超过 HEIGHT_TRIM_THRESHOLD (2428.4) 但
+    # 在物理上限内的件,会跑在不扫短边的独占 strip 上 → 标记 skip_trim.
+    max_board_height = float(BOARD_HEIGHT)
     max_board_width = 1219.2
     for color, boards in inventory_per_color.items():
         for bt, info in boards.items():
@@ -1306,13 +1345,12 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
     oversized_parts = []
     for p in parts:
         h, w = p["Height"], p["Width"]
-        # Full-height parts (96" = 2438.4mm): skip trim, use full board
-        full_h = abs(h - BOARD_HEIGHT) < 0.5
-        full_w = abs(w - BOARD_HEIGHT) < 0.5
-        fits_normal = (w <= max_board_width and (h <= usable_height or full_h))
-        fits_rotated = (h <= max_board_width and (w <= usable_height or full_w))
+        needs_full_h = h > HEIGHT_TRIM_THRESHOLD
+        needs_full_w = w > HEIGHT_TRIM_THRESHOLD
+        fits_normal = (w <= max_board_width and h <= max_board_height + 0.5)
+        fits_rotated = (h <= max_board_width and w <= max_board_height + 0.5)
         if fits_normal:
-            if full_h:
+            if needs_full_h:
                 p["skip_trim"] = True
             valid_parts.append(p)
         elif fits_rotated:
@@ -1323,7 +1361,7 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
             p["cut_length"] = cw_orig
             p["cut_width"] = cl_orig
             p["auto_swapped"] = True
-            if full_w:
+            if needs_full_w:
                 p["skip_trim"] = True
             valid_parts.append(p)
         else:

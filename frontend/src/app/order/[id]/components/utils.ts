@@ -37,7 +37,8 @@ export function parseBoardDims(board: { board?: string; board_size?: string }):
     const m = src.match(/(\d+(?:\.\d+)?)\s*[×x*]\s*(\d+(?:\.\d+)?)/i);
     if (m) {
       const w = safeNum(m[1]);
-      const h = safeNum(m[2]);
+      let h = safeNum(m[2]);
+      if (h === 2438) h = 2438.4;
       if (w > 0 && h > 0) return { width: w, height: h, ok: true };
     }
   }

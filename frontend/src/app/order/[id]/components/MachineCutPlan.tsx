@@ -325,10 +325,12 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     return map;
   }, [boards]);
 
-  /* ── Parse board_size → { totalLength } ── */
   const parseTotalLength = (bs: string): number => {
     const m = bs.match(/([\d.]+)\s*[×x*]\s*([\d.]+)/i);
-    if (m) return parseFloat(m[2]);
+    if (m) {
+      const len = parseFloat(m[2]);
+      return len === 2438 ? 2438.4 : len;
+    }
     console.warn("[MachineCutPlan] board_size unparsable, falling back to 2438.4", bs);
     return 2438.4;
   };
