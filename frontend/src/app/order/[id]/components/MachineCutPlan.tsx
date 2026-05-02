@@ -94,7 +94,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     widthRipBadge: "需裁宽",
     notes: "备注",
     operatorNote1: "本工程组已匹配固定板材宽度，操作员只需输入裁切长度和数量。",
-    operatorNote2: "上板 → 先修边 5mm → 再按下表裁切。",
+    operatorNote2: "上板 → 先修边 {trim}mm → 再按下表裁切。",
     printBtn: "打印",
     printTitle: "机台裁切方案",
     orderNo: "订单号",
@@ -159,7 +159,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     widthRipBadge: "Rip width",
     notes: "Notes",
     operatorNote1: "This engineering group uses a fixed board width. The operator only needs to input cut lengths and quantities.",
-    operatorNote2: "Load board → Trim 5mm first → Then cut according to the table below.",
+    operatorNote2: "Load board → Trim {trim}mm first → Then cut according to the table below.",
     printBtn: "Print",
     printTitle: "Machine Cut Plan",
     orderNo: "Order No.",
@@ -224,7 +224,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     widthRipBadge: "Rip ancho",
     notes: "Notas",
     operatorNote1: "Este grupo de ingeniería usa un ancho fijo. El operador solo necesita ingresar longitudes y cantidades.",
-    operatorNote2: "Cargar tablero → Recortar 5mm primero → Luego cortar según la tabla.",
+    operatorNote2: "Cargar tablero → Recortar {trim}mm primero → Luego cortar según la tabla.",
     printBtn: "Imprimir",
     printTitle: "Plan de Corte de Máquina",
     orderNo: "No. de Pedido",
@@ -338,7 +338,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     for (const b of sectionBoards) {
       const w = b.strip_width || 0;
       const color = b.color || DEFAULT_BOX_COLOR;
-      const key = `${color}|||${w}|||${b.board}|||${b.board_size}`;
+      const key = `${color}|||${w}|||${b.board}|||${b.board_size}|||${b.trim_loss ?? 5}`;
       if (!sectionMap[key]) sectionMap[key] = [];
       sectionMap[key].push(b);
     }
@@ -401,7 +401,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
           boardType,
           boardWidth: getRipWidth(sample) || width,
           totalLength: parseTotalLength(sample.board_size),
-          trimSetting: 5,
+          trimSetting: Math.max(...groupedBoards.map(b => b.trim_loss ?? 5)),
           patterns,
           needsWidthRip: ripStockWidthMm !== null,
           ripStockWidthMm,
@@ -416,7 +416,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     for (const b of boards) {
       const w = b.strip_width || 0;
       const color = b.color || DEFAULT_BOX_COLOR;
-      const key = `${color}|||${w}|||${b.board}|||${b.board_size}`;
+      const key = `${color}|||${w}|||${b.board}|||${b.board_size}|||${b.trim_loss ?? 5}`;
       if (!groupMap[key]) groupMap[key] = [];
       groupMap[key].push(b);
     }
@@ -450,7 +450,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       const width = parseFloat(key.split("|||")[1]);
       const sample = grpBoards[0];
       const totalLength = parseTotalLength(sample.board_size);
-      const trimSetting = 5;
+      const trimSetting = Math.max(...grpBoards.map(b => b.trim_loss ?? 5));
 
       // Collect all distinct board type names for the header (should just be one now)
       const boardTypes = [...new Set(grpBoards.map(b => b.board))];

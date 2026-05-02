@@ -676,10 +676,21 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
     usable = board_height - TRIM_LOSS  # Height方向扫边: 2438.4 - 5 = 2433.4mm
     sorted_parts = sorted(parts, key=_cut_length, reverse=True)
 
-    open_strips = []  # each: {remaining, parts}
+    open_strips = []  # each: {remaining, parts, no_trim}
 
     for part in sorted_parts:
         cl = _cut_length(part)
+
+        # Full-height parts (96" = board_height): skip trim, dedicated strip
+        is_full_height = part.get("skip_trim") or abs(cl - board_height) < 0.5
+        if is_full_height:
+            open_strips.append({
+                "remaining": 0,
+                "parts": [part],
+                "no_trim": True,
+            })
+            continue
+
         needed = cl + SAW_KERF
 
         if needed > usable:
@@ -688,6 +699,8 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
 
         placed = False
         for strip in open_strips:
+            if strip.get("no_trim"):
+                continue  # full-height strip is sealed
             if strip["remaining"] >= needed:
                 strip["parts"].append(part)
                 strip["remaining"] -= needed
@@ -705,11 +718,15 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
     results = []
     prefix = id_prefix if id_prefix is not None else f"{board_type}-{color}"
     for idx, strip in enumerate(open_strips, 1):
+        no_trim = strip.get("no_trim", False)
+        effective_trim = 0 if no_trim else TRIM_LOSS
+        effective_usable = board_height if no_trim else usable
+
         parts_total_len = sum(_cut_length(p) for p in strip["parts"])
         parts_total_area = sum(_cut_length(p) * _cut_width(p) for p in strip["parts"])
         k = len(strip["parts"])
         kerf_total = (k - 1) * SAW_KERF if k > 1 else 0
-        waste_area = (usable * strip_width) - parts_total_area - (kerf_total * strip_width)
+        waste_area = (effective_usable * strip_width) - parts_total_area - (kerf_total * strip_width)
 
         utilization = parts_total_area / strip_area if strip_area > 0 else 0
 
@@ -744,14 +761,14 @@ def ffd_strip_pack(parts: list, strip_width: float, board_type: str,
                 }
                 for p in strip["parts"]
             ],
-            "trim_loss": TRIM_LOSS,
+            "trim_loss": effective_trim,
             "saw_kerf": SAW_KERF,
             "cuts": k,
             "parts_total_length": round(parts_total_len, 1),
             "parts_total_area": round(parts_total_area, 1),
             "board_area": round(strip_area, 1),
             "kerf_total": round(kerf_total, 1),
-            "usable_length": round(usable, 1),
+            "usable_length": round(effective_usable, 1),
             "waste": round(waste_area, 1),
             "utilization": round(utilization, 4),
         })
@@ -1289,9 +1306,14 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
     oversized_parts = []
     for p in parts:
         h, w = p["Height"], p["Width"]
-        fits_normal = (w <= max_board_width and h <= usable_height)
-        fits_rotated = (h <= max_board_width and w <= usable_height)
+        # Full-height parts (96" = 2438.4mm): skip trim, use full board
+        full_h = abs(h - BOARD_HEIGHT) < 0.5
+        full_w = abs(w - BOARD_HEIGHT) < 0.5
+        fits_normal = (w <= max_board_width and (h <= usable_height or full_h))
+        fits_rotated = (h <= max_board_width and (w <= usable_height or full_w))
         if fits_normal:
+            if full_h:
+                p["skip_trim"] = True
             valid_parts.append(p)
         elif fits_rotated:
             cl_orig = p.get("cut_length", h)
@@ -1301,6 +1323,8 @@ def run_engine(parts_path: str, inventory_path: str = None, output_path: str = "
             p["cut_length"] = cw_orig
             p["cut_width"] = cl_orig
             p["auto_swapped"] = True
+            if full_w:
+                p["skip_trim"] = True
             valid_parts.append(p)
         else:
             oversized_parts.append(p)
