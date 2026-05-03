@@ -40,6 +40,7 @@ export default function Inventory() {
   const [searchQuery, setSearchQuery] = useState("");
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedColor, setSelectedColor] = useState<string>("all");
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<Partial<InventoryItem>>({});
@@ -61,17 +62,25 @@ export default function Inventory() {
       .from("inventory")
       .select("*")
       .eq("category", activeTab)
-      .order("id");
+      .order("width", { ascending: false });
     if (!error && data) {
       setItems(data as InventoryItem[]);
     }
     setLoading(false);
   }
 
-  const currentItems = items.filter(item =>
-    item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.board_type.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Unique colors found in current items (for main tab filter)
+  const colorOptions = activeTab === "main"
+    ? Array.from(new Set(items.map(i => i.color || DEFAULT_BOX_COLOR)))
+        .sort()
+    : [];
+
+  const currentItems = items.filter(item => {
+    const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      item.board_type.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesColor = activeTab !== "main" || selectedColor === "all" || (item.color || DEFAULT_BOX_COLOR) === selectedColor;
+    return matchesSearch && matchesColor;
+  });
 
   const startEdit = (item: InventoryItem) => {
     setEditingId(item.id);
@@ -155,14 +164,30 @@ export default function Inventory() {
   };
 
   const confirmAdd = async () => {
-    if (!addForm.board_type || !addForm.name) {
-      setAddFormError("Board type and name are required.");
+    if (!addForm.width || !addForm.height) {
+      setAddFormError("Width and Height are required.");
       return;
     }
+    // Auto-generate board_type: T0 for raw sheets (1219.2 width), T1 for strips
+    const w = addForm.width;
+    const h = addForm.height;
+    const wStr = Number.isInteger(w) ? String(w) : w!.toFixed(1).replace(/\.0$/, "");
+    const hStr = Number.isInteger(h) ? String(h) : h!.toFixed(1).replace(/\.0$/, "");
+    const isT0 = Math.abs(w! - 1219.2) < 1;
+    const boardType = isT0 ? `T0-${wStr}x${hStr}` : `T1-${wStr}x${hStr}`;
+    // Auto-generate name from material + color + thickness
+    const matObj = getMaterial(addForm.material || DEFAULT_MATERIAL);
+    const matName = materialLabel(matObj, locale);
+    const colorObj = getColor(addForm.color || DEFAULT_BOX_COLOR);
+    const colName = colorLabel(colorObj, locale);
+    const autoName = addForm.category === "main"
+      ? `${addForm.thickness || 18}mm ${colName} ${matName}`
+      : `${addForm.thickness || 18}mm ${matName}`;
+    const payload = { ...addForm, board_type: boardType, name: addForm.name?.trim() || autoName };
     setAdding(true);
     setAddFormError(null);
     try {
-      const { data, error } = await supabase.from("inventory").insert([addForm]).select();
+      const { data, error } = await supabase.from("inventory").insert([payload]).select();
       if (error) {
         setAddFormError(inventoryErrorMessage(error.message));
         setAdding(false);
@@ -238,187 +263,230 @@ export default function Inventory() {
           </div>
         </div>
 
+        {/* Color filter pills for main tab */}
+        {activeTab === "main" && colorOptions.length > 0 && (
+          <div className="px-6 py-3 border-b border-border flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setSelectedColor("all")}
+              className={clsx(
+                "px-3 py-1.5 rounded-full text-[13px] font-medium transition-all",
+                selectedColor === "all"
+                  ? "bg-foreground text-white shadow-sm"
+                  : "bg-black/[0.04] text-apple-gray hover:bg-black/[0.08]"
+              )}
+            >
+              All
+            </button>
+            {colorOptions.map(colorKey => {
+              const c = getColor(colorKey);
+              return (
+                <button
+                  key={colorKey}
+                  onClick={() => setSelectedColor(colorKey)}
+                  className={clsx(
+                    "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-medium transition-all",
+                    selectedColor === colorKey
+                      ? "bg-foreground text-white shadow-sm"
+                      : "bg-black/[0.04] text-apple-gray hover:bg-black/[0.08]"
+                  )}
+                >
+                  <span className="w-2.5 h-2.5 rounded-full border border-black/10 shrink-0" style={{ backgroundColor: c.hex_color }} />
+                  {colorLabel(c, locale)}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Clean Table View */}
         <div className="overflow-x-auto p-2">
           {loading ? (
             <div className="flex items-center justify-center h-32 text-apple-gray text-[15px]">Loading...</div>
           ) : (
-          <table className="w-full text-left min-w-[900px]">
+          <table className="w-full text-left min-w-[600px]">
             <thead className="sticky top-0 bg-card z-10">
               <tr>
                 <th className="py-4 px-3 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border w-12 text-center">#</th>
-                <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">ID</th>
-                <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">Name</th>
                 {activeTab === "main" && (
-                  <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">{t("inventory.color")}</th>
+                  <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">Name</th>
+                )}
+                {activeTab !== "main" && (
+                  <>
+                    <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">ID</th>
+                    <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">Name</th>
+                  </>
                 )}
                 {(activeTab === "main" || activeTab === "sub") && (
-                  <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">Dimensions</th>
+                  <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">{locale === "zh" ? "尺寸" : "Size"}</th>
                 )}
                 <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">Stock</th>
-                <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">Threshold</th>
+                {activeTab !== "main" && (
+                  <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border">Threshold</th>
+                )}
                 <th className="py-4 px-6 text-[13px] font-medium text-apple-gray uppercase tracking-wide border-b border-border text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {currentItems.map((item, rowIndex) => {
-                const isEditing = editingId === item.id;
+              {currentItems.map((item, rowIndex) => (
+                <tr key={item.id} className="transition-colors hover:bg-black/[0.01]">
+                  <td className="py-4 px-3 text-[13px] text-apple-gray text-center font-mono">{rowIndex + 1}</td>
 
-                return (
-                  <tr key={item.id} className={clsx("transition-colors", isEditing ? "bg-apple-blue/5" : "hover:bg-black/[0.01]")}>
-                    <td className="py-4 px-3 text-[13px] text-apple-gray text-center font-mono">{rowIndex + 1}</td>
+                  {activeTab === "main" && (
                     <td className="py-4 px-6">
-                      {isEditing ? (
-                        <input
-                          className="bg-white border border-border rounded-lg px-3 py-1.5 text-[14px] w-44 focus:outline-none focus:border-apple-blue font-mono"
-                          value={editForm.board_type || ""}
-                          onChange={e => setEditForm({...editForm, board_type: e.target.value})}
-                        />
-                      ) : (
-                        <span className="text-[14px] text-apple-gray font-mono">{item.board_type}</span>
-                      )}
+                      <span className="text-[14px] text-foreground">{item.name || <span className="text-apple-gray italic">—</span>}</span>
                     </td>
+                  )}
 
-                    <td className="py-4 px-6">
-                      {isEditing ? (
-                        <div className="space-y-2 min-w-48">
-                          <input
-                            className="bg-white border border-border rounded-lg px-3 py-1.5 text-[14px] w-full focus:outline-none focus:border-apple-blue"
-                            value={editForm.name || ""}
-                            onChange={e => setEditForm({...editForm, name: e.target.value})}
-                          />
-                          <select
-                            className="bg-white border border-border rounded-lg px-3 py-1.5 text-[13px] w-full focus:outline-none focus:border-apple-blue"
-                            value={editForm.material || DEFAULT_MATERIAL}
-                            onChange={e => setEditForm({...editForm, material: e.target.value})}
-                          >
-                            {materials.map(material => (
-                              <option key={material.key} value={material.key}>{materialLabel(material, locale)}</option>
-                            ))}
-                          </select>
-                        </div>
-                      ) : (
+                  {activeTab !== "main" && (
+                    <>
+                      <td className="py-4 px-6">
+                        <span className="text-[14px] text-apple-gray font-mono">{item.board_type}</span>
+                      </td>
+                      <td className="py-4 px-6">
                         <div>
                           <div className="font-medium text-[15px]">{item.name}</div>
                           <div className="text-[13px] text-apple-gray mt-0.5">{materialLabel(getMaterial(item.material), locale)}</div>
                         </div>
-                      )}
-                    </td>
-
-                    {activeTab === "main" && (
-                      <td className="py-4 px-6">
-                        {isEditing ? (
-                          <select
-                            className="bg-white border border-border rounded-lg px-3 py-1.5 text-[14px] w-full min-w-44 focus:outline-none focus:border-apple-blue"
-                            value={editForm.color || DEFAULT_BOX_COLOR}
-                            onChange={e => setEditForm({...editForm, color: e.target.value})}
-                          >
-                            {colors.map(color => (
-                              <option key={color.key} value={color.key}>{colorLabel(color, locale)}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <div className="inline-flex items-center gap-2 text-[14px]">
-                            <span className="w-3 h-3 rounded-full border border-black/10" style={{ backgroundColor: getColor(item.color).hex_color }} />
-                            <span>{colorLabel(getColor(item.color), locale)}</span>
-                          </div>
-                        )}
                       </td>
-                    )}
+                    </>
+                  )}
 
-                    {(activeTab === "main" || activeTab === "sub") && (
-                      <td className="py-4 px-6 text-[15px] text-foreground">
-                        {isEditing ? (
-                          <div className="flex items-center gap-2">
-                            <div className="text-center">
-                              <span className="text-[10px] text-apple-gray block">Width</span>
-                              <input type="number" className="bg-white border border-border rounded-lg px-2 py-1.5 text-[14px] w-20 focus:outline-none focus:border-apple-blue text-center" value={editForm.width ?? 0} onChange={e => setEditForm({...editForm, width: Number(e.target.value)})} />
-                            </div>
-                            <span className="text-apple-gray pt-4">×</span>
-                            <div className="text-center">
-                              <span className="text-[10px] text-apple-gray block">Height(mm)</span>
-                              <input type="number" className="bg-white border border-border rounded-lg px-2 py-1.5 text-[14px] w-24 focus:outline-none focus:border-apple-blue text-center" value={editForm.height ?? 0} onChange={e => setEditForm({...editForm, height: Number(e.target.value)})} />
-                            </div>
-                            <span className="text-apple-gray pt-4">×</span>
-                            <div className="text-center">
-                              <span className="text-[10px] text-apple-gray block">Thick</span>
-                              <input type="number" className="bg-white border border-border rounded-lg px-2 py-1.5 text-[14px] w-16 focus:outline-none focus:border-apple-blue text-center" value={editForm.thickness ?? 18} onChange={e => setEditForm({...editForm, thickness: Number(e.target.value)})} />
-                            </div>
-                          </div>
-                        ) : (
-                          `${item.width}(W) × ${item.height}(H) × ${item.thickness}mm`
-                        )}
-                      </td>
-                    )}
+                  {(activeTab === "main" || activeTab === "sub") && (
+                    <td className="py-4 px-6 text-[15px] text-foreground">
+                      {`${item.width}(W) × ${item.height}(H) × ${item.thickness}mm`}
+                    </td>
+                  )}
 
+                  <td className="py-4 px-6">
+                    <span className={clsx("font-semibold text-[15px]", item.stock < item.threshold ? "text-apple-red" : "text-foreground")}>
+                      {item.stock}
+                    </span>
+                  </td>
+
+                  {activeTab !== "main" && (
                     <td className="py-4 px-6">
-                      {isEditing ? (
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            className="bg-white border border-apple-blue rounded-lg px-3 py-1.5 text-[14px] w-20 text-foreground font-semibold focus:outline-none"
-                            value={editForm.stock || 0}
-                            onChange={e => setEditForm({...editForm, stock: Number(e.target.value)})}
-                          />
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <span className={clsx("font-semibold text-[15px]", item.stock < item.threshold ? "text-apple-red" : "text-foreground")}>
-                            {item.stock}
-                          </span>
-                        </div>
-                      )}
+                      <span className="text-[14px] font-medium text-apple-gray">{item.threshold}</span>
                     </td>
+                  )}
 
-                    <td className="py-4 px-6">
-                      {isEditing ? (
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            className="bg-white border border-border rounded-lg px-3 py-1.5 text-[14px] w-20 text-foreground focus:outline-none focus:border-apple-blue"
-                            value={editForm.threshold || 0}
-                            onChange={e => setEditForm({...editForm, threshold: Number(e.target.value)})}
-                          />
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <span className="text-[14px] font-medium text-apple-gray">
-                            {item.threshold}
-                          </span>
-                        </div>
-                      )}
-                    </td>
-
-                    <td className="py-4 px-6 text-right">
-                      {isEditing ? (
-                        <div className="flex items-center justify-end gap-2">
-                          <button onClick={() => saveEdit(item.id)} className="p-2 rounded-full bg-apple-blue text-white hover:bg-apple-blue/90 transition-colors shrink-0">
-                            <Save size={16} />
-                          </button>
-                          <button onClick={cancelEdit} className="p-2 rounded-full bg-black/5 text-apple-gray hover:bg-black/10 transition-colors shrink-0">
-                            <X size={16} />
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-end gap-2">
-                          <button onClick={() => startEdit(item)} className="p-2 rounded-full text-apple-gray hover:text-apple-blue hover:bg-apple-blue/10 transition-colors shrink-0">
-                            <Edit2 size={16} />
-                          </button>
-                          <button onClick={() => setDeleteTarget(item)} className="p-2 rounded-full text-apple-gray hover:text-apple-red hover:bg-apple-red/10 transition-colors shrink-0">
-            <Trash2 size={16} />
-          </button>
-                        </div>
-                      )}
-                    </td>
-
-                  </tr>
-                );
-              })}
+                  <td className="py-4 px-6 text-right">
+                    <button onClick={() => startEdit(item)} className="p-2 rounded-full text-apple-gray hover:text-apple-blue hover:bg-apple-blue/10 transition-colors shrink-0">
+                      <Edit2 size={16} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
           )}
         </div>
       </div>
+
+      {/* ── Edit Modal ── */}
+      {editingId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={cancelEdit} />
+          <div className="relative bg-white w-full max-w-lg rounded-[24px] shadow-[0_8px_40px_rgba(0,0,0,0.16)] border border-black/5 p-8" style={{ animation: 'modalIn 0.22s cubic-bezier(0.16, 1, 0.3, 1)' }}>
+            <h3 className="text-[24px] font-semibold mb-6 tracking-tight">Edit Material</h3>
+
+            <div className="space-y-4">
+              {activeTab === "main" && (
+                <>
+                  <div>
+                    <label className="block text-[13px] font-medium text-apple-gray mb-1">Material</label>
+                    <select
+                      value={editForm.material || DEFAULT_MATERIAL}
+                      onChange={e => setEditForm({...editForm, material: e.target.value})}
+                      className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white focus:shadow-apple border border-transparent focus:border-apple-blue/30 transition-all text-foreground"
+                    >
+                      {materials.map(material => (
+                        <option key={material.key} value={material.key}>{materialLabel(material, locale)}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[13px] font-medium text-apple-gray mb-1">{t("inventory.color")}</label>
+                    <select
+                      value={editForm.color || DEFAULT_BOX_COLOR}
+                      onChange={e => setEditForm({...editForm, color: e.target.value})}
+                      className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white focus:shadow-apple border border-transparent focus:border-apple-blue/30 transition-all text-foreground"
+                    >
+                      {colors.map(color => (
+                        <option key={color.key} value={color.key}>{colorLabel(color, locale)}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[13px] font-medium text-apple-gray mb-1">Name</label>
+                    <input type="text" value={editForm.name || ""} onChange={e => setEditForm({...editForm, name: e.target.value})} className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white focus:shadow-apple border border-transparent focus:border-apple-blue/30 transition-all text-foreground" placeholder="e.g. 18mm White Melamine" />
+                  </div>
+                </>
+              )}
+
+              {activeTab !== "main" && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[13px] font-medium text-apple-gray mb-1">Board ID</label>
+                    <input type="text" value={editForm.board_type || ""} onChange={e => setEditForm({...editForm, board_type: e.target.value})} className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white border focus:border-apple-blue/30 font-mono" />
+                  </div>
+                  <div>
+                    <label className="block text-[13px] font-medium text-apple-gray mb-1">Name</label>
+                    <input type="text" value={editForm.name || ""} onChange={e => setEditForm({...editForm, name: e.target.value})} className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white border focus:border-apple-blue/30" />
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-[13px] font-medium text-apple-gray mb-1">{locale === "zh" ? "尺寸" : "Size"} (Width × Height × Thickness) mm</label>
+                <div className="flex items-center gap-2">
+                  <div className="text-center flex-1">
+                    <span className="text-[11px] text-apple-gray block mb-1">Width</span>
+                    <input type="number" value={editForm.width ?? 0} onChange={e => setEditForm({...editForm, width: Number(e.target.value)})} className="w-full bg-black/[0.04] rounded-xl px-3 py-2 text-[14px] text-center focus:outline-none focus:bg-white border focus:border-apple-blue/30" />
+                  </div>
+                  <span className="text-apple-gray mt-4">×</span>
+                  <div className="text-center flex-1">
+                    <span className="text-[11px] text-apple-gray block mb-1">Height</span>
+                    <input type="number" value={editForm.height ?? 0} onChange={e => setEditForm({...editForm, height: Number(e.target.value)})} className="w-full bg-black/[0.04] rounded-xl px-3 py-2 text-[14px] text-center focus:outline-none focus:bg-white border focus:border-apple-blue/30" />
+                  </div>
+                  <span className="text-apple-gray mt-4">×</span>
+                  <div className="text-center flex-1">
+                    <span className="text-[11px] text-apple-gray block mb-1">Thick</span>
+                    <input type="number" value={editForm.thickness ?? 18} onChange={e => setEditForm({...editForm, thickness: Number(e.target.value)})} className="w-full bg-black/[0.04] rounded-xl px-3 py-2 text-[14px] text-center focus:outline-none focus:bg-white border focus:border-apple-blue/30" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[13px] font-medium text-apple-gray mb-1">Stock</label>
+                  <input type="number" value={editForm.stock ?? 0} onChange={e => setEditForm({...editForm, stock: Number(e.target.value)})} className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] font-semibold focus:outline-none focus:bg-white border focus:border-apple-blue/30" />
+                </div>
+                <div>
+                  <label className="block text-[13px] font-medium text-apple-gray mb-1">Low Stock Threshold</label>
+                  <input type="number" value={editForm.threshold ?? 0} onChange={e => setEditForm({...editForm, threshold: Number(e.target.value)})} className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white border focus:border-apple-blue/30" />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between mt-8">
+              <button
+                onClick={() => {
+                  const target = items.find(i => i.id === editingId);
+                  if (target) { cancelEdit(); setDeleteTarget(target); }
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full text-apple-red text-[14px] font-medium hover:bg-apple-red/10 transition-colors"
+              >
+                <Trash2 size={15} />
+                Delete
+              </button>
+              <div className="flex gap-3">
+                <button onClick={cancelEdit} className="px-6 py-2.5 rounded-full bg-black/5 text-foreground text-[14px] font-medium hover:bg-black/10 transition-colors">Cancel</button>
+                <button onClick={() => saveEdit(editingId)} className="px-6 py-2.5 rounded-full bg-apple-blue text-white text-[14px] font-medium hover:bg-apple-blue/90 shadow-sm transition-colors">Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       {deleteTarget && (
@@ -456,17 +524,10 @@ export default function Inventory() {
             <h3 className="text-[24px] font-semibold mb-6 tracking-tight">Add Material</h3>
             
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-[13px] font-medium text-apple-gray mb-1">Board ID / Code</label>
-                  <input type="text" value={addForm.board_type} onChange={e => setAddForm({...addForm, board_type: e.target.value})} className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white focus:shadow-apple border border-transparent focus:border-apple-blue/30 transition-all text-foreground" placeholder="e.g. W18-MDF" />
-                </div>
-                <div>
-                  <label className="block text-[13px] font-medium text-apple-gray mb-1">Name</label>
-                  <input type="text" value={addForm.name} onChange={e => setAddForm({...addForm, name: e.target.value})} className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white focus:shadow-apple border border-transparent focus:border-apple-blue/30 transition-all text-foreground" placeholder="e.g. 18mm White Melamine" />
-                </div>
+              <div>
+                <label className="block text-[13px] font-medium text-apple-gray mb-1">Name <span className="text-apple-gray/60 font-normal">(optional)</span></label>
+                <input type="text" value={addForm.name} onChange={e => setAddForm({...addForm, name: e.target.value})} className="w-full bg-black/[0.04] rounded-xl px-4 py-2 text-[14px] focus:outline-none focus:bg-white focus:shadow-apple border border-transparent focus:border-apple-blue/30 transition-all text-foreground" placeholder="Leave blank to auto-generate" />
               </div>
-              
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[13px] font-medium text-apple-gray mb-1">Material</label>
