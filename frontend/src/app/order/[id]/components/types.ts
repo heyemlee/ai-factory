@@ -82,6 +82,9 @@ export interface CutResult {
     overall_utilization: number;
     total_waste: number;
     cut_mode?: "inventory_first" | "t0_start";
+    cut_algorithm?: "efficient" | "stack_efficiency";
+    config_trim_loss_mm?: number;
+    max_stack?: number;
     inventory_shortage?: InventoryShortage[];
     inventory_used?: Record<string, number>;
     board_type_breakdown?: Record<string, number>;
@@ -97,6 +100,12 @@ export interface CutResult {
   };
   boards: Board[];
   cut_mode?: "inventory_first" | "t0_start";
+  cut_algorithm?: "efficient" | "stack_efficiency";
+  upload_settings?: {
+    cut_algorithm?: "efficient" | "stack_efficiency";
+    cut_mode?: "inventory_first" | "t0_start";
+    trim_loss_mm?: number;
+  };
   recovered_inventory?: RecoveredStrip[];
   t0_plan?: {
     t0_sheets?: Array<{
@@ -123,6 +132,8 @@ export interface Order {
   filename?: string | null;
   status: string;
   cut_mode?: "inventory_first" | "t0_start";
+  cut_algorithm?: "efficient" | "stack_efficiency";
+  trim_loss_mm?: number;
   cut_result_json: CutResult | null;
   cabinets_summary: string;
   extra_boards_used?: { board_type: string; color?: string; count: number }[];
@@ -144,6 +155,11 @@ export interface PatternNumbering {
 
 export interface StackInfo {
   groupSize: number;
+  stackOf: number;
+  isLeader: boolean;
+}
+
+export interface RipStackInfo {
   stackOf: number;
   isLeader: boolean;
 }

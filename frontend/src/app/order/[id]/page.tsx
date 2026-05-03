@@ -1,7 +1,7 @@
 "use client";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Layers, Scissors, AlertTriangle, Table2, LayoutGrid, Box, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, Layers, Scissors, AlertTriangle, Table2, LayoutGrid, Box, CheckCircle2, Zap } from "lucide-react";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { revertCut } from "@/lib/order_actions";
@@ -12,7 +12,7 @@ import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
 /* ── Component imports ── */
 import type { Part, Board, CutResult, Order, Cabinet } from "./components/types";
 import { SIZE_COLORS } from "./components/constants";
-import { boardFingerprint, nominalStockWidthForBoard } from "./components/utils";
+import { boardFingerprint, getRipWidth, nominalStockWidthForBoard } from "./components/utils";
 import { BoardTile } from "./components/BoardTile";
 import { T0SheetCard } from "./components/T0SheetCard";
 import { BoardDetailModal } from "./components/BoardDetailModal";
@@ -24,6 +24,21 @@ import { CutPlanTable } from "./components/CutPlanTable";
 const CabinetCanvas = dynamic(() => import("@/components/CabinetViewer"), { ssr: false });
 const EMPTY_BOARDS: Board[] = [];
 const EMPTY_INVENTORY_SHORTAGES: NonNullable<CutResult["summary"]["inventory_shortage"]> = [];
+type CutAlgorithm = "efficient" | "stack_efficiency";
+
+function resolveCutAlgorithm(order: Order | null, cutResult: CutResult | null | undefined): CutAlgorithm {
+  const raw = order?.cut_algorithm
+    || cutResult?.cut_algorithm
+    || cutResult?.summary?.cut_algorithm
+    || cutResult?.upload_settings?.cut_algorithm;
+  return raw === "stack_efficiency" ? "stack_efficiency" : "efficient";
+}
+
+function cutAlgorithmLabelKey(algorithm: CutAlgorithm): "orders.algorithm.stackEfficiency" | "orders.algorithm.efficient" {
+  return algorithm === "stack_efficiency"
+    ? "orders.algorithm.stackEfficiency"
+    : "orders.algorithm.efficient";
+}
 
 export default function OrderDetail() {
   const { t, locale } = useLanguage();
@@ -63,6 +78,8 @@ export default function OrderDetail() {
     [allBoards, selectedColor]
   );
   const summary = cutResult?.summary;
+  const cutAlgorithm = resolveCutAlgorithm(order, cutResult);
+  const CutAlgorithmIcon = cutAlgorithm === "stack_efficiency" ? Layers : Zap;
   const shortages = summary?.inventory_shortage ?? EMPTY_INVENTORY_SHORTAGES;
   const orderDisplayName = order?.filename?.replace(/\.(xlsx|xls)$/i, "") || (id as string);
 
@@ -182,6 +199,31 @@ export default function OrderDetail() {
       }
     }
     return { lookup, totalBoards, totalCuts, saved: totalBoards - totalCuts };
+  }, [boards]);
+
+  const t0RipStackGroups = useMemo(() => {
+    const groupMap: Record<string, { index: number }[]> = {};
+    for (let i = 0; i < boards.length; i++) {
+      const board = boards[i];
+      if (!board.t0_sheet_id) continue;
+      const color = board.color || DEFAULT_BOX_COLOR;
+      const ripWidth = Math.round((getRipWidth(board) || board.actual_strip_width || board.strip_width || 0) * 10) / 10;
+      const rowIndex = board.t0_sheet_index ?? 0;
+      const key = `${color}|||${rowIndex}|||${ripWidth}`;
+      if (!groupMap[key]) groupMap[key] = [];
+      groupMap[key].push({ index: i });
+    }
+
+    const lookup: Record<number, { stackOf: number; isLeader: boolean }> = {};
+    for (const group of Object.values(groupMap)) {
+      for (let start = 0; start < group.length; start += 4) {
+        const chunk = group.slice(start, start + 4);
+        for (let i = 0; i < chunk.length; i++) {
+          lookup[chunk[i].index] = { stackOf: chunk.length, isLeader: i === 0 };
+        }
+      }
+    }
+    return { lookup };
   }, [boards]);
 
   /* ── Shared pattern numbering for consistent labels across Layout & Machine Cut Plan ── */
@@ -413,6 +455,11 @@ export default function OrderDetail() {
           </Link>
           <div>
             <h1 className="text-[26px] font-semibold tracking-tight">{t("orderDetail.title")} #{orderDisplayName}</h1>
+            <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-black/[0.04] px-3 py-1.5 text-[13px] font-semibold text-foreground">
+              <CutAlgorithmIcon size={14} className={cutAlgorithm === "stack_efficiency" ? "text-apple-blue" : "text-apple-gray"} />
+              <span className="text-apple-gray">{t("orderDetail.algorithm")}</span>
+              <span>{t(cutAlgorithmLabelKey(cutAlgorithm))}</span>
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -669,6 +716,8 @@ export default function OrderDetail() {
                         onBoardClick={(b) => setSelectedBoard(b)}
                         recoveredStrips={recoveredStrips}
                         patternNumbering={patternNumbering}
+                        stackLookup={cutAlgorithm === "stack_efficiency" ? stackGroups.lookup : undefined}
+                        ripStackLookup={cutAlgorithm === "stack_efficiency" ? t0RipStackGroups.lookup : undefined}
                       />
                     );
                   })}

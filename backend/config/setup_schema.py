@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS orders (
   filename text,
   status text DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'cut_done', 'failed')),
   cut_mode text NOT NULL DEFAULT 'inventory_first' CHECK (cut_mode IN ('inventory_first', 't0_start')),
+  cut_algorithm text NOT NULL DEFAULT 'stack_efficiency' CHECK (cut_algorithm IN ('efficient', 'stack_efficiency')),
+  trim_loss_mm float DEFAULT 2,
   cabinets_summary text,
   utilization float,
   boards_used int,
@@ -98,6 +100,25 @@ CREATE TABLE IF NOT EXISTS orders (
   created_at timestamptz DEFAULT now(),
   completed_at timestamptz
 );
+
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS cut_algorithm text;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS trim_loss_mm float;
+UPDATE orders SET cut_algorithm = 'efficient' WHERE cut_algorithm IS NULL;
+UPDATE orders SET trim_loss_mm = 5 WHERE trim_loss_mm IS NULL AND cut_algorithm = 'efficient';
+UPDATE orders SET trim_loss_mm = 2 WHERE trim_loss_mm IS NULL;
+ALTER TABLE orders ALTER COLUMN cut_algorithm SET DEFAULT 'stack_efficiency';
+ALTER TABLE orders ALTER COLUMN cut_algorithm SET NOT NULL;
+ALTER TABLE orders ALTER COLUMN trim_loss_mm SET DEFAULT 2;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_cut_algorithm_check'
+  ) THEN
+    ALTER TABLE orders
+      ADD CONSTRAINT orders_cut_algorithm_check
+      CHECK (cut_algorithm IN ('efficient', 'stack_efficiency'));
+  END IF;
+END $$;
 
 -- 3. BOM History table
 CREATE TABLE IF NOT EXISTS bom_history (

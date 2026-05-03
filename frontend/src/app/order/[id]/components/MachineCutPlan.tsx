@@ -1,5 +1,5 @@
 "use client";
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Printer } from "lucide-react";
 import type { Board, EngineeringGroup, CutResult, IntegrityIssue } from "./types";
 import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
@@ -66,6 +66,17 @@ type MachineCutSection = {
   patterns: MachinePattern[];
   needsWidthRip: boolean;
   ripStockWidthMm: number | null;
+};
+
+type MachineT0RipBatch = {
+  key: string;
+  rowOrder: number;
+  sheetIds: string[];
+  totalLength: number;
+  width: number;
+  trim: number;
+  ripWidth: number;
+  pieces: number;
 };
 
 /* ═══════════════════════════════════════════
@@ -325,6 +336,73 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     return map;
   }, [boards]);
 
+  const buildT0RipBatches = (sheets: MachineT0Sheet[]): MachineT0RipBatch[] => {
+    const ripMap = new Map<string, MachineT0RipBatch & { order: number }>();
+    sheets.forEach((sheet, sheetIdx) => {
+      const dims = parseT0SheetDims(sheet.sheet_id);
+      const sheetStrips = t0BoardStripsBySheetId[sheet.sheet_id] || [];
+      const rows = [
+        ...sheetStrips.map(({ board }, stripIdx) => ({
+          key: board.board_id || `strip-${stripIdx}`,
+          width: getRipWidth(board) || board.actual_strip_width || 0,
+          pieces: 1,
+        })),
+        ...(sheet.recovered_strips || [])
+          .filter((r) => typeof r.width === "number")
+          .map((r, rIdx) => ({
+            key: `recovered-${rIdx}`,
+            width: r.width as number,
+            pieces: 1,
+          })),
+      ];
+
+      rows.forEach((row, rowIdx) => {
+        const key = [
+          rowIdx,
+          dims.length.toFixed(3),
+          dims.width.toFixed(3),
+          row.width.toFixed(3),
+          row.pieces,
+        ].join("|||");
+        const existing = ripMap.get(key);
+        if (existing) {
+          existing.sheetIds.push(sheet.sheet_id);
+        } else {
+          ripMap.set(key, {
+            key,
+            order: sheetIdx,
+            rowOrder: rowIdx,
+            sheetIds: [sheet.sheet_id],
+            totalLength: dims.length,
+            width: dims.width,
+            trim: 5,
+            ripWidth: row.width,
+            pieces: row.pieces,
+          });
+        }
+      });
+    });
+
+    const batches: MachineT0RipBatch[] = [];
+    Array.from(ripMap.values())
+      .sort((a, b) => a.rowOrder - b.rowOrder || a.order - b.order)
+      .forEach((rip, ripIdx) => {
+        for (let start = 0; start < rip.sheetIds.length; start += 4) {
+          batches.push({
+            key: `${rip.key}-${ripIdx}-${start}`,
+            rowOrder: rip.rowOrder,
+            sheetIds: rip.sheetIds.slice(start, start + 4),
+            totalLength: rip.totalLength,
+            width: rip.width,
+            trim: rip.trim,
+            ripWidth: rip.ripWidth,
+            pieces: rip.pieces,
+          });
+        }
+      });
+    return batches;
+  };
+
   const parseTotalLength = (bs: string): number => {
     const m = bs.match(/([\d.]+)\s*[×x*]\s*([\d.]+)/i);
     if (m) {
@@ -335,20 +413,31 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     return 2438.4;
   };
 
+  const useStandardLengthPool = (cutResult?.cut_algorithm || cutResult?.summary?.cut_algorithm) === "stack_efficiency";
+
+  const productionLengthBoardType = useCallback((board: Board) => {
+    if (!useStandardLengthPool) return board.board;
+    const width = Math.round((getRipWidth(board) || board.strip_width || 0) * 10) / 10;
+    if (width === 608.6) return "T1-608.6x2438.4";
+    if (width === 303.8) return "T1-303.8x2438.4";
+    return board.board;
+  }, [useStandardLengthPool]);
+
   const buildCutSections = (sectionBoards: Board[]): MachineCutSection[] => {
     const sectionMap: Record<string, Board[]> = {};
     for (const b of sectionBoards) {
       const w = b.strip_width || 0;
       const color = b.color || DEFAULT_BOX_COLOR;
-      const key = `${color}|||${w}|||${b.board}|||${b.board_size}|||${b.trim_loss ?? 5}`;
+      const boardType = productionLengthBoardType(b);
+      const key = `${color}|||${w}|||${boardType}|||${b.board_size}|||${b.trim_loss ?? 5}`;
       if (!sectionMap[key]) sectionMap[key] = [];
       sectionMap[key].push(b);
     }
 
     return Object.entries(sectionMap)
       .sort(([keyA, boardsA], [keyB, boardsB]) => {
-        const typeA = boardsA[0]?.board || "";
-        const typeB = boardsB[0]?.board || "";
+        const typeA = keyA.split("|||")[2] || boardsA[0]?.board || "";
+        const typeB = keyB.split("|||")[2] || boardsB[0]?.board || "";
         const isT1A = typeA.toUpperCase().includes("T1");
         const isT1B = typeB.toUpperCase().includes("T1");
         if (isT1A !== isT1B) return isT1A ? -1 : 1;
@@ -361,7 +450,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         const color = key.split("|||")[0] || DEFAULT_BOX_COLOR;
         const width = parseFloat(key.split("|||")[1]);
         const sample = groupedBoards[0];
-        const boardType = [...new Set(groupedBoards.map((b) => b.board))].join(" / ");
+        const boardType = productionLengthBoardType(sample);
         const fpMap: Record<string, Board[]> = {};
         for (const b of groupedBoards) {
           const fp = boardFingerprint(b);
@@ -418,7 +507,8 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     for (const b of boards) {
       const w = b.strip_width || 0;
       const color = b.color || DEFAULT_BOX_COLOR;
-      const key = `${color}|||${w}|||${b.board}|||${b.board_size}|||${b.trim_loss ?? 5}`;
+      const boardType = productionLengthBoardType(b);
+      const key = `${color}|||${w}|||${boardType}|||${b.board_size}|||${b.trim_loss ?? 5}`;
       if (!groupMap[key]) groupMap[key] = [];
       groupMap[key].push(b);
     }
@@ -427,8 +517,8 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     return Object.entries(groupMap)
       .sort(([keyA, boardsA], [keyB, boardsB]) => {
         // T1 boards first
-        const typeA = boardsA[0]?.board || "";
-        const typeB = boardsB[0]?.board || "";
+        const typeA = keyA.split("|||")[2] || boardsA[0]?.board || "";
+        const typeB = keyB.split("|||")[2] || boardsB[0]?.board || "";
         const isT1A = typeA.toUpperCase().includes("T1");
         const isT1B = typeB.toUpperCase().includes("T1");
         if (isT1A !== isT1B) return isT1A ? -1 : 1;
@@ -455,7 +545,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       const trimSetting = Math.max(...grpBoards.map(b => b.trim_loss ?? 5));
 
       // Collect all distinct board type names for the header (should just be one now)
-      const boardTypes = [...new Set(grpBoards.map(b => b.board))];
+      const boardTypes = [...new Set(grpBoards.map(b => productionLengthBoardType(b)))];
       const boardType = boardTypes.join(" / ");
 
       // Group boards by cut patterns
@@ -500,7 +590,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
 
       // 组内一致性守卫 — 不同 strip_width 或 board 名称出现在同组意味着后端分组键污染
       const widthSet = new Set(grpBoards.map((b) => b.strip_width));
-      const typeSet = new Set(grpBoards.map((b) => b.board));
+      const typeSet = new Set(grpBoards.map((b) => productionLengthBoardType(b)));
       const colorSet = new Set(grpBoards.map((b) => b.color || DEFAULT_BOX_COLOR));
       const inconsistent = widthSet.size > 1 || typeSet.size > 1 || colorSet.size > 1;
       if (inconsistent) {
@@ -529,9 +619,10 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         inconsistent,
       } as EngineeringGroup & { inconsistent: boolean };
     });
-  }, [boards]);
+  }, [boards, productionLengthBoardType]);
 
   const displayGroups = useMemo(() => {
+    const useCrossSheetT0Stack = useStandardLengthPool;
     const usedT0Sheets = new Set<string>();
     const groups: Array<EngineeringGroup & { displayBoards: Board[]; displayT0Sheets: MachineT0Sheet[] }> = [];
     const t0SheetOrder = new Map(t0Sheets.map((sheet, idx) => [sheet.sheet_id, idx]));
@@ -546,39 +637,59 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         continue;
       }
 
-      for (const sheetId of allSheetIds) {
-        if (usedT0Sheets.has(sheetId)) continue;
-        const displayBoards = Array.from(new Map(
-          (t0BoardStripsBySheetId[sheetId] || []).map(({ board }) => [board.board_id, board])
-        ).values());
-        if (displayBoards.length === 0) continue;
+      if (!useCrossSheetT0Stack) {
+        for (const sheetId of allSheetIds) {
+          if (usedT0Sheets.has(sheetId)) continue;
+          const displayBoards = Array.from(new Map(
+            (t0BoardStripsBySheetId[sheetId] || []).map(({ board }) => [board.board_id, board])
+          ).values());
+          if (displayBoards.length === 0) continue;
 
-        const sheet = t0SheetById[sheetId];
-        usedT0Sheets.add(sheetId);
-        groups.push({
-          ...grp,
-          key: `${grp.key}::${sheetId}`,
-          sourceBoardCount: displayBoards.length,
-          boards: displayBoards,
-          displayBoards,
-          displayT0Sheets: sheet ? [sheet] : [],
-        });
+          const sheet = t0SheetById[sheetId];
+          usedT0Sheets.add(sheetId);
+          groups.push({
+            ...grp,
+            key: `${grp.key}::${sheetId}`,
+            sourceBoardCount: displayBoards.length,
+            boards: displayBoards,
+            displayBoards,
+            displayT0Sheets: sheet ? [sheet] : [],
+          });
+        }
+
+        if (nonT0Boards.length > 0) {
+          groups.push({
+            ...grp,
+            key: `${grp.key}::stock`,
+            sourceBoardCount: nonT0Boards.length,
+            boards: nonT0Boards,
+            displayBoards: nonT0Boards,
+            displayT0Sheets: [],
+          });
+        }
+        continue;
       }
 
-      if (nonT0Boards.length > 0) {
-        groups.push({
-          ...grp,
-          key: `${grp.key}::stock`,
-          sourceBoardCount: nonT0Boards.length,
-          boards: nonT0Boards,
-          displayBoards: nonT0Boards,
-          displayT0Sheets: [],
-        });
-      }
+      const displayT0Sheets = allSheetIds
+        .filter((sheetId) => !usedT0Sheets.has(sheetId))
+        .map((sheetId) => {
+          usedT0Sheets.add(sheetId);
+          return t0SheetById[sheetId];
+        })
+        .filter(Boolean) as MachineT0Sheet[];
+
+      groups.push({
+        ...grp,
+        key: `${grp.key}::t0-strips`,
+        sourceBoardCount: grp.boards.length,
+        boards: grp.boards,
+        displayBoards: grp.boards,
+        displayT0Sheets,
+      });
     }
 
     return groups.map((grp, idx) => ({ ...grp, engNo: idx + 1 }));
-  }, [engineeringGroups, t0BoardStripsBySheetId, t0SheetById, t0Sheets]);
+  }, [engineeringGroups, t0BoardStripsBySheetId, t0SheetById, t0Sheets, useStandardLengthPool]);
 
   /* ── Build a dedicated print window: clone actual DOM for pixel-perfect color output ── */
   const handlePrint = () => {
@@ -897,6 +1008,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         {(displayGroups as (EngineeringGroup & { inconsistent?: boolean; displayBoards: Board[]; displayT0Sheets: MachineT0Sheet[] })[]).map((grp) => {
           const groupT0Sheets = grp.displayT0Sheets;
           const hasT0RipStep = groupT0Sheets.length > 0;
+          const ripBatches = buildT0RipBatches(groupT0Sheets);
           const cutSections = buildCutSections(grp.displayBoards);
           const tileItems = cutSections.flatMap((section) =>
             section.patterns.map((pattern) => ({ section, pattern }))
@@ -929,32 +1041,21 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                     {mt("phaseATitle")}
                   </h4>
 
-                  {groupT0Sheets.map((sheet, sheetIdx) => {
-                    const t0Dims = parseT0SheetDims(sheet.sheet_id);
-                    const sheetStrips = t0BoardStripsBySheetId[sheet.sheet_id] || [];
-                    const recoveredRows = (sheet.recovered_strips || [])
-                      .filter((r) => typeof r.width === "number")
-                      .map((r, rIdx) => ({
-                        key: `recovered-${rIdx}`,
-                        width: r.width as number,
-                        pieces: 1,
-                    }));
-                    const ripRows = [
-                      ...sheetStrips.map(({ board }, stripIdx) => ({
-                        key: board.board_id || `strip-${stripIdx}`,
-                        width: getRipWidth(board) || board.actual_strip_width || 0,
-                        pieces: 1,
-                      })),
-                      ...recoveredRows,
-                    ];
-                    const sheetLabel = `${mt("rawSheetWord")} ${sheetIdx + 1}`;
-                    const sheetBadge = mt("singleSheet");
+                  {ripBatches.map((batch, batchIdx) => {
+                    const sampleSheet = t0SheetById[batch.sheetIds[0]];
+                    const sampleSheetOrdinal = groupT0Sheets.findIndex((sheet) => sheet.sheet_id === batch.sheetIds[0]);
+                    const sampleSheetNo = sampleSheetOrdinal >= 0 ? sampleSheetOrdinal + 1 : batchIdx + 1;
+                    const sheetStrips = sampleSheet ? t0BoardStripsBySheetId[sampleSheet.sheet_id] || [] : [];
+                    const sheetLabel = `${mt("rawSheetWord")} ${sampleSheetNo}`;
+                    const sheetBadge = batch.sheetIds.length > 1
+                      ? mt("stackBadge").replace("{n}", String(batch.sheetIds.length))
+                      : mt("singleSheet");
 
                     return (
-                      <div key={sheet.sheet_id} data-print-step={`${grp.engNo}-A-${sheetIdx}`} className="space-y-3 border-l-4 border-emerald-200/70 pl-4">
+                      <div key={batch.key} data-print-step={`${grp.engNo}-A-${batchIdx}`} className="space-y-3 border-l-4 border-emerald-200/70 pl-4">
                         <div data-print-step-header className="flex items-center gap-2 flex-wrap">
                           <h5 className="text-[15px] font-bold text-slate-800">{sheetLabel}</h5>
-                          <span data-print-board-count className="text-[14px] font-semibold text-emerald-600">
+                          <span data-print-board-count className={`text-[14px] font-semibold ${batch.sheetIds.length > 1 ? "text-red-600" : "text-emerald-600"}`}>
                             {sheetBadge}
                           </span>
                         </div>
@@ -962,7 +1063,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                         <div data-print-substep="setup" className="text-[13px] text-slate-600 bg-black/[0.02] p-4 rounded-xl border border-black/[0.05]">
                           <h6 className="text-[13px] font-semibold text-slate-700 mb-2">{mt("subStepSetup")}</h6>
                           <p>
-                            {mt("step1Desc2")} <strong className="text-black font-semibold">{t0Dims.length} mm</strong>{mt("step1Desc3")} <strong className="text-black font-semibold">{t0Dims.width} mm</strong>{mt("step1Desc4")} <strong className="text-black font-semibold">5 mm</strong>。
+                            {mt("step1Desc2")} <strong className="text-black font-semibold">{batch.totalLength} mm</strong>{mt("step1Desc3")} <strong className="text-black font-semibold">{batch.width} mm</strong>{mt("step1Desc4")} <strong className="text-black font-semibold">{batch.trim} mm</strong>。
                           </p>
                         </div>
 
@@ -978,32 +1079,32 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                                 </tr>
                               </thead>
                               <tbody>
-                                {ripRows.map((row, ri) => (
-                                  <tr key={row.key} className="border-b border-border/10 last:border-0 hover:bg-black/[0.01]">
-                                    <td className="text-center py-2.5 px-4 text-apple-gray">{ri + 1}</td>
-                                    <td className="text-center py-2.5 px-4 font-mono text-[15px]">{row.width}</td>
-                                    <td className="text-center py-2.5 px-4 text-[15px]">{row.pieces}</td>
-                                  </tr>
-                                ))}
+                                <tr className="border-b border-border/10 last:border-0 hover:bg-black/[0.01]">
+                                  <td className="text-center py-2.5 px-4 text-apple-gray">{batch.rowOrder + 1}</td>
+                                  <td className="text-center py-2.5 px-4 font-mono text-[15px]">{batch.ripWidth}</td>
+                                  <td className="text-center py-2.5 px-4 text-[15px]">{batch.pieces}</td>
+                                </tr>
                               </tbody>
                             </table>
                           </div>
                         </div>
 
-                        <div data-print-substep="layout" data-print-keep className="bg-emerald-50/30 p-4 rounded-xl border border-emerald-100">
-                          <h6 className="text-[13px] font-semibold text-slate-700 mb-3">{mt("subStepLayout")}</h6>
-                          <T0SheetCard
-                            sheetId={sheet.sheet_id}
-                            strips={sheetStrips}
-                            sizeColorMap={sizeColorMap}
-                            onBoardClick={() => {}}
-                            recoveredStrips={(sheet.recovered_strips || [])
-                              .filter((r) => typeof r.width === "number")
-                              .map((r) => ({ width: r.width as number, board_type: r.board_type ?? "", label: r.label }))}
-                            patternNumbering={patternNumbering}
-                            compactHeader={true}
-                          />
-                        </div>
+                        {sampleSheet && (
+                          <div data-print-substep="layout" data-print-keep className="bg-emerald-50/30 p-4 rounded-xl border border-emerald-100">
+                            <h6 className="text-[13px] font-semibold text-slate-700 mb-3">{mt("subStepLayout")}</h6>
+                            <T0SheetCard
+                              sheetId={sampleSheet.sheet_id}
+                              strips={sheetStrips}
+                              sizeColorMap={sizeColorMap}
+                              onBoardClick={() => {}}
+                              recoveredStrips={(sampleSheet.recovered_strips || [])
+                                .filter((r) => typeof r.width === "number")
+                                .map((r) => ({ width: r.width as number, board_type: r.board_type ?? "", label: r.label }))}
+                              patternNumbering={patternNumbering}
+                              compactHeader={true}
+                            />
+                          </div>
+                        )}
                       </div>
                     );
                   })}

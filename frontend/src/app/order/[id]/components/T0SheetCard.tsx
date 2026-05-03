@@ -1,17 +1,19 @@
 "use client";
 import React, { useMemo } from "react";
 import { useLanguage } from "@/lib/i18n";
-import type { Board, SizeColor, PatternNumbering } from "./types";
+import type { Board, SizeColor, PatternNumbering, RipStackInfo } from "./types";
 import { T0_STRIP_COLORS } from "./constants";
 import { clamp, getRipWidth, safeNum } from "./utils";
 
-export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [], patternNumbering, compactHeader = false }: {
+export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [], patternNumbering, stackLookup, ripStackLookup, compactHeader = false }: {
   sheetId: string;
   strips: { board: Board; index: number }[];
   sizeColorMap: Record<string, SizeColor>;
   onBoardClick: (b: Board) => void;
   recoveredStrips?: { width: number; board_type: string; label?: string }[];
   patternNumbering: PatternNumbering;
+  stackLookup?: Record<number, { groupSize: number; stackOf: number; isLeader: boolean }>;
+  ripStackLookup?: Record<number, RipStackInfo>;
   compactHeader?: boolean;
 }) {
   const { t } = useLanguage();
@@ -156,6 +158,11 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
                     <div className="absolute left-1 top-1 rounded bg-white/80 px-1 py-0.5 text-[9px] font-bold shadow-sm" style={{ color: stripColor.text }}>
                       {patternNumbering.byIndex[idx] ? `P${patternNumbering.byIndex[idx]}` : `${ripW}mm`}
                     </div>
+                    {((ripStackLookup?.[idx]?.stackOf || stackLookup?.[idx]?.stackOf || 1) > 1) && (
+                      <div className="absolute right-1 top-1 rounded bg-red-600 px-1 py-0.5 text-[8px] font-bold text-white shadow-sm">
+                        Stack {ripStackLookup?.[idx]?.stackOf || stackLookup?.[idx]?.stackOf}
+                      </div>
+                    )}
                   </button>
                 );
               })}

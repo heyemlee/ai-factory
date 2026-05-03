@@ -230,20 +230,51 @@ function compactInputRuns(rows: Array<{ width: number; boardType: string }>) {
   return runs;
 }
 
-function buildCutSections(sectionBoards: Board[]): CutPlanSection[] {
+function t0RipRowsForSheet(sheet: CutPlanT0Sheet, boards: Board[]) {
+  const sheetStrips = boards
+    .filter((board) => board.t0_sheet_id === sheet.sheet_id)
+    .sort((a, b) => (a.t0_strip_position || 0) - (b.t0_strip_position || 0));
+  return compactInputRuns([
+    ...sheetStrips.map((board) => ({
+      width: getRipWidth(board) || board.actual_strip_width || 0,
+      boardType: board.board,
+    })),
+    ...(sheet.recovered_strips || [])
+      .filter((recovered) => typeof recovered.width === "number")
+      .map((recovered) => ({
+        width: recovered.width as number,
+        boardType: recovered.board_type || sheetStrips[0]?.board || "T0",
+      })),
+  ]);
+}
+
+function isStackEfficiencyResult(cutResult?: CutResult | null) {
+  return (cutResult?.cut_algorithm || cutResult?.summary?.cut_algorithm) === "stack_efficiency";
+}
+
+function productionLengthBoardType(board: Board, mergeStandardPool: boolean) {
+  if (!mergeStandardPool) return board.board;
+  const width = Math.round((getRipWidth(board) || board.strip_width || 0) * 10) / 10;
+  if (width === 608.6) return "T1-608.6x2438.4";
+  if (width === 303.8) return "T1-303.8x2438.4";
+  return board.board;
+}
+
+function buildCutSections(sectionBoards: Board[], mergeStandardPool = false): CutPlanSection[] {
   const sectionMap: Record<string, Board[]> = {};
   for (const board of sectionBoards) {
     const width = board.strip_width || 0;
     const color = board.color || DEFAULT_BOX_COLOR;
-    const key = `${color}|||${width}|||${board.board}|||${board.board_size}|||${board.trim_loss ?? 5}`;
+    const boardType = productionLengthBoardType(board, mergeStandardPool);
+    const key = `${color}|||${width}|||${boardType}|||${board.board_size}|||${board.trim_loss ?? 5}`;
     if (!sectionMap[key]) sectionMap[key] = [];
     sectionMap[key].push(board);
   }
 
   return Object.entries(sectionMap)
     .sort(([keyA, boardsA], [keyB, boardsB]) => {
-      const typeA = boardsA[0]?.board || "";
-      const typeB = boardsB[0]?.board || "";
+      const typeA = keyA.split("|||")[2] || boardsA[0]?.board || "";
+      const typeB = keyB.split("|||")[2] || boardsB[0]?.board || "";
       const isT1A = typeA.toUpperCase().includes("T1");
       const isT1B = typeB.toUpperCase().includes("T1");
       if (isT1A !== isT1B) return isT1A ? -1 : 1;
@@ -286,7 +317,7 @@ function buildCutSections(sectionBoards: Board[]): CutPlanSection[] {
       });
 
       return {
-        boardType: [...new Set(groupedBoards.map((board) => board.board))].join(" / "),
+        boardType: productionLengthBoardType(sample, mergeStandardPool),
         boardWidth: getRipWidth(sample) || width,
         totalLength: parseTotalLength(sample.board_size),
         trimSetting: Math.max(...groupedBoards.map((board) => board.trim_loss ?? 5)),
@@ -308,6 +339,7 @@ export function CutPlanTable({
   const { locale } = useLanguage();
   const { getColor } = useBoxColors();
   const lc = copy[(locale as LocaleKey) || "en"] || copy.en;
+  const mergeStandardPool = isStackEfficiencyResult(cutResult);
   const cabinetCount = useMemo(() => {
     const breakdownCount = Object.keys(cutResult?.cabinet_breakdown || {}).length;
     if (breakdownCount > 0) return breakdownCount;
@@ -333,83 +365,86 @@ export function CutPlanTable({
   const planBatches = useMemo(() => {
     const t0Batches: CutPlanBatch[] = [];
     const t1Batches: CutPlanBatch[] = [];
-    const t0PatternMap = new Map<string, {
+    const t0RipMap = new Map<string, {
       order: number;
+      rowOrder: number;
       sheetIds: string[];
       totalLength: number;
       width: number;
       trim: number;
-      runs: Array<{ width: number; boardType: string; pieces: number }>;
+      ripWidth: number;
+      pieces: number;
     }>();
+
+    // Derive T0 trim from cutResult: per-sheet trim_loss → summary config → fallback 5
+    const globalTrim = cutResult?.summary?.config_trim_loss_mm ?? 5;
 
     t0Sheets.forEach((sheet, sheetIdx) => {
       const dims = parseT0SheetDims(sheet.sheet_id);
-      const sheetStrips = boards
-        .filter((board) => board.t0_sheet_id === sheet.sheet_id)
-        .sort((a, b) => (a.t0_strip_position || 0) - (b.t0_strip_position || 0));
-      const ripRows = compactInputRuns([
-        ...sheetStrips.map((board) => ({
-          width: getRipWidth(board) || board.actual_strip_width || 0,
-          boardType: board.board,
-        })),
-        ...(sheet.recovered_strips || [])
-          .filter((recovered) => typeof recovered.width === "number")
-          .map((recovered) => ({
-            width: recovered.width as number,
-            boardType: recovered.board_type || sheetStrips[0]?.board || "T0",
-          })),
-      ]);
+      const ripRows = t0RipRowsForSheet(sheet, boards);
       if (ripRows.length === 0) return;
 
-      const patternKey = [
-        numericKey(dims.length),
-        numericKey(dims.width),
-        "5.000",
-        ripRows.map((row) => `${row.boardType}:${numericKey(row.width)}:${row.pieces}`).join("|"),
-      ].join("|||");
-      const existing = t0PatternMap.get(patternKey);
-      if (existing) {
-        existing.sheetIds.push(sheet.sheet_id);
-      } else {
-        t0PatternMap.set(patternKey, {
-          order: sheetIdx,
-          sheetIds: [sheet.sheet_id],
-          totalLength: dims.length,
-          width: dims.width,
-          trim: 5,
-          runs: ripRows,
-        });
-      }
+      const sheetTrim: number =
+        typeof (sheet as Record<string, unknown>).trim_loss === "number"
+          ? (sheet as Record<string, unknown>).trim_loss as number
+          : globalTrim;
+
+      ripRows.forEach((row, rowIdx) => {
+        const ripKey = [
+          rowIdx,
+          numericKey(dims.length),
+          numericKey(dims.width),
+          numericKey(sheetTrim),
+          row.boardType,
+          numericKey(row.width),
+          row.pieces,
+        ].join("|||");
+        const existing = t0RipMap.get(ripKey);
+        if (existing) {
+          existing.sheetIds.push(sheet.sheet_id);
+        } else {
+          t0RipMap.set(ripKey, {
+            order: sheetIdx,
+            rowOrder: rowIdx,
+            sheetIds: [sheet.sheet_id],
+            totalLength: dims.length,
+            width: dims.width,
+            trim: sheetTrim,
+            ripWidth: row.width,
+            pieces: row.pieces,
+          });
+        }
+      });
     });
 
     let t0BatchNo = 1;
-    Array.from(t0PatternMap.values())
-      .sort((a, b) => a.order - b.order)
-      .forEach((pattern) => {
-        for (let start = 0; start < pattern.sheetIds.length; start += 4) {
-          const stackQty = pattern.sheetIds.slice(start, start + 4).length;
+    Array.from(t0RipMap.values())
+      .sort((a, b) => a.rowOrder - b.rowOrder || a.order - b.order)
+      .forEach((rip) => {
+        for (let start = 0; start < rip.sheetIds.length; start += 4) {
+          const stackQty = rip.sheetIds.slice(start, start + 4).length;
           const batchKey = `A${t0BatchNo++}`;
           t0Batches.push({
             key: batchKey,
             take: lc.rawSheets,
             stackQty,
             stackUnit: lc.sheets,
-            totalLength: pattern.totalLength,
-            width: pattern.width,
-            trim: pattern.trim,
+            totalLength: rip.totalLength,
+            width: rip.width,
+            trim: rip.trim,
             inputLabel: lc.ripWidth,
-            rows: pattern.runs.map((row, rowIdx) => ({
-              key: `${batchKey}-${rowIdx}`,
-              rowNo: rowIdx + 1,
-              inputValue: row.width,
-              pieces: row.pieces,
-            })),
+            rows: [{
+              key: `${batchKey}-0`,
+              rowNo: rip.rowOrder + 1,
+              inputValue: rip.ripWidth,
+              pieces: rip.pieces,
+            }],
           });
         }
       });
 
     let t1BatchNo = 1;
-    buildCutSections(boards).forEach((section, sectionIdx) => {
+    buildCutSections(boards, mergeStandardPool).forEach((section, sectionIdx) => {
       section.patterns.forEach((pattern, patternIdx) => {
         const batchKey = `B${t1BatchNo++}`;
         t1Batches.push({
@@ -431,8 +466,24 @@ export function CutPlanTable({
       });
     });
 
+    // Sort: stack qty descending (4>3>2>1), then by input value ascending
+    t0Batches.sort((a, b) => {
+      if (a.stackQty !== b.stackQty) return b.stackQty - a.stackQty;
+      const aVal = a.rows[0]?.inputValue || 0;
+      const bVal = b.rows[0]?.inputValue || 0;
+      return aVal - bVal;
+    });
+
+    t1Batches.sort((a, b) => {
+      if (a.stackQty !== b.stackQty) return b.stackQty - a.stackQty;
+      if (Math.abs(a.width - b.width) > 0.01) return a.width - b.width;
+      const aVal = a.rows[0]?.inputValue || 0;
+      const bVal = b.rows[0]?.inputValue || 0;
+      return aVal - bVal;
+    });
+
     return { t0Batches, t1Batches };
-  }, [boards, lc.cutLength, lc.rawSheets, lc.ripWidth, lc.sheets, lc.strips, lc.t1Strips, t0Sheets]);
+  }, [boards, cutResult, lc.cutLength, lc.rawSheets, lc.ripWidth, lc.sheets, lc.strips, lc.t1Strips, mergeStandardPool, t0Sheets]);
 
   const selectedColor = boards[0]?.color || DEFAULT_BOX_COLOR;
 
@@ -561,21 +612,17 @@ export function CutPlanTable({
     <div className="overflow-x-auto">
       <table className="w-full table-auto text-[12px]">
         <colgroup>
-          <col style={{ width: "20%" }} />
-          <col style={{ width: "14%" }} />
-          <col style={{ width: "14%" }} />
-          <col style={{ width: "10%" }} />
-          <col style={{ width: "8%" }} />
-          <col style={{ width: "7%" }} />
+          <col style={{ width: "28%" }} />
           <col style={{ width: "18%" }} />
-          <col style={{ width: "9%" }} />
+          <col style={{ width: "12%" }} />
+          <col style={{ width: "10%" }} />
+          <col style={{ width: "22%" }} />
+          <col style={{ width: "10%" }} />
         </colgroup>
         <thead>
           <tr className="bg-black/[0.03] border-b border-border/40">
             <th className="text-left py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.take}</th>
             <th className="text-center py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.stack}</th>
-            <th className="text-right py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.totalLength}</th>
-            <th className="text-right py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.width}</th>
             <th className="text-right py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.trim}</th>
             <th className="text-center py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.row}</th>
             <th className="text-right py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{inputLabel} (mm)</th>
@@ -599,12 +646,6 @@ export function CutPlanTable({
                       ) : (
                         <span>1</span>
                       )}
-                    </td>
-                    <td rowSpan={batch.rows.length} className="py-2 px-1.5 align-top text-right font-mono whitespace-nowrap border-r border-border/20">
-                      {fmt(batch.totalLength)}
-                    </td>
-                    <td rowSpan={batch.rows.length} className="py-2 px-1.5 align-top text-right font-mono whitespace-nowrap border-r border-border/20">
-                      {fmt(batch.width)}
                     </td>
                     <td rowSpan={batch.rows.length} className="py-2 px-1.5 align-top text-right font-mono whitespace-nowrap border-r border-border/20">
                       {fmt(batch.trim)}

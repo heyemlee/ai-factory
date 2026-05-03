@@ -104,6 +104,34 @@ def _summarize_box_colors(cabinet_breakdown: dict | None) -> str:
     return " + ".join(f"{count}×{color}" for color, count in sorted(counts.items()))
 
 
+def _upload_settings(order: dict) -> dict:
+    """Read upload settings from dedicated columns or legacy-compatible JSON."""
+    payload = order.get("cut_result_json")
+    if isinstance(payload, dict):
+        settings = payload.get("upload_settings")
+        if isinstance(settings, dict):
+            return settings
+    return {}
+
+
+def _is_missing_order_settings_column(exc: Exception) -> bool:
+    text = str(exc)
+    return (
+        "cut_algorithm" in text
+        or "trim_loss_mm" in text
+        or "PGRST204" in text
+        or "schema cache" in text
+    )
+
+
+def _progress_payload(order: dict, pct: int, msg: str) -> dict:
+    payload = {"progress": pct, "message": msg}
+    settings = _upload_settings(order)
+    if settings:
+        payload["upload_settings"] = settings
+    return payload
+
+
 def fetch_pending_orders():
     """Get all pending orders from Supabase."""
     result = supabase.table("orders").select("*").eq("status", "pending").order("created_at").execute()
@@ -116,7 +144,7 @@ def claim_order(order: dict) -> bool:
         supabase.table("orders")
         .update({
             "status": "processing",
-            "cut_result_json": {"progress": 5, "message": "开始处理订单..."},
+            "cut_result_json": _progress_payload(order, 5, "开始处理订单..."),
         })
         .eq("id", order["id"])
         .eq("status", "pending")
@@ -164,7 +192,7 @@ def process_order(order: dict):
     def update_progress(pct: int, msg: str):
         supabase.table("orders").update({
             "status": "processing",
-            "cut_result_json": {"progress": pct, "message": msg}
+            "cut_result_json": _progress_payload(order, pct, msg)
         }).eq("id", order["id"]).execute()
 
     if order.get("status") == "pending" and not claim_order(order):
@@ -255,18 +283,38 @@ def process_order(order: dict):
         # 3. Run Cutting Engine
         update_progress(60, "正在进行 AI 智能排版裁切计算...")
         print(f"\n  Step 2: Cutting Engine")
-        from cutting.cutting_engine import run_engine, deduct_inventory_supabase
 
         cut_result_path = os.path.join(tempfile.gettempdir(), f"{job_id}_cut_result.json")
-        force_t0_start = order.get("cut_mode") == "t0_start" or bool(order.get("force_t0_start"))
+        upload_settings = _upload_settings(order)
+        cut_mode = order.get("cut_mode") or upload_settings.get("cut_mode") or "inventory_first"
+        force_t0_start = cut_mode == "t0_start" or bool(order.get("force_t0_start"))
+        cut_algorithm = order.get("cut_algorithm") or upload_settings.get("cut_algorithm") or "efficient"
+        trim_loss_mm = float(order.get("trim_loss_mm") or upload_settings.get("trim_loss_mm") or 2)
         if force_t0_start:
             print("  🟧 Production mode: T0 Start (ignore T1 inventory)")
-        result = run_engine(
-            parts_path=parts_path,
-            output_path=cut_result_path,
-            cabinet_breakdown=cabinet_breakdown,
-            force_t0_start=force_t0_start,
-        )
+        if cut_algorithm == "stack_efficiency":
+            print(f"  🟦 Algorithm: Stack Efficiency (trim={trim_loss_mm:g}mm)")
+            from cutting.stack_efficiency_engine import run_engine as run_stack_engine
+            result = run_stack_engine(
+                parts_path=parts_path,
+                output_path=cut_result_path,
+                cabinet_breakdown=cabinet_breakdown,
+                force_t0_start=force_t0_start,
+                trim_loss_mm=trim_loss_mm,
+            )
+        else:
+            print("  🟩 Algorithm: Efficient (existing engine config)")
+            from cutting.cutting_engine import run_engine as run_efficient_engine
+            result = run_efficient_engine(
+                parts_path=parts_path,
+                output_path=cut_result_path,
+                cabinet_breakdown=cabinet_breakdown,
+                force_t0_start=force_t0_start,
+            )
+        result["cut_algorithm"] = cut_algorithm
+        result.setdefault("summary", {})["cut_algorithm"] = cut_algorithm
+        if cut_algorithm == "stack_efficiency":
+            result["summary"]["config_trim_loss_mm"] = trim_loss_mm
 
         update_progress(95, "生成最终排版报告...")
 
@@ -311,7 +359,7 @@ def process_order(order: dict):
         # completed status already supported by the DB constraint and frontend.
         status_value = "completed"
 
-        supabase.table("orders").update({
+        update_payload = {
             "status": status_value,
             "utilization": summary["overall_utilization"],
             "boards_used": summary["boards_used"],
@@ -319,8 +367,20 @@ def process_order(order: dict):
             "cabinets_summary": cab_summary,
             "cut_result_json": result,
             "cut_mode": "t0_start" if force_t0_start else "inventory_first",
+            "cut_algorithm": cut_algorithm,
+            "trim_loss_mm": trim_loss_mm if cut_algorithm == "stack_efficiency" else order.get("trim_loss_mm"),
             "completed_at": datetime.now().isoformat(),
-        }).eq("id", order["id"]).execute()
+        }
+        try:
+            supabase.table("orders").update(update_payload).eq("id", order["id"]).execute()
+        except Exception as update_error:
+            if not _is_missing_order_settings_column(update_error):
+                raise
+            fallback_payload = dict(update_payload)
+            fallback_payload.pop("cut_algorithm", None)
+            fallback_payload.pop("trim_loss_mm", None)
+            print("  ⚠️  Supabase REST schema missing order setting columns; writing settings inside cut_result_json only")
+            supabase.table("orders").update(fallback_payload).eq("id", order["id"]).execute()
 
         # 6. Insert BOM history
         supabase.table("bom_history").delete().eq("job_id", job_id).execute()
