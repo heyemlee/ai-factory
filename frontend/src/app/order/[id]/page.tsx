@@ -1,7 +1,7 @@
 "use client";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Layers, Scissors, AlertTriangle, Table2, LayoutGrid, Box, CheckCircle2, RefreshCw } from "lucide-react";
+import { ArrowLeft, Layers, Scissors, AlertTriangle, Table2, LayoutGrid, Box, CheckCircle2 } from "lucide-react";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { revertCut } from "@/lib/order_actions";
@@ -38,7 +38,6 @@ export default function OrderDetail() {
   const [machineLang, setMachineLang] = useState<"zh" | "en" | "es">("zh");
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [isReverting, setIsReverting] = useState(false);
-  const [isRequestingT0Start, setIsRequestingT0Start] = useState(false);
   const [selectedCabinetId, setSelectedCabinetId] = useState<string | null>(null);
   const [hoveredPartId, setHoveredPartId] = useState<string | null>(null);
   const [selectedColor, setSelectedColor] = useState<string>(DEFAULT_BOX_COLOR);
@@ -102,12 +101,6 @@ export default function OrderDetail() {
     }
   }, [colorOptions, selectedColor]);
 
-  const selectedColorSummary = summary?.by_color?.[selectedColor];
-  const selectedUtilization = selectedColorSummary?.overall_utilization ?? (
-    boards.length > 0
-      ? boards.reduce((sum, b) => sum + b.utilization, 0) / boards.length
-      : 0
-  );
   const selectedCutResult = useMemo<CutResult | null>(() => {
     if (!cutResult) return null;
     const cabinet_breakdown = cutResult.cabinet_breakdown
@@ -381,40 +374,6 @@ export default function OrderDetail() {
     }
   };
 
-  const handleRequestT0Start = async () => {
-    if (!order) return;
-    if (!confirm(t("orderDetail.t0StartConfirm"))) return;
-    setIsRequestingT0Start(true);
-    try {
-      const { error } = await supabase
-        .from("orders")
-        .update({
-          status: "pending",
-          cut_mode: "t0_start",
-          cut_result_json: null,
-          utilization: null,
-          boards_used: null,
-          total_parts: null,
-          completed_at: null,
-          cut_confirmed_at: null,
-          t0_start_requested_at: new Date().toISOString(),
-          extra_boards_used: [],
-        })
-        .eq("id", order.id);
-      if (error) throw error;
-      setOrder({
-        ...order,
-        status: "pending",
-        cut_mode: "t0_start",
-        cut_result_json: null,
-      });
-    } catch (e) {
-      alert(t("orderDetail.t0StartFailed") + (e instanceof Error ? e.message : String(e)));
-    } finally {
-      setIsRequestingT0Start(false);
-    }
-  };
-
   if (loading) {
     return (
       <div className="w-full py-4 flex items-center justify-center h-[60vh]">
@@ -443,7 +402,6 @@ export default function OrderDetail() {
 
   const isCutDone = order.status === "cut_done";
   const isCompleted = order.status === "completed";
-  const isT0Start = order.cut_mode === "t0_start" || cutResult.cut_mode === "t0_start" || summary?.cut_mode === "t0_start";
 
   return (
     <div className="w-full py-4 space-y-5">
@@ -474,20 +432,6 @@ export default function OrderDetail() {
             </div>
           ) : isCompleted ? (
             <>
-              {!isT0Start && (
-                <button
-                  onClick={handleRequestT0Start}
-                  disabled={isRequestingT0Start}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-[13px] font-medium bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors disabled:opacity-50"
-                >
-                  <RefreshCw size={14} className={isRequestingT0Start ? "animate-spin" : ""} /> {t("orderDetail.t0Start")}
-                </button>
-              )}
-              {isT0Start && (
-                <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full text-[13px] font-medium bg-orange-50 text-orange-700">
-                  <Scissors size={14} /> T0 Start
-                </span>
-              )}
               <button
                 onClick={() => setShowConfirmModal(true)}
                 className="inline-flex items-center gap-1.5 px-5 py-2 rounded-full text-[13px] font-medium bg-apple-blue text-white hover:bg-apple-blue/90 shadow-sm transition-colors"
@@ -588,7 +532,6 @@ export default function OrderDetail() {
           boards={boards}
           orderLabel={orderDisplayName}
           cutResult={selectedCutResult}
-          selectedUtilization={selectedUtilization}
         />
       )}
 

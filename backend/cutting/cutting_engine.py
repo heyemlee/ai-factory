@@ -1126,7 +1126,7 @@ def _run_pipeline_for_color(parts: list, inventory: dict, color: str,
     Returns a partial result dict with keys: boards, t0_plan, used_inventory,
     recovered_inventory, t0_sheets_used, t0_recovered_strips.
     """
-    from agents.t0_optimizer import optimize_t0_from_strips, recover_leftover
+    from cutting.t0_optimizer import optimize_t0_from_strips, recover_leftover
 
     print(f"\n{'─' * 60}")
     print(f"  🎨 Color partition: {color}  ({len(parts)} parts)")

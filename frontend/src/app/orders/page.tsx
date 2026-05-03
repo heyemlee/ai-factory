@@ -1,10 +1,13 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { UploadCloud, PieChart, Trash2, AlertOctagon, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
+import { UploadCloud, Trash2, AlertOctagon, AlertTriangle, ChevronDown, ChevronUp, Package, Scissors, Zap, Layers } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { revertCut } from "@/lib/order_actions";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/lib/i18n";
+
+type CutMode = "inventory_first" | "t0_start";
+type CutAlgorithm = "efficient" | "stack_efficiency";
 
 interface Order {
   id: string;
@@ -31,6 +34,8 @@ export default function Orders() {
   const [deleting, setDeleting] = useState(false);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [isDeleteMode, setIsDeleteMode] = useState(false);
+  const [uploadCutMode, setUploadCutMode] = useState<CutMode>("inventory_first");
+  const [cutAlgorithm, setCutAlgorithm] = useState<CutAlgorithm>("efficient");
 
   const openDeleteModal = useCallback((ordersList: Order[]) => {
     setDeleteError(null);
@@ -123,12 +128,6 @@ export default function Orders() {
     return () => clearInterval(timer);
   }, [orders, fetchOrders]);
 
-  // Calculate overall utilization from completed orders
-  const completedOrders = orders.filter(o => (o.status === "completed" || o.status === "cut_done") && o.utilization);
-  const overallUtil = completedOrders.length > 0
-    ? (completedOrders.reduce((sum, o) => sum + (o.utilization || 0), 0) / completedOrders.length * 100).toFixed(1)
-    : "—";
-
   const handleFileDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
@@ -190,7 +189,7 @@ export default function Orders() {
         filename: file.name,
         status: "pending",
         file_url: fileUrl,
-        cut_mode: "t0_start",
+        cut_mode: uploadCutMode,
       });
 
     if (insertError) {
@@ -216,6 +215,40 @@ export default function Orders() {
         <div>
           <h1 className="text-[32px] font-semibold tracking-tight">{t("orders.title")}</h1>
           <p className="text-apple-gray text-[15px] mt-1">{t("orders.subtitle")}</p>
+        </div>
+
+        <div className="w-full sm:w-auto">
+          <div className="text-[12px] font-semibold text-apple-gray mb-2 sm:text-right">
+            {t("orders.algorithm")}
+          </div>
+          <div className="grid grid-cols-2 gap-1 rounded-full bg-black/5 p-1 w-full sm:min-w-[360px]">
+            <button
+              type="button"
+              aria-pressed={cutAlgorithm === "efficient"}
+              onClick={() => setCutAlgorithm("efficient")}
+              className={`inline-flex min-w-0 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-[13px] font-semibold transition-colors whitespace-nowrap ${
+                cutAlgorithm === "efficient"
+                  ? "bg-white text-foreground shadow-sm"
+                  : "text-apple-gray hover:text-foreground"
+              }`}
+            >
+              <Zap size={14} className="shrink-0" />
+              <span className="truncate">{t("orders.algorithm.efficient")}</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={cutAlgorithm === "stack_efficiency"}
+              onClick={() => setCutAlgorithm("stack_efficiency")}
+              className={`inline-flex min-w-0 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-[13px] font-semibold transition-colors whitespace-nowrap ${
+                cutAlgorithm === "stack_efficiency"
+                  ? "bg-white text-foreground shadow-sm"
+                  : "text-apple-gray hover:text-foreground"
+              }`}
+            >
+              <Layers size={14} className="shrink-0" />
+              <span className="truncate">{t("orders.algorithm.stackEfficiency")}</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -244,6 +277,41 @@ export default function Orders() {
                   <span>{uploadError}</span>
                 </div>
               )}
+
+              <div className="w-full max-w-[300px] mb-4">
+                <div className="text-[12px] font-semibold text-apple-gray mb-2 text-center">
+                  {t("orders.cutMode")}
+                </div>
+                <div className="grid grid-cols-2 gap-1 rounded-full bg-black/5 p-1">
+                  <button
+                    type="button"
+                    aria-pressed={uploadCutMode === "inventory_first"}
+                    onClick={() => setUploadCutMode("inventory_first")}
+                    className={`inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-2 text-[13px] font-semibold transition-colors whitespace-nowrap ${
+                      uploadCutMode === "inventory_first"
+                        ? "bg-white text-foreground shadow-sm"
+                        : "text-apple-gray hover:text-foreground"
+                    }`}
+                  >
+                    <Package size={14} />
+                    {t("orders.cutMode.inventory")}
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={uploadCutMode === "t0_start"}
+                    onClick={() => setUploadCutMode("t0_start")}
+                    className={`inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-2 text-[13px] font-semibold transition-colors whitespace-nowrap ${
+                      uploadCutMode === "t0_start"
+                        ? "bg-white text-foreground shadow-sm"
+                        : "text-apple-gray hover:text-foreground"
+                    }`}
+                  >
+                    <Scissors size={14} />
+                    {t("orders.cutMode.t0")}
+                  </button>
+                </div>
+              </div>
+
               <button
                 onClick={handleFileSelect}
                 disabled={uploading}

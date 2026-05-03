@@ -1,5 +1,5 @@
 "use client";
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState } from "react";
 
 type Locale = "en" | "zh" | "es";
 
@@ -41,6 +41,12 @@ const translations = {
     "orders.failReason": "Failed Reason",
     "orders.viewReason": "View Reason",
     "orders.uploading": "Uploading...",
+    "orders.algorithm": "Cut Algorithm",
+    "orders.algorithm.efficient": "Efficient Algorithm",
+    "orders.algorithm.stackEfficiency": "Stack Efficiency Algorithm",
+    "orders.cutMode": "Cut Start",
+    "orders.cutMode.inventory": "T1 Stock",
+    "orders.cutMode.t0": "T0 Sheet",
     
     "dash.overview": "Overview",
     "dash.subtitle": "Real-time factory metrics and system status.",
@@ -70,9 +76,6 @@ const translations = {
     "orderDetail.dataTable": "Text Cut Plan",
     "orderDetail.cabinetView": "Cabinet View",
     "orderDetail.confirmCut": "Confirm Cut Done",
-    "orderDetail.t0Start": "Start From T0",
-    "orderDetail.t0StartConfirm": "Regenerate this order from T0 raw sheets? Existing T1 inventory will be ignored for this run.",
-    "orderDetail.t0StartFailed": "T0 start request failed: ",
     "orderDetail.processing": "Processing...",
     "orderDetail.back": "Back to Orders",
     "orderDetail.boardsCount": "Total Boards",
@@ -239,6 +242,12 @@ const translations = {
     "orders.failReason": "失败原因",
     "orders.viewReason": "查看原因",
     "orders.uploading": "上传中...",
+    "orders.algorithm": "裁切算法",
+    "orders.algorithm.efficient": "高效算法",
+    "orders.algorithm.stackEfficiency": "叠切效率算法",
+    "orders.cutMode": "裁切起点",
+    "orders.cutMode.inventory": "T1 库存",
+    "orders.cutMode.t0": "T0 原板",
     
     "dash.overview": "总览",
     "dash.subtitle": "实时工厂指标和系统状态。",
@@ -268,9 +277,6 @@ const translations = {
     "orderDetail.dataTable": "Text Cut Plan",
     "orderDetail.cabinetView": "柜体视图",
     "orderDetail.confirmCut": "确认裁切完成",
-    "orderDetail.t0Start": "从 T0 开始裁切",
-    "orderDetail.t0StartConfirm": "确定要把这个订单重新生成为 T0 原板裁切方案吗？本次会忽略现有 T1 库存。",
-    "orderDetail.t0StartFailed": "T0 开始裁切请求失败：",
     "orderDetail.processing": "处理中...",
     "orderDetail.back": "返回订单列表",
     "orderDetail.boardsCount": "大板数量",
@@ -437,6 +443,12 @@ const translations = {
     "orders.failReason": "Razón de fallo",
     "orders.viewReason": "Ver razón",
     "orders.uploading": "Subiendo...",
+    "orders.algorithm": "Algoritmo de corte",
+    "orders.algorithm.efficient": "Algoritmo eficiente",
+    "orders.algorithm.stackEfficiency": "Algoritmo de apilado",
+    "orders.cutMode": "Inicio de corte",
+    "orders.cutMode.inventory": "Stock T1",
+    "orders.cutMode.t0": "Hoja T0",
     
     "dash.overview": "Visión General",
     "dash.subtitle": "Métricas de fábrica y estado del sistema en tiempo real.",
@@ -466,9 +478,6 @@ const translations = {
     "orderDetail.dataTable": "Text Cut Plan",
     "orderDetail.cabinetView": "Vista de Gabinete",
     "orderDetail.confirmCut": "Confirmar Corte",
-    "orderDetail.t0Start": "Iniciar desde T0",
-    "orderDetail.t0StartConfirm": "¿Regenerar este pedido desde hojas T0? Se ignorará el inventario T1 existente para esta corrida.",
-    "orderDetail.t0StartFailed": "Error al solicitar inicio desde T0: ",
     "orderDetail.processing": "Procesando...",
     "orderDetail.back": "Volver a Pedidos",
     "orderDetail.boardsCount": "Total Tableros",
@@ -611,14 +620,11 @@ interface LanguageContextType {
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocale] = useState<Locale>("en");
-
-  useEffect(() => {
+  const [locale, setLocale] = useState<Locale>(() => {
+    if (typeof window === "undefined") return "en";
     const saved = localStorage.getItem("app_locale") as Locale;
-    if (saved && ["en", "zh", "es"].includes(saved)) {
-      setLocale(saved);
-    }
-  }, []);
+    return saved && ["en", "zh", "es"].includes(saved) ? saved : "en";
+  });
 
   const handleSetLocale = (newLocale: Locale) => {
     setLocale(newLocale);

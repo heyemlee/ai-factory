@@ -2,8 +2,8 @@
 
 import React, { useMemo, useRef } from "react";
 import { Printer } from "lucide-react";
-import type { Board, CutResult, EngineeringGroup } from "./types";
-import { boardFingerprint, getRipWidth, nominalStockWidthForBoard, parseBoardDims } from "./utils";
+import type { Board, CutResult } from "./types";
+import { boardFingerprint, getRipWidth } from "./utils";
 import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
 import { useLanguage } from "@/lib/i18n";
 
@@ -49,7 +49,6 @@ interface CutPlanPattern {
 }
 
 interface CutPlanSection {
-  color: string;
   boardType: string;
   boardWidth: number;
   totalLength: number;
@@ -57,26 +56,23 @@ interface CutPlanSection {
   patterns: CutPlanPattern[];
 }
 
-interface DisplayGroup extends EngineeringGroup {
-  displayBoards: Board[];
-  displayT0Sheets: CutPlanT0Sheet[];
-}
-
-interface TableRow {
+interface BatchInputRow {
   key: string;
-  setupNo: number;
-  step: string;
-  inputType: string;
-  boardType: string;
-  color: string;
-  sourceId: string;
-  totalLength: number;
-  width: number;
-  trim: number;
-  stackQty: number;
   rowNo: number;
   inputValue: number;
   pieces: number;
+}
+
+interface CutPlanBatch {
+  key: string;
+  take: string;
+  stackQty: number;
+  stackUnit: string;
+  totalLength: number;
+  width: number;
+  trim: number;
+  inputLabel: string;
+  rows: BatchInputRow[];
 }
 
 const copy: Record<LocaleKey, Record<string, string>> = {
@@ -85,9 +81,9 @@ const copy: Record<LocaleKey, Record<string, string>> = {
     print: "Print",
     orderNo: "Order No.",
     color: "Color",
+    cabinets: "Cabinets",
     setups: "Machine Setups",
     boards: "Boards",
-    inputs: "Input Rows",
     utilization: "Utilization",
     setup: "Setup",
     step: "Step",
@@ -103,8 +99,19 @@ const copy: Record<LocaleKey, Record<string, string>> = {
     pieces: "Pieces",
     t0Rip: "A T0 Rip",
     lengthCut: "B Length Cut",
+    t0SectionTitle: "T0 ➡️ T1",
+    t1SectionTitle: "T1 ➡️ T2",
     ripWidth: "Rip Width",
     cutLength: "Cut Length",
+    take: "Take",
+    rawSheets: 'T0-48"x96"',
+    t1Strips: "T1 strips",
+    sheets: "sheets",
+    strips: "strips",
+    machineSetup: "① Machine Setup",
+    boardInput: "② Board Input",
+    inputTotalLength: "Input Total Length",
+    trimSetting: "Trim Setting",
     empty: "No cut plan data available.",
   },
   zh: {
@@ -112,9 +119,9 @@ const copy: Record<LocaleKey, Record<string, string>> = {
     print: "打印",
     orderNo: "订单号",
     color: "颜色",
+    cabinets: "Cabinets",
     setups: "机器设置",
     boards: "板数",
-    inputs: "输入行",
     utilization: "利用率",
     setup: "设置",
     step: "步骤",
@@ -130,8 +137,19 @@ const copy: Record<LocaleKey, Record<string, string>> = {
     pieces: "片数",
     t0Rip: "A 原板纵裁",
     lengthCut: "B 长度裁切",
+    t0SectionTitle: "T0 ➡️ T1",
+    t1SectionTitle: "T1 ➡️ T2",
     ripWidth: "纵裁宽度",
     cutLength: "裁切长度",
+    take: "拿料",
+    rawSheets: 'T0-48"x96"',
+    t1Strips: "T1 条料",
+    sheets: "张",
+    strips: "条",
+    machineSetup: "① 机器设置",
+    boardInput: "② 板材输入",
+    inputTotalLength: "输入总长度",
+    trimSetting: "修边设置",
     empty: "暂无裁切流程数据。",
   },
   es: {
@@ -139,9 +157,9 @@ const copy: Record<LocaleKey, Record<string, string>> = {
     print: "Imprimir",
     orderNo: "No. de Pedido",
     color: "Color",
+    cabinets: "Cabinets",
     setups: "Configuraciones",
     boards: "Tableros",
-    inputs: "Filas de Entrada",
     utilization: "Utilización",
     setup: "Config.",
     step: "Paso",
@@ -157,8 +175,19 @@ const copy: Record<LocaleKey, Record<string, string>> = {
     pieces: "Piezas",
     t0Rip: "A Corte T0",
     lengthCut: "B Corte Longitud",
+    t0SectionTitle: "T0 ➡️ T1",
+    t1SectionTitle: "T1 ➡️ T2",
     ripWidth: "Ancho Corte",
     cutLength: "Longitud Corte",
+    take: "Tomar",
+    rawSheets: 'T0-48"x96"',
+    t1Strips: "tiras T1",
+    sheets: "hojas",
+    strips: "tiras",
+    machineSetup: "① Configuración",
+    boardInput: "② Entrada",
+    inputTotalLength: "Longitud Total",
+    trimSetting: "Recorte",
     empty: "No hay datos de plan de corte.",
   },
 };
@@ -184,6 +213,23 @@ function parseT0SheetDims(sheetId: string): { width: number; length: number } {
   };
 }
 
+function numericKey(n: number): string {
+  return Number.isFinite(n) ? n.toFixed(3) : "0.000";
+}
+
+function compactInputRuns(rows: Array<{ width: number; boardType: string }>) {
+  const runs: Array<{ width: number; boardType: string; pieces: number }> = [];
+  for (const row of rows) {
+    const prev = runs[runs.length - 1];
+    if (prev && numericKey(prev.width) === numericKey(row.width) && prev.boardType === row.boardType) {
+      prev.pieces += 1;
+    } else {
+      runs.push({ ...row, pieces: 1 });
+    }
+  }
+  return runs;
+}
+
 function buildCutSections(sectionBoards: Board[]): CutPlanSection[] {
   const sectionMap: Record<string, Board[]> = {};
   for (const board of sectionBoards) {
@@ -207,7 +253,6 @@ function buildCutSections(sectionBoards: Board[]): CutPlanSection[] {
       return keyA.localeCompare(keyB);
     })
     .map(([key, groupedBoards]) => {
-      const color = key.split("|||")[0] || DEFAULT_BOX_COLOR;
       const width = parseFloat(key.split("|||")[1]);
       const sample = groupedBoards[0];
       const fingerprintMap: Record<string, Board[]> = {};
@@ -241,7 +286,6 @@ function buildCutSections(sectionBoards: Board[]): CutPlanSection[] {
       });
 
       return {
-        color,
         boardType: [...new Set(groupedBoards.map((board) => board.board))].join(" / "),
         boardWidth: getRipWidth(sample) || width,
         totalLength: parseTotalLength(sample.board_size),
@@ -251,212 +295,145 @@ function buildCutSections(sectionBoards: Board[]): CutPlanSection[] {
     });
 }
 
-function buildDisplayGroups(boards: Board[], t0Sheets: CutPlanT0Sheet[]): DisplayGroup[] {
-  const groupMap: Record<string, Board[]> = {};
-  for (const board of boards) {
-    const width = board.strip_width || 0;
-    const color = board.color || DEFAULT_BOX_COLOR;
-    const key = `${color}|||${width}|||${board.board}|||${board.board_size}|||${board.trim_loss ?? 5}`;
-    if (!groupMap[key]) groupMap[key] = [];
-    groupMap[key].push(board);
-  }
-
-  const engineeringGroups = Object.entries(groupMap)
-    .sort(([keyA, boardsA], [keyB, boardsB]) => {
-      const typeA = boardsA[0]?.board || "";
-      const typeB = boardsB[0]?.board || "";
-      const isT1A = typeA.toUpperCase().includes("T1");
-      const isT1B = typeB.toUpperCase().includes("T1");
-      if (isT1A !== isT1B) return isT1A ? -1 : 1;
-
-      const widthA = parseFloat(keyA.split("|||")[1]);
-      const widthB = parseFloat(keyB.split("|||")[1]);
-      const stockWidthA = nominalStockWidthForBoard(boardsA[0]) ?? parseBoardDims(boardsA[0]).width ?? 0;
-      const stockWidthB = nominalStockWidthForBoard(boardsB[0]) ?? parseBoardDims(boardsB[0]).width ?? 0;
-      const needsRipA = stockWidthA > 0 && stockWidthA - widthA > 0.5;
-      const needsRipB = stockWidthB > 0 && stockWidthB - widthB > 0.5;
-      if (needsRipA !== needsRipB) return needsRipA ? 1 : -1;
-
-      if (Math.abs(widthB - widthA) > 0.01) return widthB - widthA;
-      return keyA.localeCompare(keyB);
-    })
-    .map(([key, groupBoards], idx) => {
-      const color = key.split("|||")[0] || DEFAULT_BOX_COLOR;
-      const width = parseFloat(key.split("|||")[1]);
-      const sample = groupBoards[0];
-      const patterns = buildCutSections(groupBoards).flatMap((section) => section.patterns);
-      const stockWidth = nominalStockWidthForBoard(sample) ?? parseBoardDims(sample).width ?? 0;
-
-      return {
-        key: `${color}-w${width}`,
-        engNo: idx + 1,
-        boardType: [...new Set(groupBoards.map((board) => board.board))].join(" / "),
-        color,
-        boardWidth: getRipWidth(sample) || width,
-        totalLength: parseTotalLength(sample.board_size),
-        trimSetting: Math.max(...groupBoards.map((board) => board.trim_loss ?? 5)),
-        sourceBoardCount: groupBoards.length,
-        boards: groupBoards,
-        patterns,
-        needsWidthRip: stockWidth > 0 && stockWidth - width > 0.5,
-        ripStockWidthMm: stockWidth > 0 && stockWidth - width > 0.5 ? stockWidth : null,
-        distinctCutPatterns: patterns.length,
-      };
-    });
-
-  const t0SheetById = Object.fromEntries(t0Sheets.map((sheet) => [sheet.sheet_id, sheet]));
-  const t0SheetOrder = new Map(t0Sheets.map((sheet, idx) => [sheet.sheet_id, idx]));
-  const t0BoardStripsBySheetId: Record<string, { board: Board; index: number }[]> = {};
-  boards.forEach((board, index) => {
-    if (!board.t0_sheet_id) return;
-    if (!t0BoardStripsBySheetId[board.t0_sheet_id]) t0BoardStripsBySheetId[board.t0_sheet_id] = [];
-    t0BoardStripsBySheetId[board.t0_sheet_id].push({ board, index });
-  });
-  for (const strips of Object.values(t0BoardStripsBySheetId)) {
-    strips.sort((a, b) => (a.board.t0_strip_position || 0) - (b.board.t0_strip_position || 0));
-  }
-
-  const usedT0Sheets = new Set<string>();
-  const groups: DisplayGroup[] = [];
-  for (const group of engineeringGroups) {
-    const allSheetIds = Array.from(new Set(group.boards.map((board) => board.t0_sheet_id).filter(Boolean) as string[]))
-      .sort((a, b) => (t0SheetOrder.get(a) ?? Number.MAX_SAFE_INTEGER) - (t0SheetOrder.get(b) ?? Number.MAX_SAFE_INTEGER));
-    const nonT0Boards = group.boards.filter((board) => !board.t0_sheet_id);
-
-    if (allSheetIds.length === 0) {
-      groups.push({ ...group, displayBoards: group.boards, displayT0Sheets: [] });
-      continue;
-    }
-
-    for (const sheetId of allSheetIds) {
-      if (usedT0Sheets.has(sheetId)) continue;
-      const displayBoards = Array.from(new Map(
-        (t0BoardStripsBySheetId[sheetId] || []).map(({ board }) => [board.board_id, board])
-      ).values());
-      if (displayBoards.length === 0) continue;
-
-      usedT0Sheets.add(sheetId);
-      groups.push({
-        ...group,
-        key: `${group.key}::${sheetId}`,
-        sourceBoardCount: displayBoards.length,
-        boards: displayBoards,
-        displayBoards,
-        displayT0Sheets: t0SheetById[sheetId] ? [t0SheetById[sheetId]] : [],
-      });
-    }
-
-    if (nonT0Boards.length > 0) {
-      groups.push({
-        ...group,
-        key: `${group.key}::stock`,
-        sourceBoardCount: nonT0Boards.length,
-        boards: nonT0Boards,
-        displayBoards: nonT0Boards,
-        displayT0Sheets: [],
-      });
-    }
-  }
-
-  return groups.map((group, idx) => ({ ...group, engNo: idx + 1 }));
-}
-
 export function CutPlanTable({
   boards,
   orderLabel,
   cutResult,
-  selectedUtilization,
 }: {
   boards: Board[];
   orderLabel: string;
   cutResult?: CutResult | null;
-  selectedUtilization: number;
 }) {
   const printRef = useRef<HTMLDivElement | null>(null);
   const { locale } = useLanguage();
   const { getColor } = useBoxColors();
   const lc = copy[(locale as LocaleKey) || "en"] || copy.en;
+  const cabinetCount = useMemo(() => {
+    const breakdownCount = Object.keys(cutResult?.cabinet_breakdown || {}).length;
+    if (breakdownCount > 0) return breakdownCount;
+
+    return new Set(
+      boards
+        .flatMap((board) => board.parts || [])
+        .map((part) => part.cab_id)
+        .filter((cabId) => cabId && cabId !== "?" && cabId !== "Unknown")
+    ).size;
+  }, [boards, cutResult?.cabinet_breakdown]);
 
   const t0Sheets = useMemo<CutPlanT0Sheet[]>(() => {
-    return (cutResult?.t0_plan?.t0_sheets || [])
+    const fromPlan = (cutResult?.t0_plan?.t0_sheets || [])
       .map((sheet) => sheet as CutPlanT0Sheet)
       .filter((sheet) => !!sheet.sheet_id);
-  }, [cutResult]);
+    if (fromPlan.length > 0) return fromPlan;
 
-  const tableRows = useMemo<TableRow[]>(() => {
-    const displayGroups = buildDisplayGroups(boards, t0Sheets);
-    const rows: TableRow[] = [];
+    return Array.from(new Set(boards.map((board) => board.t0_sheet_id).filter(Boolean) as string[]))
+      .map((sheet_id) => ({ sheet_id }));
+  }, [boards, cutResult]);
 
-    displayGroups.forEach((group) => {
-      for (const sheet of group.displayT0Sheets) {
-        const dims = parseT0SheetDims(sheet.sheet_id);
-        const sheetStrips = group.displayBoards
-          .filter((board) => board.t0_sheet_id === sheet.sheet_id)
-          .sort((a, b) => (a.t0_strip_position || 0) - (b.t0_strip_position || 0));
-        const ripRows = [
-          ...sheetStrips.map((board, idx) => ({
-            key: board.board_id || `strip-${idx}`,
-            width: getRipWidth(board) || board.actual_strip_width || 0,
-            boardType: board.board,
+  const planBatches = useMemo(() => {
+    const t0Batches: CutPlanBatch[] = [];
+    const t1Batches: CutPlanBatch[] = [];
+    const t0PatternMap = new Map<string, {
+      order: number;
+      sheetIds: string[];
+      totalLength: number;
+      width: number;
+      trim: number;
+      runs: Array<{ width: number; boardType: string; pieces: number }>;
+    }>();
+
+    t0Sheets.forEach((sheet, sheetIdx) => {
+      const dims = parseT0SheetDims(sheet.sheet_id);
+      const sheetStrips = boards
+        .filter((board) => board.t0_sheet_id === sheet.sheet_id)
+        .sort((a, b) => (a.t0_strip_position || 0) - (b.t0_strip_position || 0));
+      const ripRows = compactInputRuns([
+        ...sheetStrips.map((board) => ({
+          width: getRipWidth(board) || board.actual_strip_width || 0,
+          boardType: board.board,
+        })),
+        ...(sheet.recovered_strips || [])
+          .filter((recovered) => typeof recovered.width === "number")
+          .map((recovered) => ({
+            width: recovered.width as number,
+            boardType: recovered.board_type || sheetStrips[0]?.board || "T0",
           })),
-          ...(sheet.recovered_strips || [])
-            .filter((recovered) => typeof recovered.width === "number")
-            .map((recovered, idx) => ({
-              key: recovered.label || `recovered-${idx}`,
-              width: recovered.width as number,
-              boardType: recovered.board_type || group.boardType,
-            })),
-        ];
+      ]);
+      if (ripRows.length === 0) return;
 
-        ripRows.forEach((row, rowIdx) => {
-          rows.push({
-            key: `${group.key}-A-${sheet.sheet_id}-${row.key}`,
-            setupNo: group.engNo,
-            step: lc.t0Rip,
-            inputType: lc.ripWidth,
-            boardType: row.boardType,
-            color: group.color || DEFAULT_BOX_COLOR,
-            sourceId: sheet.sheet_id,
-            totalLength: dims.length,
-            width: dims.width,
-            trim: 5,
-            stackQty: 1,
-            rowNo: rowIdx + 1,
-            inputValue: row.width,
-            pieces: 1,
-          });
+      const patternKey = [
+        numericKey(dims.length),
+        numericKey(dims.width),
+        "5.000",
+        ripRows.map((row) => `${row.boardType}:${numericKey(row.width)}:${row.pieces}`).join("|"),
+      ].join("|||");
+      const existing = t0PatternMap.get(patternKey);
+      if (existing) {
+        existing.sheetIds.push(sheet.sheet_id);
+      } else {
+        t0PatternMap.set(patternKey, {
+          order: sheetIdx,
+          sheetIds: [sheet.sheet_id],
+          totalLength: dims.length,
+          width: dims.width,
+          trim: 5,
+          runs: ripRows,
         });
       }
+    });
 
-      const cutSections = buildCutSections(group.displayBoards);
-      cutSections.forEach((section, sectionIdx) => {
-        section.patterns.forEach((pattern, patternIdx) => {
-          pattern.cutRows.forEach((cutRow, cutRowIdx) => {
-            rows.push({
-              key: `${group.key}-B-${sectionIdx}-${patternIdx}-${cutRowIdx}`,
-              setupNo: group.engNo,
-              step: lc.lengthCut,
-              inputType: lc.cutLength,
-              boardType: section.boardType,
-              color: section.color,
-              sourceId: pattern.sampleBoard.board_id,
-              totalLength: section.totalLength,
-              width: section.boardWidth,
-              trim: section.trimSetting,
-              stackQty: pattern.boardCount,
-              rowNo: cutRowIdx + 1,
-              inputValue: cutRow.cutLength,
-              pieces: cutRow.pieces,
-            });
+    let t0BatchNo = 1;
+    Array.from(t0PatternMap.values())
+      .sort((a, b) => a.order - b.order)
+      .forEach((pattern) => {
+        for (let start = 0; start < pattern.sheetIds.length; start += 4) {
+          const stackQty = pattern.sheetIds.slice(start, start + 4).length;
+          const batchKey = `A${t0BatchNo++}`;
+          t0Batches.push({
+            key: batchKey,
+            take: lc.rawSheets,
+            stackQty,
+            stackUnit: lc.sheets,
+            totalLength: pattern.totalLength,
+            width: pattern.width,
+            trim: pattern.trim,
+            inputLabel: lc.ripWidth,
+            rows: pattern.runs.map((row, rowIdx) => ({
+              key: `${batchKey}-${rowIdx}`,
+              rowNo: rowIdx + 1,
+              inputValue: row.width,
+              pieces: row.pieces,
+            })),
           });
+        }
+      });
+
+    let t1BatchNo = 1;
+    buildCutSections(boards).forEach((section, sectionIdx) => {
+      section.patterns.forEach((pattern, patternIdx) => {
+        const batchKey = `B${t1BatchNo++}`;
+        t1Batches.push({
+          key: `${batchKey}-${sectionIdx}-${patternIdx}`,
+          take: `${fmt(section.boardWidth)} mm ${lc.t1Strips}`,
+          stackQty: pattern.boardCount,
+          stackUnit: lc.strips,
+          totalLength: section.totalLength,
+          width: section.boardWidth,
+          trim: section.trimSetting,
+          inputLabel: lc.cutLength,
+          rows: pattern.cutRows.map((cutRow, cutRowIdx) => ({
+            key: `${batchKey}-${sectionIdx}-${patternIdx}-${cutRowIdx}`,
+            rowNo: cutRowIdx + 1,
+            inputValue: cutRow.cutLength,
+            pieces: cutRow.pieces,
+          })),
         });
       });
     });
 
-    return rows;
-  }, [boards, lc.cutLength, lc.lengthCut, lc.ripWidth, lc.t0Rip, t0Sheets]);
+    return { t0Batches, t1Batches };
+  }, [boards, lc.cutLength, lc.rawSheets, lc.ripWidth, lc.sheets, lc.strips, lc.t1Strips, t0Sheets]);
 
-  const setupCount = useMemo(() => new Set(tableRows.map((row) => row.setupNo)).size, [tableRows]);
   const selectedColor = boards[0]?.color || DEFAULT_BOX_COLOR;
 
   const handlePrint = () => {
@@ -502,15 +479,20 @@ export function CutPlanTable({
       body, div, span, p, table, thead, tbody, tr, th, td, h1, h2, h3, strong {
         font-family: var(--font-sans);
       }
-      .print-container { padding: 8mm; }
+      .print-container {
+        padding: 8mm 10mm;
+        box-sizing: border-box;
+      }
       .cut-plan-print-root {
         box-shadow: none !important;
         border: 0 !important;
       }
       .cut-plan-print-root table {
         width: 100% !important;
+        max-width: 100% !important;
         border-collapse: collapse !important;
-        font-size: 10px !important;
+        font-size: 14px !important;
+        table-layout: auto !important;
       }
       .cut-plan-print-root th,
       .cut-plan-print-root td {
@@ -525,6 +507,21 @@ export function CutPlanTable({
         break-inside: avoid;
         page-break-inside: avoid;
       }
+      .cut-plan-section h3 {
+        break-after: avoid;
+        page-break-after: avoid;
+      }
+      .cut-plan-section-t1 {
+        break-before: page;
+        page-break-before: always;
+      }
+      .cut-plan-batch {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+      .cut-plan-batch-start td {
+        border-top: 5px solid #e5e7eb !important;
+      }
       * {
         transition: none !important;
         animation: none !important;
@@ -533,7 +530,10 @@ export function CutPlanTable({
         print-color-adjust: exact !important;
       }
       @media print {
-        @page { size: A4 landscape; margin: 7mm; }
+        @page { size: A4 portrait; margin: 10mm 12mm; }
+        html, body {
+          overflow: visible !important;
+        }
         .print-container { padding: 0; }
       }
     `;
@@ -557,13 +557,77 @@ export function CutPlanTable({
     );
   }
 
+  const renderBatchTable = (batches: CutPlanBatch[], inputLabel: string) => (
+    <div className="overflow-x-auto">
+      <table className="w-full table-auto text-[12px]">
+        <colgroup>
+          <col style={{ width: "20%" }} />
+          <col style={{ width: "14%" }} />
+          <col style={{ width: "14%" }} />
+          <col style={{ width: "10%" }} />
+          <col style={{ width: "8%" }} />
+          <col style={{ width: "7%" }} />
+          <col style={{ width: "18%" }} />
+          <col style={{ width: "9%" }} />
+        </colgroup>
+        <thead>
+          <tr className="bg-black/[0.03] border-b border-border/40">
+            <th className="text-left py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.take}</th>
+            <th className="text-center py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.stack}</th>
+            <th className="text-right py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.totalLength}</th>
+            <th className="text-right py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.width}</th>
+            <th className="text-right py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.trim}</th>
+            <th className="text-center py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.row}</th>
+            <th className="text-right py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{inputLabel} (mm)</th>
+            <th className="text-center py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.pieces}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {batches.flatMap((batch) =>
+            batch.rows.map((row, rowIdx) => (
+              <tr key={row.key} className={`border-b border-border/20 hover:bg-black/[0.01] ${rowIdx === 0 ? "cut-plan-batch-start" : ""}`}>
+                {rowIdx === 0 && (
+                  <>
+                    <td rowSpan={batch.rows.length} className="py-2 px-1.5 align-top font-semibold whitespace-nowrap border-r border-border/20">
+                      {batch.take}
+                    </td>
+                    <td rowSpan={batch.rows.length} className="py-2 px-1.5 align-top text-center whitespace-normal border-r border-border/20">
+                      {batch.stackQty > 1 ? (
+                        <span className="font-bold text-apple-red">
+                          Stack {batch.stackQty} {batch.stackUnit}
+                        </span>
+                      ) : (
+                        <span>1</span>
+                      )}
+                    </td>
+                    <td rowSpan={batch.rows.length} className="py-2 px-1.5 align-top text-right font-mono whitespace-nowrap border-r border-border/20">
+                      {fmt(batch.totalLength)}
+                    </td>
+                    <td rowSpan={batch.rows.length} className="py-2 px-1.5 align-top text-right font-mono whitespace-nowrap border-r border-border/20">
+                      {fmt(batch.width)}
+                    </td>
+                    <td rowSpan={batch.rows.length} className="py-2 px-1.5 align-top text-right font-mono whitespace-nowrap border-r border-border/20">
+                      {fmt(batch.trim)}
+                    </td>
+                  </>
+                )}
+                <td className="py-2 px-1.5 text-center text-apple-gray">{row.rowNo}</td>
+                <td className="py-2 px-1.5 text-right font-mono">{fmt(row.inputValue)}</td>
+                <td className="py-2 px-1.5 text-center">{row.pieces}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+
   return (
     <div ref={printRef} className="cut-plan-print-root bg-card rounded-xl shadow-apple border border-border/30 overflow-hidden">
       <div className="p-4 border-b border-border/50 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h2 className="text-[18px] font-bold text-foreground">{lc.title}</h2>
+          <h2 className="text-[22px] font-bold text-foreground leading-tight">{lc.orderNo}: {orderLabel}</h2>
           <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-apple-gray">
-            <span>{lc.orderNo}: <strong className="text-foreground font-semibold">{orderLabel}</strong></span>
             <span className="inline-flex items-center gap-1.5">
               {lc.color}:
               <span className="w-2.5 h-2.5 rounded-full border border-black/10" style={{ backgroundColor: getColor(selectedColor).hex_color }} />
@@ -580,56 +644,41 @@ export function CutPlanTable({
         </button>
       </div>
 
-      <div className="px-4 py-3 border-b border-border/40 flex flex-wrap items-center gap-3">
-        <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-black/[0.03] rounded-lg">
-          <span className="text-[13px] text-apple-gray font-medium">T0 48&quot; × 96&quot;</span>
-          <span className="text-[14px] font-bold text-foreground">{t0Sheets.length}</span>
+      <div className="px-4 py-3 border-b border-border/40 flex flex-wrap items-center gap-x-6 gap-y-2 text-[13px] leading-none">
+        <div className="inline-flex h-5 items-center gap-2">
+          <span className="text-apple-gray font-medium leading-none">{lc.cabinets}</span>
+          <span className="font-bold text-foreground leading-none">{cabinetCount}</span>
         </div>
-        <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-black/[0.03] rounded-lg">
-          <span className="text-[13px] text-apple-gray font-medium">T1 Strips</span>
-          <span className="text-[14px] font-bold text-foreground">{boards.length}</span>
+        <div className="inline-flex h-5 items-center gap-2">
+          <span className="text-apple-gray font-medium leading-none">T0 48&quot; × 96&quot;</span>
+          <span className="font-bold text-foreground leading-none">{t0Sheets.length}</span>
         </div>
-        <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-black/[0.03] rounded-lg">
-          <span className="text-[13px] text-apple-gray font-medium">T2 Parts</span>
-          <span className="text-[14px] font-bold text-foreground">{boards.reduce((acc, b) => acc + (b.parts?.length || 0), 0)}</span>
+        <div className="inline-flex h-5 items-center gap-2">
+          <span className="text-apple-gray font-medium leading-none">T1 Strips</span>
+          <span className="font-bold text-foreground leading-none">{boards.length}</span>
+        </div>
+        <div className="inline-flex h-5 items-center gap-2">
+          <span className="text-apple-gray font-medium leading-none">T2 Parts</span>
+          <span className="font-bold text-foreground leading-none">{boards.reduce((acc, b) => acc + (b.parts?.length || 0), 0)}</span>
         </div>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-[12px]">
-          <thead>
-            <tr className="bg-black/[0.03] border-b border-border/40">
-              <th className="text-center py-3 px-3 font-semibold text-apple-gray whitespace-nowrap">{lc.setup}</th>
-              <th className="text-left py-3 px-3 font-semibold text-apple-gray whitespace-nowrap">{lc.step}</th>
-              <th className="text-left py-3 px-3 font-semibold text-apple-gray whitespace-nowrap">{lc.inputType}</th>
-              <th className="text-left py-3 px-3 font-semibold text-apple-gray whitespace-nowrap">{lc.material}</th>
-              <th className="text-right py-3 px-3 font-semibold text-apple-gray whitespace-nowrap">{lc.totalLength}</th>
-              <th className="text-right py-3 px-3 font-semibold text-apple-gray whitespace-nowrap">{lc.width}</th>
-              <th className="text-right py-3 px-3 font-semibold text-apple-gray whitespace-nowrap">{lc.trim}</th>
-              <th className="text-center py-3 px-3 font-semibold text-apple-gray whitespace-nowrap">{lc.stack}</th>
-              <th className="text-center py-3 px-3 font-semibold text-apple-gray whitespace-nowrap">{lc.row}</th>
-              <th className="text-right py-3 px-3 font-semibold text-apple-gray whitespace-nowrap">{lc.inputValue}</th>
-              <th className="text-center py-3 px-3 font-semibold text-apple-gray whitespace-nowrap">{lc.pieces}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tableRows.map((row) => (
-              <tr key={row.key} className="border-b border-border/20 hover:bg-black/[0.01]">
-                <td className="py-2.5 px-3 text-center font-semibold">{row.setupNo}</td>
-                <td className="py-2.5 px-3 whitespace-nowrap">{row.step}</td>
-                <td className="py-2.5 px-3 whitespace-nowrap">{row.inputType}</td>
-                <td className="py-2.5 px-3 whitespace-nowrap">{row.boardType}</td>
-                <td className="py-2.5 px-3 text-right font-mono">{fmt(row.totalLength)}</td>
-                <td className="py-2.5 px-3 text-right font-mono">{fmt(row.width)}</td>
-                <td className="py-2.5 px-3 text-right font-mono">{fmt(row.trim)}</td>
-                <td className="py-2.5 px-3 text-center">{row.stackQty}</td>
-                <td className="py-2.5 px-3 text-center">{row.rowNo}</td>
-                <td className="py-2.5 px-3 text-right font-mono font-semibold">{fmt(row.inputValue)}</td>
-                <td className="py-2.5 px-3 text-center font-semibold">{row.pieces}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="divide-y divide-border/40">
+        {planBatches.t0Batches.length > 0 && (
+          <section className="cut-plan-section">
+            <div className="px-4 py-3 bg-blue-50/50 border-b border-blue-100">
+              <h3 className="text-[16px] font-bold text-slate-900">{lc.t0SectionTitle}</h3>
+            </div>
+            {renderBatchTable(planBatches.t0Batches, lc.ripWidth)}
+          </section>
+        )}
+
+        <section className="cut-plan-section cut-plan-section-t1">
+          <div className="px-4 py-3 bg-blue-50/50 border-b border-blue-100">
+            <h3 className="text-[16px] font-bold text-slate-900">{lc.t1SectionTitle}</h3>
+          </div>
+          {renderBatchTable(planBatches.t1Batches, lc.cutLength)}
+        </section>
       </div>
     </div>
   );

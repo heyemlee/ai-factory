@@ -2,7 +2,7 @@
 Cloud Workflow Controller — Supabase-powered Order Pipeline
 
 Polls Supabase for pending orders, downloads the Excel,
-runs cabinet_calculator + engine_agent, then pushes results back.
+runs cabinet_calculator + cutting_engine, then pushes results back.
 
 Usage:
   python3 -m core.cloud_controller          # Run once
@@ -255,7 +255,7 @@ def process_order(order: dict):
         # 3. Run Cutting Engine
         update_progress(60, "正在进行 AI 智能排版裁切计算...")
         print(f"\n  Step 2: Cutting Engine")
-        from agents.engine_agent import run_engine, deduct_inventory_supabase
+        from cutting.cutting_engine import run_engine, deduct_inventory_supabase
 
         cut_result_path = os.path.join(tempfile.gettempdir(), f"{job_id}_cut_result.json")
         force_t0_start = order.get("cut_mode") == "t0_start" or bool(order.get("force_t0_start"))
