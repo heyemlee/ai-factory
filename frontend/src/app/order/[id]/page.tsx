@@ -1,7 +1,7 @@
 "use client";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Layers, Package, BarChart3, Scissors, AlertTriangle, Table2, LayoutGrid, Box, Printer, CheckCircle2, RefreshCw } from "lucide-react";
+import { ArrowLeft, Layers, Scissors, AlertTriangle, Table2, LayoutGrid, Box, CheckCircle2, RefreshCw } from "lucide-react";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { revertCut } from "@/lib/order_actions";
@@ -10,18 +10,20 @@ import { useLanguage } from "@/lib/i18n";
 import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
 
 /* ── Component imports ── */
-import type { Part, Board, CutResult, Order, Cabinet, PatternNumbering } from "./components/types";
+import type { Part, Board, CutResult, Order, Cabinet } from "./components/types";
 import { SIZE_COLORS } from "./components/constants";
 import { boardFingerprint, nominalStockWidthForBoard } from "./components/utils";
-import { StatCard } from "./components/StatCard";
 import { BoardTile } from "./components/BoardTile";
 import { T0SheetCard } from "./components/T0SheetCard";
 import { BoardDetailModal } from "./components/BoardDetailModal";
 import { ConfirmCutModal } from "./components/ConfirmCutModal";
 import { MachineCutPlan } from "./components/MachineCutPlan";
 import { CabinetReconciliation } from "./components/CabinetReconciliation";
+import { CutPlanTable } from "./components/CutPlanTable";
 
 const CabinetCanvas = dynamic(() => import("@/components/CabinetViewer"), { ssr: false });
+const EMPTY_BOARDS: Board[] = [];
+const EMPTY_INVENTORY_SHORTAGES: NonNullable<CutResult["summary"]["inventory_shortage"]> = [];
 
 export default function OrderDetail() {
   const { t, locale } = useLanguage();
@@ -56,13 +58,13 @@ export default function OrderDetail() {
   }, [id]);
 
   const cutResult = order?.cut_result_json;
-  const allBoards = cutResult?.boards || [];
+  const allBoards = cutResult?.boards ?? EMPTY_BOARDS;
   const boards = useMemo(
     () => allBoards.filter((b) => (b.color || DEFAULT_BOX_COLOR) === selectedColor),
     [allBoards, selectedColor]
   );
   const summary = cutResult?.summary;
-  const shortages = summary?.inventory_shortage || [];
+  const shortages = summary?.inventory_shortage ?? EMPTY_INVENTORY_SHORTAGES;
   const orderDisplayName = order?.filename?.replace(/\.(xlsx|xls)$/i, "") || (id as string);
 
   const colorOptions = useMemo(() => {
@@ -101,8 +103,6 @@ export default function OrderDetail() {
   }, [colorOptions, selectedColor]);
 
   const selectedColorSummary = summary?.by_color?.[selectedColor];
-  const selectedBoardsUsed = selectedColorSummary?.boards_used ?? boards.length;
-  const selectedPartsPlaced = selectedColorSummary?.total_parts_placed ?? selectedColorSummary?.parts_placed ?? boards.reduce((sum, b) => sum + b.parts.length, 0);
   const selectedUtilization = selectedColorSummary?.overall_utilization ?? (
     boards.length > 0
       ? boards.reduce((sum, b) => sum + b.utilization, 0) / boards.length
@@ -145,16 +145,6 @@ export default function OrderDetail() {
       map[size] = SIZE_COLORS[i % SIZE_COLORS.length];
     });
     return map;
-  }, [boards]);
-
-  /* Board size legend groups */
-  const sizeGroups = useMemo(() => {
-    const groups: Record<string, Board[]> = {};
-    for (const b of boards) {
-      if (!groups[b.board_size]) groups[b.board_size] = [];
-      groups[b.board_size].push(b);
-    }
-    return Object.entries(groups);
   }, [boards]);
 
   /* ── Stack cutting analysis: group boards with identical cutting patterns ── */
@@ -361,31 +351,6 @@ export default function OrderDetail() {
       setSelectedCabinetId(cabinets[0]?.cab_id || null);
     }
   }, [cabinets, selectedCabinetId]);
-
-  const { t0SheetCount, t1StripCount, t2PartCount } = useMemo(() => {
-    let t0Sheets = 0;
-    if (selectedCutResult?.t0_plan?.t0_sheets) {
-      t0Sheets = selectedCutResult.t0_plan.t0_sheets.length;
-    } else {
-      // fallback for legacy: count unique t0_sheet_id + ungrouped
-      const sheetIds = new Set<string>();
-      let ungrouped = 0;
-      boards.forEach(b => {
-        const isT0 = !b.board?.toUpperCase().includes("T1");
-        if (isT0) {
-          if (b.t0_sheet_id) sheetIds.add(b.t0_sheet_id);
-          else ungrouped++;
-        }
-      });
-      t0Sheets = sheetIds.size + ungrouped;
-    }
-
-    return {
-      t0SheetCount: t0Sheets,
-      t1StripCount: boards.length,
-      t2PartCount: selectedPartsPlaced,
-    };
-  }, [boards, selectedCutResult, selectedPartsPlaced]);
 
   const handleCutConfirmed = useCallback(() => {
     // Refetch order to reflect new status
@@ -617,18 +582,14 @@ export default function OrderDetail() {
         </div>
       )}
 
-      {/* ── Table View Data / Summary ── */}
+      {/* ── Cut Plan Table View ── */}
       {viewMode === "table" && (
-        <>
-          {/* ── Summary Stats ── */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            <StatCard icon={<Layers size={18} />} label={locale === "zh" ? "T0 大板 (Raw Sheets)" : "T0 Raw Sheets"} value={String(t0SheetCount)} color="#eab308" />
-            <StatCard icon={<Layers size={18} />} label={locale === "zh" ? "T1 条板 (Strips)" : "T1 Strips"} value={String(t1StripCount)} color="#3b82f6" />
-            <StatCard icon={<Package size={18} />} label={locale === "zh" ? "T2 零件 (Parts)" : "T2 Parts"} value={String(t2PartCount)} color="#8b5cf6" />
-            <StatCard icon={<BarChart3 size={18} />} label={t("orderDetail.overallUtil")} value={`${(selectedUtilization * 100).toFixed(1)}%`} color="#10b981" />
-          </div>
-
-        </>
+        <CutPlanTable
+          boards={boards}
+          orderLabel={orderDisplayName}
+          cutResult={selectedCutResult}
+          selectedUtilization={selectedUtilization}
+        />
       )}
 
       {/* ── Layout View: Split layout for T1 and T0 ── */}
@@ -798,92 +759,6 @@ export default function OrderDetail() {
         );
       })()}
 
-      {/* ── Table View ── */}
-      {viewMode === "table" && (
-        <div className="bg-card rounded-xl shadow-apple border border-border/30 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-[13px]">
-              <thead>
-                <tr className="bg-black/[0.02]">
-                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">#</th>
-                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.boxColor")}</th>
-                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thBoardId")}</th>
-                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thBoardType")}</th>
-                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thSize")}</th>
-                  <th className="text-center py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thParts")}</th>
-                  <th className="text-center py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thCuts")}</th>
-                  <th className="text-right py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thUtil")}</th>
-                  <th className="text-center py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thStack")}</th>
-                  <th className="text-left py-3 px-4 font-semibold text-apple-gray">{t("orderDetail.thDetails")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {boards.map((board, idx) => ({ board, idx }))
-                  .filter(({ idx }) => {
-                    const si = stackGroups.lookup[idx];
-                    return !si || si.isLeader;
-                  })
-                  .map(({ board, idx }, mappedIdx) => {
-                  const c = sizeColorMap[board.board_size];
-                  const utilPct = (board.utilization * 100).toFixed(1);
-                  const utilNum = parseFloat(utilPct);
-                  const si = stackGroups.lookup[idx];
-                  return (
-                    <tr key={`${board.board_id}-${idx}`} className="border-b border-border/20 hover:bg-black/[0.01]">
-                      <td className="py-2.5 px-4 text-apple-gray">{mappedIdx + 1}</td>
-                      <td className="py-2.5 px-4">
-                        <span className="inline-flex items-center gap-2 whitespace-nowrap">
-                          <span className="w-3 h-3 rounded-full border border-black/10" style={{ backgroundColor: getColor(board.color).hex_color }} />
-                          <span className="text-[12px] text-apple-gray">{colorLabel(getColor(board.color), locale)}</span>
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-4 font-medium">
-                        <span className="inline-flex items-center gap-1.5">
-                          <span className="w-2.5 h-2.5 rounded" style={{ backgroundColor: c.bg, border: `1.5px solid ${c.border}` }} />
-                          {board.board_id}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-4 text-apple-gray">{board.board}</td>
-                      <td className="py-2.5 px-4 font-mono text-[12px]">{board.board_size}mm</td>
-                      <td className="py-2.5 px-4 text-center">{board.parts.length}</td>
-                      <td className="py-2.5 px-4 text-center">{board.cuts}</td>
-                      <td className="py-2.5 px-4 text-right font-bold" style={{ color: utilNum > 80 ? "#10b981" : utilNum > 60 ? "#f59e0b" : "#ef4444" }}>{utilPct}%</td>
-                      <td className="py-2.5 px-4 text-center">
-                        {si && si.stackOf > 1 ? (
-                          <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-bold">×{si.stackOf}</span>
-                        ) : "—"}
-                      </td>
-                      <td className="py-2.5 px-4">
-                        <div className="flex flex-wrap gap-1">
-                          {(() => {
-                            const partGroups: Record<string, { label: string; rotated: boolean; count: number }> = {};
-                            for (const p of board.parts) {
-                              const label = p.component || p.part_id;
-                              const key = `${label}_${p.rotated ? 'rot' : 'norm'}`;
-                              if (!partGroups[key]) {
-                                partGroups[key] = { label, rotated: !!p.rotated, count: 0 };
-                              }
-                              partGroups[key].count++;
-                            }
-                            return Object.values(partGroups).map((g, gi) => (
-                              <span key={gi} className="text-[10px] px-1.5 py-0.5 rounded bg-black/[0.03] text-apple-gray whitespace-nowrap">
-                                {g.label}
-                                {g.rotated && <span className="ml-0.5" title="Rotated">🔄</span>}
-                                {g.count > 1 && <span className="ml-1 text-black/40 font-bold">×{g.count}</span>}
-                              </span>
-                            ));
-                          })()}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
       {/* ── Cabinets View ── */}
       {viewMode === "cabinets" && cabinets.length > 0 && (
         <div className="flex flex-col lg:flex-row gap-6 items-start">
@@ -945,7 +820,7 @@ export default function OrderDetail() {
               </h3>
             </div>
             <div className="p-2 space-y-1">
-              {cabinets.find(c => c.cab_id === selectedCabinetId)?.parts.map((p, idx) => (
+              {cabinets.find(c => c.cab_id === selectedCabinetId)?.parts.map((p) => (
                 <div 
                   key={p.part_id} 
                   className={`w-full text-left px-4 py-3 rounded-xl transition-colors flex items-center justify-between cursor-pointer ${

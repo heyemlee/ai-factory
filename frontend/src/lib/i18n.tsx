@@ -67,7 +67,7 @@ const translations = {
     "cutStats.boardType": "Board Type",
     
     "orderDetail.layout": "Cutting Layout",
-    "orderDetail.dataTable": "Data Table",
+    "orderDetail.dataTable": "Text Cut Plan",
     "orderDetail.cabinetView": "Cabinet View",
     "orderDetail.confirmCut": "Confirm Cut Done",
     "orderDetail.t0Start": "Start From T0",
@@ -130,7 +130,7 @@ const translations = {
     "cabinet.dragRotate": "Drag to Rotate",
     "cabinet.scrollZoom": "Scroll to Zoom",
 
-    "machine.tabLabel": "Machine Cut Plan",
+    "machine.tabLabel": "Visual Cut Plan",
     "machine.langZh": "中文",
     "machine.langEn": "English",
     "machine.langEs": "Español",
@@ -265,7 +265,7 @@ const translations = {
     "cutStats.boardType": "原板型",
     
     "orderDetail.layout": "裁切图",
-    "orderDetail.dataTable": "数据表",
+    "orderDetail.dataTable": "Text Cut Plan",
     "orderDetail.cabinetView": "柜体视图",
     "orderDetail.confirmCut": "确认裁切完成",
     "orderDetail.t0Start": "从 T0 开始裁切",
@@ -328,7 +328,7 @@ const translations = {
     "cabinet.dragRotate": "拖拽旋转",
     "cabinet.scrollZoom": "滚轮缩放",
 
-    "machine.tabLabel": "机台裁切方案",
+    "machine.tabLabel": "Visual Cut Plan",
     "machine.langZh": "中文",
     "machine.langEn": "English",
     "machine.langEs": "Español",
@@ -463,7 +463,7 @@ const translations = {
     "cutStats.boardType": "Tipo Tablero",
     
     "orderDetail.layout": "Diseño de Corte",
-    "orderDetail.dataTable": "Tabla de Datos",
+    "orderDetail.dataTable": "Text Cut Plan",
     "orderDetail.cabinetView": "Vista de Gabinete",
     "orderDetail.confirmCut": "Confirmar Corte",
     "orderDetail.t0Start": "Iniciar desde T0",
@@ -526,7 +526,7 @@ const translations = {
     "cabinet.dragRotate": "Arrastrar para Rotar",
     "cabinet.scrollZoom": "Desplazar para Zoom",
 
-    "machine.tabLabel": "Plan de Corte de Máquina",
+    "machine.tabLabel": "Visual Cut Plan",
     "machine.langZh": "中文",
     "machine.langEn": "English",
     "machine.langEs": "Español",

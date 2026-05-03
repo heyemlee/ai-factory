@@ -73,7 +73,7 @@ type MachineCutSection = {
    ═══════════════════════════════════════════ */
 const machineI18n: Record<string, Record<string, string>> = {
   zh: {
-    tabLabel: "机台裁切方案",
+    tabLabel: "Visual Cut Plan",
     engineeringNo: "图纸",
     boardType: "板材型号",
     boardWidth: "宽度",
@@ -96,7 +96,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     operatorNote1: "本工程组已匹配固定板材宽度，操作员只需输入裁切长度和数量。",
     operatorNote2: "上板 → 先修边 {trim}mm → 再按下表裁切。",
     printBtn: "打印",
-    printTitle: "机台裁切方案",
+    printTitle: "Visual Cut Plan",
     orderNo: "订单号",
     operator: "操作员",
     firstPieceCheck: "首件检查",
@@ -138,7 +138,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     ripWidth: "纵裁宽度 (mm)",
   },
   en: {
-    tabLabel: "Machine Cut Plan",
+    tabLabel: "Visual Cut Plan",
     engineeringNo: "Pattern",
     boardType: "Board Type",
     boardWidth: "Width",
@@ -161,7 +161,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     operatorNote1: "This engineering group uses a fixed board width. The operator only needs to input cut lengths and quantities.",
     operatorNote2: "Load board → Trim {trim}mm first → Then cut according to the table below.",
     printBtn: "Print",
-    printTitle: "Machine Cut Plan",
+    printTitle: "Visual Cut Plan",
     orderNo: "Order No.",
     operator: "Operator",
     firstPieceCheck: "First Piece Check",
@@ -203,7 +203,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     ripWidth: "Rip Width (mm)",
   },
   es: {
-    tabLabel: "Plan de Corte de Máquina",
+    tabLabel: "Visual Cut Plan",
     engineeringNo: "Patrón",
     boardType: "Tipo de Tablero",
     boardWidth: "Ancho",
@@ -226,7 +226,7 @@ const machineI18n: Record<string, Record<string, string>> = {
     operatorNote1: "Este grupo de ingeniería usa un ancho fijo. El operador solo necesita ingresar longitudes y cantidades.",
     operatorNote2: "Cargar tablero → Recortar {trim}mm primero → Luego cortar según la tabla.",
     printBtn: "Imprimir",
-    printTitle: "Plan de Corte de Máquina",
+    printTitle: "Visual Cut Plan",
     orderNo: "No. de Pedido",
     operator: "Operador",
     firstPieceCheck: "Verificación Primera Pieza",
