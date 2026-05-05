@@ -21,6 +21,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # ── 文件路径 ────────────────────────────────
 LOGS_DIR = PROJECT_ROOT / "logs"
+INCOMING_ORDERS_DIR = PROJECT_ROOT / "data" / "incoming_orders"
 
 # ── 工厂参数 ────────────────────────────────
 PANEL_THICKNESS = int(os.getenv("PANEL_THICKNESS", "18"))   # mm

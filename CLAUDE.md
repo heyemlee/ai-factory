@@ -1,115 +1,153 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file gives coding agents the current project map and safe commands for this repository.
 
 ## Commands
 
+Run commands from the project root unless noted.
+
 ### Backend
 
-Run from the project root with the virtualenv active:
-
 ```bash
-source venv/bin/activate
-
-# Start production backend (poll Supabase every 30s)
-bash scripts/start_cloud.sh
-
-# Start backend + frontend together
-bash scripts/dev.sh
+python3 -m backend.core.cloud_controller          # process pending orders once
+python3 -m backend.core.cloud_controller --poll   # poll Supabase continuously
+bash scripts/start_cloud.sh                       # backend-only polling launcher
+bash scripts/dev.sh                               # backend polling + frontend dev server
+python3 -m compileall backend scripts/setup_schema.py
 ```
 
 ### Frontend
 
 ```bash
 cd frontend
-npm run dev      # dev server at http://localhost:3000
+npm run dev      # http://localhost:3000
 npm run build
 npm run lint
 ```
 
-> **Warning:** The frontend uses Next.js 16.2.3 with React 19 — APIs and file conventions may differ from training data. Read `node_modules/next/dist/docs/` before writing frontend code. (See `frontend/AGENTS.md`.)
+The frontend uses Next.js 16.2.3 and React 19. Prefer local project patterns over older Next.js assumptions.
 
-## Architecture
-
-### Production flow
+## Runtime Flow
 
 ```
-Dashboard (Vercel)
-      │  upload order Excel → Supabase Storage, status=pending
+Dashboard / Supabase Storage
+      │ upload order Excel, orders.status=pending
       ▼
-   Supabase
-      │  poll every 30s
-      ▼
-cloud_controller.py  (backend/core/)
-      ├── cabinet_calculator.py   — parse Excel, expand cabinets → parts
-      ├── engine_agent.py         — FFD bin-packing cut optimization
-      │     └── t0_optimizer.py  — T0 sheet mix-pack
-      └── write results → Supabase (orders, bom_history tables)
+backend.core.cloud_controller
+      ├── cabinet_calculator.process_order()
+      │     Excel rows → expanded cabinet parts
+      ├── cutting.efficient.run_engine()
+      │     default FFD + inventory-first / T0-start cutting
+      ├── cutting.stack.run_engine()
+      │     stack-efficiency strategy for repeated machine cuts
+      └── writes cut_result_json, cabinet summary, BOM history back to Supabase
 ```
 
-`cloud_controller.py` is the sole backend entry point. It handles everything directly: Supabase polling, order download, pipeline execution, and result write-back. It does **not** use `settings.py` — it constructs paths manually.
+`backend.core.cloud_controller` is the only normal backend entry point. It chooses the cutting strategy from the order/upload settings:
 
-### Cutting algorithm (engine_agent.py + t0_optimizer.py)
+- `efficient`: `backend/cutting/efficient/`
+- `stack_efficiency`: `backend/cutting/stack/`
 
-1. `build_strip_demand()` — group parts by Width into T1 strip demand (±0.5mm tolerance)
-2. `apply_inventory()` — deduct from T1 stock; remainder goes to T0 pool
-3. `optimize_t0_from_strips()` — FFD mix-pack strips onto T0 sheets
-4. Gap-fill — pull narrow strips from inventory to fill T0 gaps
-5. `recover_leftover()` — reclaim T0 offcuts as T1 strips (≥609.6 wide, ≥304.8 narrow, ≥200 pull-rail)
-6. `ffd_strip_pack()` — FFD-pack parts within each strip along the Height axis
-
-Oversized parts (Width > 1219.2mm or Height > 2433.4mm) are flagged in `issues.oversized_parts`, not blocked.
-
-### Board type system
+## Backend Structure
 
 ```
-T0  Raw sheet  1219.2 × 2438.4 mm (48″ × 96″)
- ↓ cut along width axis
-T1  Strip      304.8 mm (12″) or 609.6 mm (24″) wide
- ↓ cut along height axis
-T2  Part       final cabinet panel
+backend/
+├── cabinet_calculator.py          # Excel order parser and cabinet part expansion
+├── core/
+│   └── cloud_controller.py        # Supabase polling, order claim, pipeline, write-back
+├── cutting/
+│   ├── cutting_engine.py          # compatibility facade for cutting.efficient
+│   ├── stack_efficiency_engine.py # compatibility facade for cutting.stack
+│   ├── t0_optimizer.py            # compatibility facade for cutting.t0
+│   ├── efficient/
+│   │   ├── constants.py
+│   │   ├── primitives.py
+│   │   ├── loaders.py
+│   │   ├── demand.py
+│   │   ├── packing.py
+│   │   ├── validator.py
+│   │   └── engine.py
+│   ├── stack/
+│   │   ├── constants.py
+│   │   ├── primitives.py
+│   │   ├── strips.py
+│   │   ├── recovery.py
+│   │   ├── t0_packer.py
+│   │   ├── allocation.py
+│   │   └── engine.py
+│   └── t0/
+│       ├── packer.py
+│       ├── recovery.py
+│       └── planner.py
+├── config/
+│   ├── board_config.json
+│   ├── board_config_loader.py
+│   ├── logger.py
+│   ├── settings.py
+│   └── supabase_client.py
+└── tools/
+    ├── email_reader.py
+    └── telegram_notifier.py
 ```
 
-Terminology: always **Height** (along 2438.4mm axis) and **Width** (along 1219.2mm axis).
+`scripts/setup_schema.py` is the one-time Supabase schema utility. Keep migration/setup scripts in `scripts/`, not `backend/config/`.
 
-### Key constants
+## Cutting Notes
 
-| Parameter | Default | Meaning |
-|-----------|---------|---------|
-| `PANEL_THICKNESS` | 18 mm | Board thickness |
-| `TRIM_LOSS` | 5 mm | Edge trim loss |
-| `SAW_KERF` | 5 mm | Saw kerf per cut |
-| `BOARD_HEIGHT` | 2438.4 mm | T0 sheet length |
-| `STRIP_WIDTH_NARROW` | 304.8 mm | 12″ strip |
-| `STRIP_WIDTH_WIDE` | 609.6 mm | 24″ strip |
+Board system:
 
-### Supabase tables
+- `T0`: raw sheet, 1219.2 × 2438.4 mm
+- `T1`: strips cut from T0 or inventory
+- `T2`: final cabinet parts
 
-| Table | Purpose |
-|-------|---------|
-| `orders` | Order queue — `status`: pending → processing → completed / failed |
-| `inventory` | Board stock (board_type, stock, threshold) |
-| `cutting_stats` | Per-part cut records |
-| `bom_history` | Aggregated usage per job |
-| `order-files` | Storage bucket for uploaded Excel files |
+Dimension terms are intentional:
 
-### Frontend structure (frontend/src/)
+- `Height`: along the 2438.4 mm axis
+- `Width`: along the 1219.2 mm axis
 
-- `app/` — App Router pages: dashboard, orders list, order detail (`order/[id]`), inventory, cut-stats, bom-analytics, login
-- `components/CabinetViewer.tsx` — Three.js 3D cabinet renderer (dynamically imported, SSR disabled)
-- `components/layout/` — Shell, Sidebar, Topbar
-- `lib/i18n.tsx` — Client-side i18n for `en` / `zh` / `es`; use `useLanguage()` hook for all UI strings
-- `lib/supabase.ts` — Supabase JS client
-- `lib/order_actions.ts` — `revertCut()` and other order mutations
+Efficient algorithm:
 
-### Configuration (backend/config/settings.py)
+1. `load_parts()` reads expanded parts.
+2. `build_strip_demand()` groups parts into strip demand.
+3. `apply_inventory()` consumes matching inventory unless T0-start is forced.
+4. `cutting.t0.optimize_t0_from_strips()` mixed-packs T0 sheets.
+5. `recover_leftover()` creates recoverable T1 strips.
+6. `ffd_strip_pack()` packs parts along each strip length.
+7. `_validate_cut_result()` checks placement/integrity before write-back.
 
-Loads from `.env` at project root. Contains:
-- Telegram / Email credentials
-- Factory params (`PANEL_THICKNESS`, `TRIM_LOSS`, `SAW_KERF`)
-- `INVENTORY_FILE` → `data/t1_inventory.xlsx` (still used by cloud_controller)
+Stack algorithm:
 
-### Available but not yet wired in
+1. Normalizes/rotates parts where valid.
+2. Builds repeatable strip patterns and bundles max stack size 4.
+3. Allocates matching T1 inventory or T0-derived strips.
+4. Packs required T0 sheets and recovered strips.
+5. Emits machine-friendly stack metadata.
 
-- `backend/agents/notifier_agent.py` + `backend/tools/telegram_notifier.py` — Telegram push notifications, kept for future integration into cloud_controller
-- `backend/tools/email_reader.py` — Gmail IMAP order intake, kept for future use
+## Import Policy
+
+The backend currently supports the historical path style because `cloud_controller.py` inserts `backend/` into `sys.path`:
+
+```python
+from config.supabase_client import supabase
+from cutting.efficient import run_engine
+```
+
+Do not reintroduce large monolithic algorithm files. Add new helper code under the relevant domain package:
+
+- efficient FFD/inventory logic → `backend/cutting/efficient/`
+- stack-cut logic → `backend/cutting/stack/`
+- T0 mixed packing/recovery/planning → `backend/cutting/t0/`
+
+The old `cutting_engine.py`, `stack_efficiency_engine.py`, and `t0_optimizer.py` files are small compatibility facades only.
+
+## Frontend Structure
+
+```
+frontend/src/
+├── app/                         # Next.js App Router pages and API routes
+├── features/orders/detail/      # order detail factory UI and cut-plan components
+├── components/                  # shared UI / layout / 3D cabinet viewer
+└── lib/                         # Supabase client, i18n, order actions, shared data
+```
+
+Use `useLanguage()` for UI text and keep order-detail-specific components inside `features/orders/detail/`.

@@ -2,11 +2,11 @@
 Cloud Workflow Controller — Supabase-powered Order Pipeline
 
 Polls Supabase for pending orders, downloads the Excel,
-runs cabinet_calculator + cutting_engine, then pushes results back.
+runs cabinet_calculator + selected cutting strategy, then pushes results back.
 
 Usage:
-  python3 -m core.cloud_controller          # Run once
-  python3 -m core.cloud_controller --poll   # Poll continuously
+  python3 -m backend.core.cloud_controller          # Run once
+  python3 -m backend.core.cloud_controller --poll   # Poll continuously
 """
 
 import os
@@ -294,7 +294,7 @@ def process_order(order: dict):
             print("  🟧 Production mode: T0 Start (ignore T1 inventory)")
         if cut_algorithm == "stack_efficiency":
             print(f"  🟦 Algorithm: Stack Efficiency (trim={trim_loss_mm:g}mm)")
-            from cutting.stack_efficiency_engine import run_engine as run_stack_engine
+            from cutting.stack import run_engine as run_stack_engine
             result = run_stack_engine(
                 parts_path=parts_path,
                 output_path=cut_result_path,
@@ -304,7 +304,7 @@ def process_order(order: dict):
             )
         else:
             print("  🟩 Algorithm: Efficient (existing engine config)")
-            from cutting.cutting_engine import run_engine as run_efficient_engine
+            from cutting.efficient import run_engine as run_efficient_engine
             result = run_efficient_engine(
                 parts_path=parts_path,
                 output_path=cut_result_path,

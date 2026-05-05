@@ -1,11 +1,11 @@
 """
 Deploy Supabase schema — run once to create tables.
-Usage: python3 backend/config/setup_schema.py
+Usage: python3 scripts/setup_schema.py
 """
 
 import os
 import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend"))
 
 from config.supabase_client import supabase, SUPABASE_URL
 
