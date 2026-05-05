@@ -2,10 +2,9 @@
 import React, { useState, useMemo } from "react";
 import { useLanguage } from "@/lib/i18n";
 import type { Board, SizeColor } from "./types";
-import { SIZE_COLORS } from "./constants";
 import { parseBoardDims, safeNum, clamp, getRipWidth } from "./utils";
 
-export function BoardTile({ board, index, color, stackInfo, onClick, disableHover = false, overrideUtilNum, hideWidthWaste = false, isRotated = false, hideUtilization = false, showDimensions = false, hideStackBadge = false, hidePreviousStripShade = false, hideBoardId = false }: {
+export function BoardTile({ board, color, stackInfo, onClick, disableHover = false, overrideUtilNum, hideWidthWaste = false, isRotated = false, hideUtilization = false, showDimensions = false, hideStackBadge = false, hidePreviousStripShade = false, hideBoardId = false }: {
   board: Board;
   index: number;
   color: SizeColor;

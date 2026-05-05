@@ -5,7 +5,7 @@ import type { Board, SizeColor, PatternNumbering, RipStackInfo } from "./types";
 import { T0_STRIP_COLORS } from "./constants";
 import { clamp, getRipWidth, safeNum } from "./utils";
 
-export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [], patternNumbering, stackLookup, ripStackLookup, compactHeader = false }: {
+export function T0SheetCard({ strips, onBoardClick, recoveredStrips = [], patternNumbering, stackLookup, ripStackLookup }: {
   sheetId: string;
   strips: { board: Board; index: number }[];
   sizeColorMap: Record<string, SizeColor>;
@@ -19,28 +19,11 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
   const { t } = useLanguage();
   const T0_FULL_WIDTH = 1219.2;
   const T0_BOARD_HEIGHT = 2438.4;
-  const recoveredArea = useMemo(
-    () => recoveredStrips.reduce((sum, rs) => sum + (rs.width || 0) * T0_BOARD_HEIGHT, 0),
-    [recoveredStrips]
-  );
-
-  // Compute sheet-level utilization from useful area: placed parts + recovered stock
-  const sheetUtil = useMemo(() => {
-    const totalPartsArea = strips.reduce((sum, { board }) => sum + (board.parts_total_area || 0), 0);
-    const sheetArea = T0_FULL_WIDTH * T0_BOARD_HEIGHT;
-    return sheetArea > 0 ? (totalPartsArea + recoveredArea) / sheetArea : 0;
-  }, [recoveredArea, strips]);
-
-  const totalStrips = strips.length;
   const sheetWastePattern = "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 5px, #cbd5e1 5px, #cbd5e1 6.5px)";
   const displayStrips = useMemo(
     () => strips.filter(({ board }) => !board.t0_source_strip_secondary),
     [strips]
   );
-  const compactSheetLabel = useMemo(() => {
-    const match = sheetId.match(/^(T0-\d+(?:\.\d+)?x\d+(?:\.\d+)?)/i);
-    return match?.[1] || sheetId;
-  }, [sheetId]);
 
   const placedEdge = useMemo(() => {
     return displayStrips.reduce((max, { board }) => {
@@ -129,7 +112,13 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
                             }}
                           >
                             {showLabel && (
-                              <span className="text-[9px] font-bold truncate px-1" style={{ color: stripColor.text }}>
+                              <span 
+                                className="text-[9px] font-bold truncate px-1" 
+                                style={{ 
+                                  color: stripColor.text,
+                                  writingMode: stripWidthPct < 12 ? "vertical-rl" : "horizontal-tb"
+                                }}
+                              >
                                 {part.component || part.part_id}
                               </span>
                             )}
@@ -163,8 +152,29 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
                       {patternNumbering.byIndex[idx] ? `P${patternNumbering.byIndex[idx]}` : `${ripW}mm`}
                     </div>
                     {((ripStackLookup?.[idx]?.stackOf || stackLookup?.[idx]?.stackOf || 1) > 1) && (
-                      <div className="absolute right-1 top-1 rounded bg-red-600 px-1 py-0.5 text-[8px] font-bold text-white shadow-sm">
-                        Stack {ripStackLookup?.[idx]?.stackOf || stackLookup?.[idx]?.stackOf}
+                      <div 
+                        className="absolute shadow-sm border border-red-200 bg-red-50 text-red-600 font-bold flex items-center justify-center whitespace-nowrap z-20"
+                        style={
+                          stripWidthPct < 12
+                            ? {
+                                top: "4px",
+                                left: "50%",
+                                transform: "translateX(-50%)",
+                                writingMode: "vertical-rl",
+                                padding: "4px 2px",
+                                borderRadius: "4px",
+                                fontSize: "8px",
+                              }
+                            : {
+                                top: "4px",
+                                right: "4px",
+                                padding: "2px 6px",
+                                borderRadius: "9999px",
+                                fontSize: "8px",
+                              }
+                        }
+                      >
+                        ×{ripStackLookup?.[idx]?.stackOf || stackLookup?.[idx]?.stackOf} Stack
                       </div>
                     )}
                   </button>
