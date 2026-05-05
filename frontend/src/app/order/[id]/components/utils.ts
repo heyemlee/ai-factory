@@ -89,18 +89,15 @@ export function formatStackCutSequence(sampleBoard: Board, stackSize: number, pe
     .join(" → ");
 }
 
-/**
- * Compute waste dimensions from a board.
- * Returns a string like "150×838.2" (wasteLength × stripWidth) in mm.
- */
 export function formatWasteDimensions(board: Board): string {
-  // waste field is in mm (linear waste along the length axis)
-  const wasteLength = board.waste;
-  const stripW = board.strip_width || 0;
-  if (wasteLength <= 0) return "0";
+  // board.waste from the backend is actually waste AREA in mm^2
+  const wasteArea = safeNum(board.waste);
+  const stripW = safeNum(board.strip_width);
+  if (wasteArea <= 0) return "0";
   if (stripW > 0) {
-    return `${wasteLength.toFixed(0)}×${stripW.toFixed(0)}`;
+    const wasteLength = wasteArea / stripW;
+    return `${wasteLength.toFixed(1)}×${stripW.toFixed(1)}`;
   }
-  // Fallback: show just the linear waste
-  return `${wasteLength.toFixed(0)}`;
+  // Fallback: show just the area if no strip width
+  return `${wasteArea.toFixed(0)}`;
 }

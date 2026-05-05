@@ -57,6 +57,18 @@ export interface Board {
   t0_all_strips?: { strip_width: number; strip_index: number }[];
   t0_remaining_width?: number;
   actual_strip_width?: number;
+  t0_source_strip_width?: number;
+  t0_source_strip_label?: string;
+  t0_source_strip_secondary?: boolean;
+  stretcher_phase?: boolean;
+  source_stock_group_id?: string;
+  source_stock_width?: number;
+  source_stock_board_type?: string;
+  source_stock_yield_count?: number;
+  source_stock_waste_width?: number;
+  rip_from?: number;
+  rip_leftover?: number;
+  rip_leftover_recovered?: boolean;
 }
 
 export interface InventoryShortage {
@@ -174,6 +186,7 @@ export interface SizeColor {
 export interface EngineeringGroup {
   key: string;
   engNo: number;
+  sourcePriority?: number;
   boardType: string;
   color?: string;
   boardWidth: number;

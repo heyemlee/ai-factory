@@ -256,6 +256,7 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
           </div>
         </div>
       </div>
+
     </>
   );
 
@@ -273,12 +274,9 @@ export function BoardTile({ board, index, color, stackInfo, onClick, disableHove
       {/* Floating Badge above the card */}
       {!hideStackBadge && stackOf > 1 && (
         <div 
-          className="absolute left-1/2 -translate-x-1/2 transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] z-50 rounded-full px-2 py-0.5 pointer-events-none flex items-center shadow-lg border"
+          className="absolute left-1/2 -translate-x-1/2 transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] z-50 rounded-full px-2 py-0.5 pointer-events-none flex items-center shadow-sm border border-red-200 bg-red-50 text-red-600"
           style={{
              top: activeHover ? '-36px' : '-12px',
-             background: color.bg,
-             borderColor: color.border,
-             color: color.text,
              transform: activeHover ? `translateX(-50%) scale(1.15)` : `translateX(-50%) scale(1)`,
              opacity: activeHover ? 0 : 1
           }}

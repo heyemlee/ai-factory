@@ -34,6 +34,8 @@ interface BoardLike {
   color?: string;
   source?: string;
   t0_sheet_id?: string;
+  source_stock_group_id?: string;
+  source_stock_board_type?: string;
 }
 
 interface RecoveredLike {
@@ -78,6 +80,17 @@ export function calculatePlannedBoardUsage(cutResult: CutResultLike | null | und
   for (const board of cutResult?.boards || []) {
     const boardType = board?.board || board?.board_type;
     const color = board?.color || DEFAULT_BOX_COLOR;
+    const sourceBoardType = board?.source_stock_board_type;
+    const sourceGroupId = board?.source_stock_group_id;
+    const sourceIsT0 = String(sourceBoardType || "").toUpperCase().startsWith("T0");
+    if (sourceGroupId && sourceBoardType && !sourceIsT0) {
+      const groupKey = `${sourceGroupId}|${sourceBoardType}|${color}`;
+      if (!plannedT0SheetIds.has(groupKey)) {
+        plannedT0SheetIds.add(groupKey);
+        addUsage(usage, sourceBoardType, color, 1);
+      }
+      continue;
+    }
     const isT0 = board?.source === "T0" || String(boardType || "").toUpperCase().startsWith("T0");
     if (isT0 && t0Sheets.length > 0) {
       if (!board?.t0_sheet_id || plannedT0SheetIds.has(board.t0_sheet_id)) continue;

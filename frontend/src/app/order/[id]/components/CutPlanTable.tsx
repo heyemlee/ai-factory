@@ -3,7 +3,7 @@
 import React, { useMemo, useRef } from "react";
 import { Printer } from "lucide-react";
 import type { Board, CutResult } from "./types";
-import { boardFingerprint, getRipWidth } from "./utils";
+import { boardFingerprint, getRipWidth, nominalStockWidthForBoard, parseBoardDims } from "./utils";
 import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
 import { useLanguage } from "@/lib/i18n";
 
@@ -40,6 +40,7 @@ interface CutPlanT0Recovered {
 interface CutPlanT0Sheet {
   sheet_id: string;
   recovered_strips?: CutPlanT0Recovered[];
+  trim_loss?: number;
 }
 
 interface CutPlanPattern {
@@ -49,6 +50,7 @@ interface CutPlanPattern {
 }
 
 interface CutPlanSection {
+  sourcePriority: number;
   boardType: string;
   boardWidth: number;
   totalLength: number;
@@ -61,6 +63,7 @@ interface BatchInputRow {
   rowNo: number;
   inputValue: number;
   pieces: number;
+  note?: string;
 }
 
 interface CutPlanBatch {
@@ -73,6 +76,8 @@ interface CutPlanBatch {
   trim: number;
   inputLabel: string;
   rows: BatchInputRow[];
+  needsWidthRip?: boolean;
+  sourcePriority?: number;
 }
 
 const copy: Record<LocaleKey, Record<string, string>> = {
@@ -97,6 +102,7 @@ const copy: Record<LocaleKey, Record<string, string>> = {
     row: "Row",
     inputValue: "Input Value (mm)",
     pieces: "Pieces",
+    notes: "Notes",
     t0Rip: "A T0 Rip",
     lengthCut: "B Length Cut",
     t0SectionTitle: "T0 ➡️ T1",
@@ -135,6 +141,7 @@ const copy: Record<LocaleKey, Record<string, string>> = {
     row: "序号",
     inputValue: "输入数值 (mm)",
     pieces: "片数",
+    notes: "备注",
     t0Rip: "A 原板纵裁",
     lengthCut: "B 长度裁切",
     t0SectionTitle: "T0 ➡️ T1",
@@ -173,6 +180,7 @@ const copy: Record<LocaleKey, Record<string, string>> = {
     row: "Fila",
     inputValue: "Valor (mm)",
     pieces: "Piezas",
+    notes: "Notas",
     t0Rip: "A Corte T0",
     lengthCut: "B Corte Longitud",
     t0SectionTitle: "T0 ➡️ T1",
@@ -233,10 +241,11 @@ function compactInputRuns(rows: Array<{ width: number; boardType: string }>) {
 function t0RipRowsForSheet(sheet: CutPlanT0Sheet, boards: Board[]) {
   const sheetStrips = boards
     .filter((board) => board.t0_sheet_id === sheet.sheet_id)
+    .filter((board) => !board.t0_source_strip_secondary)
     .sort((a, b) => (a.t0_strip_position || 0) - (b.t0_strip_position || 0));
   return compactInputRuns([
     ...sheetStrips.map((board) => ({
-      width: getRipWidth(board) || board.actual_strip_width || 0,
+      width: board.t0_source_strip_width || getRipWidth(board) || board.actual_strip_width || 0,
       boardType: board.board,
     })),
     ...(sheet.recovered_strips || [])
@@ -260,31 +269,88 @@ function productionLengthBoardType(board: Board, mergeStandardPool: boolean) {
   return board.board;
 }
 
+function boardCutSource(board: Board): "T0" | "T1" {
+  const source = String(board.source || "").toUpperCase();
+  const boardType = String(board.board || board.board_type || "").toUpperCase();
+  if (board.t0_sheet_id || source === "T0" || boardType.startsWith("T0")) return "T0";
+  return "T1";
+}
+
+function sourcePriority(source: "T0" | "T1") {
+  return source === "T1" ? 0 : 1;
+}
+
+function boardNeedsWidthRip(board: Board, targetWidth: number) {
+  const sourceWidth =
+    board.source_stock_width ||
+    board.rip_from ||
+    nominalStockWidthForBoard(board) ||
+    parseBoardDims(board).width ||
+    0;
+  return sourceWidth > 0 && sourceWidth - targetWidth > 0.5;
+}
+
+function formatBatchNote(
+  locale: LocaleKey,
+  board: Board,
+  stackQty: number,
+  boardWidth: number,
+  cutRows: number,
+  cutLength: number
+) {
+  if (board.stretcher_phase) {
+    const yieldCount = board.source_stock_yield_count || 1;
+    if (locale === "zh") return `[叠 ${stackQty} / rip ${yieldCount}×${fmt(boardWidth)} / length→${fmt(cutLength)}]`;
+    if (locale === "es") return `[apilar ${stackQty} / rip ${yieldCount}×${fmt(boardWidth)} / largo→${fmt(cutLength)}]`;
+    return `[stack ${stackQty} / rip ${yieldCount}×${fmt(boardWidth)} / length→${fmt(cutLength)}]`;
+  }
+
+  const nominal = nominalStockWidthForBoard(board);
+  const widthPart = nominal != null && nominal - boardWidth > 0.5 ? ` / width→${fmt(boardWidth)}` : "";
+  if (locale === "zh") return `[叠 ${stackQty}${widthPart} / length ${cutRows} 刀]`;
+  if (locale === "es") return `[apilar ${stackQty}${widthPart} / largo ${cutRows} corte${cutRows === 1 ? "" : "s"}]`;
+  return `[stack ${stackQty}${widthPart} / length ${cutRows} cut${cutRows === 1 ? "" : "s"}]`;
+}
+
+function formatT0RipNote(locale: LocaleKey, stackQty: number, ripWidth: number) {
+  if (locale === "zh") return `[叠 ${stackQty} / width→${fmt(ripWidth)}]`;
+  if (locale === "es") return `[apilar ${stackQty} / ancho→${fmt(ripWidth)}]`;
+  return `[stack ${stackQty} / width→${fmt(ripWidth)}]`;
+}
+
 function buildCutSections(sectionBoards: Board[], mergeStandardPool = false): CutPlanSection[] {
   const sectionMap: Record<string, Board[]> = {};
   for (const board of sectionBoards) {
     const width = board.strip_width || 0;
     const color = board.color || DEFAULT_BOX_COLOR;
     const boardType = productionLengthBoardType(board, mergeStandardPool);
-    const key = `${color}|||${width}|||${boardType}|||${board.board_size}|||${board.trim_loss ?? 5}`;
+    const cutSource = boardCutSource(board);
+    const key = `${cutSource}|||${color}|||${width}|||${boardType}|||${board.board_size}|||${board.trim_loss ?? 5}`;
     if (!sectionMap[key]) sectionMap[key] = [];
     sectionMap[key].push(board);
   }
 
   return Object.entries(sectionMap)
     .sort(([keyA, boardsA], [keyB, boardsB]) => {
-      const typeA = keyA.split("|||")[2] || boardsA[0]?.board || "";
-      const typeB = keyB.split("|||")[2] || boardsB[0]?.board || "";
+      const partsA = keyA.split("|||");
+      const partsB = keyB.split("|||");
+      const sourceA = sourcePriority((partsA[0] as "T0" | "T1") || boardCutSource(boardsA[0]));
+      const sourceB = sourcePriority((partsB[0] as "T0" | "T1") || boardCutSource(boardsB[0]));
+      if (sourceA !== sourceB) return sourceA - sourceB;
+
+      const typeA = partsA[3] || boardsA[0]?.board || "";
+      const typeB = partsB[3] || boardsB[0]?.board || "";
       const isT1A = typeA.toUpperCase().includes("T1");
       const isT1B = typeB.toUpperCase().includes("T1");
       if (isT1A !== isT1B) return isT1A ? -1 : 1;
-      const widthA = parseFloat(keyA.split("|||")[1]);
-      const widthB = parseFloat(keyB.split("|||")[1]);
+      const widthA = parseFloat(partsA[2]);
+      const widthB = parseFloat(partsB[2]);
       if (Math.abs(widthB - widthA) > 0.01) return widthB - widthA;
       return keyA.localeCompare(keyB);
     })
     .map(([key, groupedBoards]) => {
-      const width = parseFloat(key.split("|||")[1]);
+      const keyParts = key.split("|||");
+      const width = parseFloat(keyParts[2]);
       const sample = groupedBoards[0];
       const fingerprintMap: Record<string, Board[]> = {};
 
@@ -317,6 +383,7 @@ function buildCutSections(sectionBoards: Board[], mergeStandardPool = false): Cu
       });
 
       return {
+        sourcePriority: sourcePriority(boardCutSource(sample)),
         boardType: productionLengthBoardType(sample, mergeStandardPool),
         boardWidth: getRipWidth(sample) || width,
         totalLength: parseTotalLength(sample.board_size),
@@ -385,8 +452,8 @@ export function CutPlanTable({
       if (ripRows.length === 0) return;
 
       const sheetTrim: number =
-        typeof (sheet as Record<string, unknown>).trim_loss === "number"
-          ? (sheet as Record<string, unknown>).trim_loss as number
+        typeof sheet.trim_loss === "number"
+          ? sheet.trim_loss
           : globalTrim;
 
       ripRows.forEach((row, rowIdx) => {
@@ -438,6 +505,7 @@ export function CutPlanTable({
               rowNo: rip.rowOrder + 1,
               inputValue: rip.ripWidth,
               pieces: rip.pieces,
+              note: formatT0RipNote((locale as LocaleKey) || "en", stackQty, rip.ripWidth),
             }],
           });
         }
@@ -456,17 +524,27 @@ export function CutPlanTable({
           width: section.boardWidth,
           trim: section.trimSetting,
           inputLabel: lc.cutLength,
+          sourcePriority: section.sourcePriority,
+          needsWidthRip: boardNeedsWidthRip(pattern.sampleBoard, section.boardWidth),
           rows: pattern.cutRows.map((cutRow, cutRowIdx) => ({
             key: `${batchKey}-${sectionIdx}-${patternIdx}-${cutRowIdx}`,
             rowNo: cutRowIdx + 1,
             inputValue: cutRow.cutLength,
             pieces: cutRow.pieces,
+            note: formatBatchNote(
+              (locale as LocaleKey) || "en",
+              pattern.sampleBoard,
+              pattern.boardCount,
+              section.boardWidth,
+              pattern.cutRows.length,
+              cutRow.cutLength
+            ),
           })),
         });
       });
     });
 
-    // Sort: stack qty descending (4>3>2>1), then by input value ascending
+    // Sort: stack qty first, then batches that do not need a width rip.
     t0Batches.sort((a, b) => {
       if (a.stackQty !== b.stackQty) return b.stackQty - a.stackQty;
       const aVal = a.rows[0]?.inputValue || 0;
@@ -475,7 +553,11 @@ export function CutPlanTable({
     });
 
     t1Batches.sort((a, b) => {
+      if ((a.sourcePriority ?? 0) !== (b.sourcePriority ?? 0)) {
+        return (a.sourcePriority ?? 0) - (b.sourcePriority ?? 0);
+      }
       if (a.stackQty !== b.stackQty) return b.stackQty - a.stackQty;
+      if (!!a.needsWidthRip !== !!b.needsWidthRip) return a.needsWidthRip ? 1 : -1;
       if (Math.abs(a.width - b.width) > 0.01) return a.width - b.width;
       const aVal = a.rows[0]?.inputValue || 0;
       const bVal = b.rows[0]?.inputValue || 0;
@@ -483,7 +565,7 @@ export function CutPlanTable({
     });
 
     return { t0Batches, t1Batches };
-  }, [boards, cutResult, lc.cutLength, lc.rawSheets, lc.ripWidth, lc.sheets, lc.strips, lc.t1Strips, mergeStandardPool, t0Sheets]);
+  }, [boards, cutResult, lc.cutLength, lc.rawSheets, lc.ripWidth, lc.sheets, lc.strips, lc.t1Strips, locale, mergeStandardPool, t0Sheets]);
 
   const selectedColor = boards[0]?.color || DEFAULT_BOX_COLOR;
 
@@ -562,7 +644,7 @@ export function CutPlanTable({
         break-after: avoid;
         page-break-after: avoid;
       }
-      .cut-plan-section-t1 {
+      .cut-plan-section-t0 {
         break-before: page;
         page-break-before: always;
       }
@@ -612,12 +694,13 @@ export function CutPlanTable({
     <div className="overflow-x-auto">
       <table className="w-full table-auto text-[12px]">
         <colgroup>
-          <col style={{ width: "28%" }} />
-          <col style={{ width: "18%" }} />
-          <col style={{ width: "12%" }} />
-          <col style={{ width: "10%" }} />
           <col style={{ width: "22%" }} />
+          <col style={{ width: "14%" }} />
           <col style={{ width: "10%" }} />
+          <col style={{ width: "8%" }} />
+          <col style={{ width: "16%" }} />
+          <col style={{ width: "8%" }} />
+          <col style={{ width: "22%" }} />
         </colgroup>
         <thead>
           <tr className="bg-black/[0.03] border-b border-border/40">
@@ -627,6 +710,7 @@ export function CutPlanTable({
             <th className="text-center py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.row}</th>
             <th className="text-right py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{inputLabel} (mm)</th>
             <th className="text-center py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.pieces}</th>
+            <th className="text-left py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.notes}</th>
           </tr>
         </thead>
         <tbody>
@@ -655,6 +739,7 @@ export function CutPlanTable({
                 <td className="py-2 px-1.5 text-center text-apple-gray">{row.rowNo}</td>
                 <td className="py-2 px-1.5 text-right font-mono">{fmt(row.inputValue)}</td>
                 <td className="py-2 px-1.5 text-center">{row.pieces}</td>
+                <td className="py-2 px-1.5 text-left font-mono text-[11px] text-slate-500 whitespace-nowrap">{row.note}</td>
               </tr>
             ))
           )}
@@ -705,21 +790,21 @@ export function CutPlanTable({
       </div>
 
       <div className="divide-y divide-border/40">
+        <section className="cut-plan-section">
+          <div className="px-4 py-3 bg-blue-50/50 border-b border-blue-100">
+            <h3 className="text-[16px] font-bold text-slate-900">{lc.t1SectionTitle}</h3>
+          </div>
+          {renderBatchTable(planBatches.t1Batches, lc.cutLength)}
+        </section>
+
         {planBatches.t0Batches.length > 0 && (
-          <section className="cut-plan-section">
+          <section className="cut-plan-section cut-plan-section-t0">
             <div className="px-4 py-3 bg-blue-50/50 border-b border-blue-100">
               <h3 className="text-[16px] font-bold text-slate-900">{lc.t0SectionTitle}</h3>
             </div>
             {renderBatchTable(planBatches.t0Batches, lc.ripWidth)}
           </section>
         )}
-
-        <section className="cut-plan-section cut-plan-section-t1">
-          <div className="px-4 py-3 bg-blue-50/50 border-b border-blue-100">
-            <h3 className="text-[16px] font-bold text-slate-900">{lc.t1SectionTitle}</h3>
-          </div>
-          {renderBatchTable(planBatches.t1Batches, lc.cutLength)}
-        </section>
       </div>
     </div>
   );

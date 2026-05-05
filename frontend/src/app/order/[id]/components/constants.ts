@@ -4,7 +4,7 @@ import type { SizeColor } from "./types";
 export const SIZE_COLORS: SizeColor[] = [
   { bg: "#bfdbfe", border: "#3b82f6", text: "#1d4ed8", light: "#ffffff" },
   { bg: "#e9d5ff", border: "#a855f7", text: "#6b21a8", light: "#ffffff" },
-  { bg: "#a7f3d0", border: "#10b981", text: "#047857", light: "#ffffff" },
+  { bg: "#a5f3fc", border: "#06b6d4", text: "#0891b2", light: "#ffffff" },
   { bg: "#fed7aa", border: "#f97316", text: "#c2410c", light: "#ffffff" },
   { bg: "#fbcfe8", border: "#ec4899", text: "#be185d", light: "#ffffff" },
 ];

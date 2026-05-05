@@ -23,6 +23,11 @@ function formatOrderInlineLabel(lang: "zh" | "en" | "es", orderNoLabel: string, 
 const T0_RAW_WIDTH_MM = 1219.2;
 const T0_RAW_LENGTH_MM = 2438.4;
 
+function fmtMm(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, "");
+}
+
 function parseT0SheetDims(sheetId: string): { width: number; length: number } {
   const match = sheetId.match(/T0-(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)/i);
   if (!match) return { width: T0_RAW_WIDTH_MM, length: T0_RAW_LENGTH_MM };
@@ -42,7 +47,7 @@ interface MachineT0Recovered {
 interface MachineT0Sheet {
   sheet_id: string;
   color?: string;
-  strips?: Array<{ strip_width?: number; width?: number; board_type?: string; strip_label?: string }>;
+  strips?: Array<{ strip_width?: number; width?: number; target_width?: number; board_type?: string; strip_label?: string }>;
   recovered_strips?: MachineT0Recovered[];
   remaining_width?: number;
   waste_final?: number;
@@ -58,6 +63,7 @@ type MachinePattern = {
 
 type MachineCutSection = {
   key: string;
+  sourcePriority: number;
   color: string;
   boardType: string;
   boardWidth: number;
@@ -78,6 +84,77 @@ type MachineT0RipBatch = {
   ripWidth: number;
   pieces: number;
 };
+
+function boardCutSource(board: Board): "T0" | "T1" {
+  const source = String(board.source || "").toUpperCase();
+  const boardType = String(board.board || board.board_type || "").toUpperCase();
+  if (board.t0_sheet_id || source === "T0" || boardType.startsWith("T0")) return "T0";
+  return "T1";
+}
+
+function sourcePriority(source: "T0" | "T1"): number {
+  return source === "T1" ? 0 : 1;
+}
+
+function boardNeedsWidthRip(board: Board, targetWidth: number): boolean {
+  const sourceWidth =
+    board.source_stock_width ||
+    board.rip_from ||
+    nominalStockWidthForBoard(board) ||
+    parseBoardDims(board).width ||
+    0;
+  return sourceWidth > 0 && sourceWidth - targetWidth > 0.5;
+}
+
+function firstPatternCutLength(pattern: MachinePattern): number {
+  return pattern.cutRows[0]?.cutLength || 0;
+}
+
+function comparePatternPriority(
+  a: { pattern: MachinePattern; boardWidth: number; sourcePriority?: number },
+  b: { pattern: MachinePattern; boardWidth: number; sourcePriority?: number }
+): number {
+  if ((a.sourcePriority ?? 0) !== (b.sourcePriority ?? 0)) {
+    return (a.sourcePriority ?? 0) - (b.sourcePriority ?? 0);
+  }
+  if (a.pattern.boardCount !== b.pattern.boardCount) {
+    return b.pattern.boardCount - a.pattern.boardCount;
+  }
+  const aNeedsRip = boardNeedsWidthRip(a.pattern.sampleBoard, a.boardWidth);
+  const bNeedsRip = boardNeedsWidthRip(b.pattern.sampleBoard, b.boardWidth);
+  if (aNeedsRip !== bNeedsRip) return aNeedsRip ? 1 : -1;
+  if (Math.abs(a.boardWidth - b.boardWidth) > 0.01) return a.boardWidth - b.boardWidth;
+  return firstPatternCutLength(a.pattern) - firstPatternCutLength(b.pattern);
+}
+
+function maxPatternStack(patterns: MachinePattern[]): number {
+  return Math.max(0, ...patterns.map((pattern) => pattern.boardCount));
+}
+
+function formatCutNote(
+  lang: "zh" | "en" | "es",
+  board: Board,
+  stackQty: number,
+  targetWidth: number,
+  rowCutLength: number,
+  cutRows: number
+): string {
+  if (board.stretcher_phase) {
+    const yieldCount = board.source_stock_yield_count || 1;
+    const width = fmtMm(targetWidth || 101.6);
+    const len = fmtMm(rowCutLength);
+    if (lang === "zh") return `[叠 ${stackQty} / rip ${yieldCount}×${width} / length→${len}]`;
+    if (lang === "es") return `[apilar ${stackQty} / rip ${yieldCount}×${width} / largo→${len}]`;
+    return `[stack ${stackQty} / rip ${yieldCount}×${width} / length→${len}]`;
+  }
+
+  const nominal = nominalStockWidthForBoard(board);
+  const needsRip = nominal != null && nominal - targetWidth > 0.5;
+  const widthPart = needsRip ? ` / width→${fmtMm(targetWidth)}` : "";
+  if (lang === "zh") return `[叠 ${stackQty}${widthPart} / length ${cutRows} 刀]`;
+  if (lang === "es") return `[apilar ${stackQty}${widthPart} / largo ${cutRows} corte${cutRows === 1 ? "" : "s"}]`;
+  return `[stack ${stackQty}${widthPart} / length ${cutRows} cut${cutRows === 1 ? "" : "s"}]`;
+}
 
 /* ═══════════════════════════════════════════
    Machine Cut Plan i18n lookup (independent of app locale)
@@ -139,8 +216,8 @@ const machineI18n: Record<string, Record<string, string>> = {
     recovered: "回收",
     waste: "废料",
     fromLeft: "从左到右",
-    phaseATitle: "Step A",
-    phaseBTitle: "Step B",
+    phaseATitle: "T0 ➡️ T1",
+    phaseBTitle: "T1 ➡️ T2",
     subStepSetup: "① 机器设定",
     subStepInput: "② 板材输入",
     subStepLayout: "③ 排版图",
@@ -204,8 +281,8 @@ const machineI18n: Record<string, Record<string, string>> = {
     recovered: "Recovered",
     waste: "Waste",
     fromLeft: "Left to right",
-    phaseATitle: "Step A",
-    phaseBTitle: "Step B",
+    phaseATitle: "T0 ➡️ T1",
+    phaseBTitle: "T1 ➡️ T2",
     subStepSetup: "① Machine Setup",
     subStepInput: "② Board Input",
     subStepLayout: "③ Layout",
@@ -269,8 +346,8 @@ const machineI18n: Record<string, Record<string, string>> = {
     recovered: "Recuperado",
     waste: "Desperdicio",
     fromLeft: "Izquierda a derecha",
-    phaseATitle: "Paso A",
-    phaseBTitle: "Paso B",
+    phaseATitle: "T0 ➡️ T1",
+    phaseBTitle: "T1 ➡️ T2",
     subStepSetup: "① Configuración",
     subStepInput: "② Entrada de Tablero",
     subStepLayout: "③ Diagrama",
@@ -342,9 +419,9 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       const dims = parseT0SheetDims(sheet.sheet_id);
       const sheetStrips = t0BoardStripsBySheetId[sheet.sheet_id] || [];
       const rows = [
-        ...sheetStrips.map(({ board }, stripIdx) => ({
+        ...sheetStrips.filter(({ board }) => !board.t0_source_strip_secondary).map(({ board }, stripIdx) => ({
           key: board.board_id || `strip-${stripIdx}`,
-          width: getRipWidth(board) || board.actual_strip_width || 0,
+          width: board.t0_source_strip_width || getRipWidth(board) || board.actual_strip_width || 0,
           pieces: 1,
         })),
         ...(sheet.recovered_strips || [])
@@ -400,7 +477,10 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
           });
         }
       });
-    return batches;
+    return batches.sort((a, b) => {
+      if (a.sheetIds.length !== b.sheetIds.length) return b.sheetIds.length - a.sheetIds.length;
+      return a.rowOrder - b.rowOrder;
+    });
   };
 
   const parseTotalLength = (bs: string): number => {
@@ -429,26 +509,34 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       const w = b.strip_width || 0;
       const color = b.color || DEFAULT_BOX_COLOR;
       const boardType = productionLengthBoardType(b);
-      const key = `${color}|||${w}|||${boardType}|||${b.board_size}|||${b.trim_loss ?? 5}`;
+      const cutSource = boardCutSource(b);
+      const key = `${cutSource}|||${color}|||${w}|||${boardType}|||${b.board_size}|||${b.trim_loss ?? 5}`;
       if (!sectionMap[key]) sectionMap[key] = [];
       sectionMap[key].push(b);
     }
 
     return Object.entries(sectionMap)
       .sort(([keyA, boardsA], [keyB, boardsB]) => {
-        const typeA = keyA.split("|||")[2] || boardsA[0]?.board || "";
-        const typeB = keyB.split("|||")[2] || boardsB[0]?.board || "";
+        const partsA = keyA.split("|||");
+        const partsB = keyB.split("|||");
+        const sourceA = sourcePriority((partsA[0] as "T0" | "T1") || boardCutSource(boardsA[0]));
+        const sourceB = sourcePriority((partsB[0] as "T0" | "T1") || boardCutSource(boardsB[0]));
+        if (sourceA !== sourceB) return sourceA - sourceB;
+
+        const typeA = partsA[3] || boardsA[0]?.board || "";
+        const typeB = partsB[3] || boardsB[0]?.board || "";
         const isT1A = typeA.toUpperCase().includes("T1");
         const isT1B = typeB.toUpperCase().includes("T1");
         if (isT1A !== isT1B) return isT1A ? -1 : 1;
-        const wA = parseFloat(keyA.split("|||")[1]);
-        const wB = parseFloat(keyB.split("|||")[1]);
+        const wA = parseFloat(partsA[2]);
+        const wB = parseFloat(partsB[2]);
         if (Math.abs(wB - wA) > 0.01) return wB - wA;
         return keyA.localeCompare(keyB);
       })
       .map(([key, groupedBoards]) => {
-        const color = key.split("|||")[0] || DEFAULT_BOX_COLOR;
-        const width = parseFloat(key.split("|||")[1]);
+        const keyParts = key.split("|||");
+        const color = keyParts[1] || DEFAULT_BOX_COLOR;
+        const width = parseFloat(keyParts[2]);
         const sample = groupedBoards[0];
         const boardType = productionLengthBoardType(sample);
         const fpMap: Record<string, Board[]> = {};
@@ -476,7 +564,10 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
             });
           }
           return chunks;
-        });
+        }).sort((a, b) => comparePatternPriority(
+          { pattern: a, boardWidth: getRipWidth(a.sampleBoard) || width, sourcePriority: sourcePriority(boardCutSource(a.sampleBoard)) },
+          { pattern: b, boardWidth: getRipWidth(b.sampleBoard) || width, sourcePriority: sourcePriority(boardCutSource(b.sampleBoard)) }
+        ));
 
         let ripStockWidthMm: number | null = null;
         for (const b of groupedBoards) {
@@ -488,6 +579,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
 
         return {
           key,
+          sourcePriority: sourcePriority(boardCutSource(sample)),
           color,
           boardType,
           boardWidth: getRipWidth(sample) || width,
@@ -508,7 +600,8 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       const w = b.strip_width || 0;
       const color = b.color || DEFAULT_BOX_COLOR;
       const boardType = productionLengthBoardType(b);
-      const key = `${color}|||${w}|||${boardType}|||${b.board_size}|||${b.trim_loss ?? 5}`;
+      const cutSource = boardCutSource(b);
+      const key = `${cutSource}|||${color}|||${w}|||${boardType}|||${b.board_size}|||${b.trim_loss ?? 5}`;
       if (!groupMap[key]) groupMap[key] = [];
       groupMap[key].push(b);
     }
@@ -516,15 +609,21 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     // Sort by width descending so wider groups appear first, then by board type
     return Object.entries(groupMap)
       .sort(([keyA, boardsA], [keyB, boardsB]) => {
+        const partsA = keyA.split("|||");
+        const partsB = keyB.split("|||");
+        const sourceA = sourcePriority((partsA[0] as "T0" | "T1") || boardCutSource(boardsA[0]));
+        const sourceB = sourcePriority((partsB[0] as "T0" | "T1") || boardCutSource(boardsB[0]));
+        if (sourceA !== sourceB) return sourceA - sourceB;
+
         // T1 boards first
-        const typeA = keyA.split("|||")[2] || boardsA[0]?.board || "";
-        const typeB = keyB.split("|||")[2] || boardsB[0]?.board || "";
+        const typeA = partsA[3] || boardsA[0]?.board || "";
+        const typeB = partsB[3] || boardsB[0]?.board || "";
         const isT1A = typeA.toUpperCase().includes("T1");
         const isT1B = typeB.toUpperCase().includes("T1");
         if (isT1A !== isT1B) return isT1A ? -1 : 1;
 
-        const wA = parseFloat(keyA.split("|||")[1]);
-        const wB = parseFloat(keyB.split("|||")[1]);
+        const wA = parseFloat(partsA[2]);
+        const wB = parseFloat(partsB[2]);
 
         // Non-rip before rip (rip = needs two-step, goes last)
         // Fall back to parseBoardDims width if SKU label doesn't yield a nominal width.
@@ -537,9 +636,10 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         if (Math.abs(wB - wA) > 0.01) return wB - wA;
         return keyA.localeCompare(keyB);
       })
-      .map(([key, grpBoards], idx) => {
-      const color = key.split("|||")[0] || DEFAULT_BOX_COLOR;
-      const width = parseFloat(key.split("|||")[1]);
+      .map(([key, grpBoards]) => {
+      const keyParts = key.split("|||");
+      const color = keyParts[1] || DEFAULT_BOX_COLOR;
+      const width = parseFloat(keyParts[2]);
       const sample = grpBoards[0];
       const totalLength = parseTotalLength(sample.board_size);
       const trimSetting = Math.max(...grpBoards.map(b => b.trim_loss ?? 5));
@@ -556,7 +656,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         fpMap[fp].push(b);
       }
       
-      const patterns = Object.values(fpMap).flatMap((boardsOfPattern) => {
+        const patterns = Object.values(fpMap).flatMap((boardsOfPattern) => {
         const sampleBoard = boardsOfPattern[0];
         const cutMap: Record<number, number> = {};
         for (const p of sampleBoard.parts) {
@@ -576,7 +676,10 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
           });
         }
         return chunks;
-      });
+      }).sort((a, b) => comparePatternPriority(
+        { pattern: a, boardWidth: getRipWidth(a.sampleBoard) || width, sourcePriority: sourcePriority(boardCutSource(a.sampleBoard)) },
+        { pattern: b, boardWidth: getRipWidth(b.sampleBoard) || width, sourcePriority: sourcePriority(boardCutSource(b.sampleBoard)) }
+      ));
       const distinctCutPatterns = patterns.length;
 
       let ripStockWidthMm: number | null = null;
@@ -603,8 +706,9 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       }
 
       return {
-        key: `${color}-w${width}`,
-        engNo: idx + 1,
+        key: `${boardCutSource(sample)}-${color}-w${width}`,
+        engNo: 0,
+        sourcePriority: sourcePriority(boardCutSource(sample)),
         color,
         boardType,
         boardWidth: getRipWidth(sample) || width,
@@ -618,7 +722,17 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         distinctCutPatterns,
         inconsistent,
       } as EngineeringGroup & { inconsistent: boolean };
-    });
+    })
+      .sort((a, b) => {
+        const sourceDelta = (a.sourcePriority ?? 0) - (b.sourcePriority ?? 0);
+        if (sourceDelta !== 0) return sourceDelta;
+        const stackDelta = maxPatternStack(b.patterns) - maxPatternStack(a.patterns);
+        if (stackDelta !== 0) return stackDelta;
+        if (a.needsWidthRip !== b.needsWidthRip) return a.needsWidthRip ? 1 : -1;
+        if (Math.abs(a.boardWidth - b.boardWidth) > 0.01) return a.boardWidth - b.boardWidth;
+        return a.key.localeCompare(b.key);
+      })
+      .map((group, idx) => ({ ...group, engNo: idx + 1 }));
   }, [boards, productionLengthBoardType]);
 
   const displayGroups = useMemo(() => {
@@ -1012,7 +1126,10 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
           const cutSections = buildCutSections(grp.displayBoards);
           const tileItems = cutSections.flatMap((section) =>
             section.patterns.map((pattern) => ({ section, pattern }))
-          );
+          ).sort((a, b) => comparePatternPriority(
+            { pattern: a.pattern, boardWidth: a.section.boardWidth, sourcePriority: a.section.sourcePriority },
+            { pattern: b.pattern, boardWidth: b.section.boardWidth, sourcePriority: b.section.sourcePriority }
+          ));
           return (
           <MachineCutErrorBoundary key={grp.key} label={`group ${grp.engNo}`}>
           <div data-print-group={grp.engNo} className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
@@ -1033,10 +1150,10 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
             </div>
 
             {/* CONTENT SECTION */}
-            <div data-print-content className="p-5 space-y-8">
+            <div data-print-content className="p-5 space-y-8 flex flex-col">
 
               {hasT0RipStep && (
-                <div data-print-phase={`A-${grp.engNo}`} className="space-y-4">
+                <div data-print-phase={`A-${grp.engNo}`} className="space-y-4 order-2">
                   <h4 data-print-step-title className="text-[16px] font-bold text-slate-800 border-b-2 border-emerald-200 pb-2">
                     {mt("phaseATitle")}
                   </h4>
@@ -1111,15 +1228,13 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                 </div>
               )}
 
-              <div data-print-phase={`B-${grp.engNo}`} className="space-y-5">
+              <div data-print-phase={`B-${grp.engNo}`} className="space-y-5 order-1">
                 <h4 data-print-step-title className="text-[16px] font-bold text-slate-800 border-b-2 border-blue-200 pb-2">
                   {mt("phaseBTitle")}
                 </h4>
 
                 {tileItems.map(({ section, pattern }, pIdx) => {
                   const numLabel = indexToNumberStr(pIdx);
-                  const nw = nominalStockWidthForBoard(pattern.sampleBoard);
-                  const patternNeedsRip = nw != null && (nw - section.boardWidth > 0.5);
                   const boardLabel = `${mt("boardWord")} ${numLabel}`;
                   const isSingle = pattern.boardCount === 1;
                   const badgeText = isSingle
@@ -1152,7 +1267,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                                 <th className="text-center py-3 px-4 font-semibold text-apple-gray w-24">{mt("rowNo")}</th>
                                 <th className="text-center py-3 px-4 font-semibold text-apple-gray w-48">{mt("cutLength")}</th>
                                 <th className="text-center py-3 px-4 font-semibold text-apple-gray w-36">{mt("pieceCount")}</th>
-                                <th className="py-3 px-4"></th>
+                                <th className="text-left py-3 px-4 font-semibold text-apple-gray">{mt("notes")}</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -1161,7 +1276,9 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                                   <td className="text-center py-2.5 px-4 text-apple-gray">{ri + 1}</td>
                                   <td className="text-center py-2.5 px-4 font-mono text-[15px]">{row.cutLength}</td>
                                   <td className="text-center py-2.5 px-4 text-[15px]">{row.pieces}</td>
-                                  <td className="py-2.5 px-4"></td>
+                                  <td className="py-2.5 px-4 text-[12px] font-mono text-slate-500 whitespace-nowrap">
+                                    {formatCutNote(machineLang, pattern.sampleBoard, pattern.boardCount, section.boardWidth, row.cutLength, pattern.cutRows.length)}
+                                  </td>
                                 </tr>
                               ))}
                             </tbody>
@@ -1179,7 +1296,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                             stackInfo={{ groupSize: pattern.boardCount, stackOf: pattern.boardCount, isLeader: true }}
                             onClick={() => {}}
                             disableHover={true}
-                            hideWidthWaste={patternNeedsRip}
+                            hideWidthWaste={false}
                             isRotated={false}
                             hideUtilization={true}
                             showDimensions={true}

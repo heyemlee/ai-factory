@@ -33,18 +33,22 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
 
   const totalStrips = strips.length;
   const sheetWastePattern = "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 5px, #cbd5e1 5px, #cbd5e1 6.5px)";
+  const displayStrips = useMemo(
+    () => strips.filter(({ board }) => !board.t0_source_strip_secondary),
+    [strips]
+  );
   const compactSheetLabel = useMemo(() => {
     const match = sheetId.match(/^(T0-\d+(?:\.\d+)?x\d+(?:\.\d+)?)/i);
     return match?.[1] || sheetId;
   }, [sheetId]);
 
   const placedEdge = useMemo(() => {
-    return strips.reduce((max, { board }) => {
+    return displayStrips.reduce((max, { board }) => {
       const x = safeNum(board.t0_strip_position);
-      const w = safeNum(board.strip_width);
+      const w = safeNum(board.t0_source_strip_width) || safeNum(board.strip_width);
       return Math.max(max, x + w);
     }, 0);
-  }, [strips]);
+  }, [displayStrips]);
 
   const recoveredLayout = useMemo(() => {
     return recoveredStrips.reduce<Array<{ width: number; board_type: string; label?: string; left: number }>>((acc, rs) => {
@@ -77,11 +81,11 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
                   <path d="M19 12H5M12 19l-7-7 7-7" />
                 </svg>
               </div>
-              {strips.map(({ board, index: idx }, stripIdx) => {
+              {displayStrips.map(({ board, index: idx }, stripIdx) => {
                 const stripColor = T0_STRIP_COLORS[stripIdx % T0_STRIP_COLORS.length];
                 const stripX = safeNum(board.t0_strip_position);
-                const stripW = safeNum(board.strip_width);
-                const ripW = getRipWidth(board) || stripW;
+                const stripW = safeNum(board.t0_source_strip_width) || safeNum(board.strip_width);
+                const ripW = stripW || getRipWidth(board);
                 const stripLeftPct = clamp((stripX / T0_FULL_WIDTH) * 100, 0, 100);
                 const stripWidthPct = clamp((ripW / T0_FULL_WIDTH) * 100, 0, 100);
                 let y = safeNum(board.trim_loss);
@@ -188,9 +192,9 @@ export function T0SheetCard({ sheetId, strips, onBoardClick, recoveredStrips = [
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
-            {strips.map(({ board, index: idx }, stripIdx) => {
+            {displayStrips.map(({ board, index: idx }, stripIdx) => {
           const stripColor = T0_STRIP_COLORS[stripIdx % T0_STRIP_COLORS.length];
-          const legendW = getRipWidth(board) || safeNum(board.strip_width);
+          const legendW = safeNum(board.t0_source_strip_width) || getRipWidth(board) || safeNum(board.strip_width);
           return (
                 <span key={`${board.board_id}-legend-${idx}`} className="inline-flex items-center gap-1 rounded bg-black/[0.03] px-1.5 py-0.5">
                   <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: stripColor.bg, border: `1px solid ${stripColor.border}` }} />

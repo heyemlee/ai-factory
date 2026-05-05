@@ -206,8 +206,9 @@ export default function OrderDetail() {
     for (let i = 0; i < boards.length; i++) {
       const board = boards[i];
       if (!board.t0_sheet_id) continue;
+      if (board.t0_source_strip_secondary) continue;
       const color = board.color || DEFAULT_BOX_COLOR;
-      const ripWidth = Math.round((getRipWidth(board) || board.actual_strip_width || board.strip_width || 0) * 10) / 10;
+      const ripWidth = Math.round((board.t0_source_strip_width || getRipWidth(board) || board.actual_strip_width || board.strip_width || 0) * 10) / 10;
       const rowIndex = board.t0_sheet_index ?? 0;
       const key = `${color}|||${rowIndex}|||${ripWidth}`;
       if (!groupMap[key]) groupMap[key] = [];
@@ -627,62 +628,54 @@ export default function OrderDetail() {
           strips.sort((a, b) => (a.board.t0_sheet_index ?? 0) - (b.board.t0_sheet_index ?? 0));
         }
 
-        const MAX_BOARDS_PER_COL = 4;
-        const renderColumns = ([typeKey, indices]: [string, number[]]) => {
+        const renderGroup = ([typeKey, indices]: [string, number[]]) => {
           const type = getTypeFromKey(typeKey);
           const colorKey = getColorFromKey(typeKey);
           const boxColor = getColor(colorKey);
           const leaders = indices.filter((idx) => stackGroups.lookup[idx]?.isLeader);
           if (leaders.length === 0) return null;
 
-          // Sort leaders by pattern number for consistent sequential display
+          // Sort leaders by stack quantity (descending) so stacks appear top-left first, then by pattern number
           leaders.sort((a, b) => {
+            const aStack = stackGroups.lookup[a]?.stackOf ?? 1;
+            const bStack = stackGroups.lookup[b]?.stackOf ?? 1;
+            if (aStack !== bStack) return bStack - aStack;
+            
             const aPNo = patternNumbering.byIndex[a] ?? 999;
             const bPNo = patternNumbering.byIndex[b] ?? 999;
             return aPNo - bPNo;
           });
 
-          const cols = [];
-          for (let i = 0; i < leaders.length; i += MAX_BOARDS_PER_COL) {
-            const chunk = leaders.slice(i, i + MAX_BOARDS_PER_COL);
-            const isFirstCol = i === 0;
-
-            cols.push(
-              <div key={`${typeKey}-${i}`} className="flex flex-col gap-y-5 shrink-0">
-                <div className="text-left px-2" style={{ visibility: isFirstCol ? 'visible' : 'hidden' }}>
-                  <h3 className="text-[16px] font-bold text-foreground inline-flex items-center gap-2">
-                    {isFirstCol ? (
-                      <>
-                        <span className="w-3 h-3 rounded-full border border-black/10" style={{ backgroundColor: boxColor.hex_color }} />
-                        {type}
-                      </>
-                    ) : "\u00A0"}
-                  </h3>
-                  <p className="text-[13px] text-apple-gray font-medium">
-                    {isFirstCol ? `${colorLabel(boxColor, locale)} · ${indices.length} ${t("orderDetail.boardsCount")}` : "\u00A0"}
-                  </p>
-                </div>
-                <div className="flex flex-col gap-y-6 pb-0">
-                  {chunk.map((idx) => {
-                    const board = boards[idx];
-                    const stackInfo = stackGroups.lookup[idx];
-                    return (
-                      <div key={`${board.board_id}-${idx}`} className="space-y-1">
-                        <BoardTile
-                          board={board}
-                          index={idx}
-                          color={sizeColorMap[board.board_size]}
-                          stackInfo={stackInfo}
-                          onClick={() => setSelectedBoard(board)}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
+          return (
+            <div key={typeKey} className="flex flex-col gap-y-5 w-full">
+              <div className="text-left px-2 border-b border-border/40 pb-3">
+                <h3 className="text-[16px] font-bold text-foreground inline-flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full border border-black/10" style={{ backgroundColor: boxColor.hex_color }} />
+                  {type}
+                </h3>
+                <p className="text-[13px] text-apple-gray font-medium mt-1">
+                  {colorLabel(boxColor, locale)} · {indices.length} {t("orderDetail.boardsCount")}
+                </p>
               </div>
-            );
-          }
-          return cols;
+              <div className="flex flex-wrap gap-x-10 gap-y-12 items-start px-2 pt-2">
+                {leaders.map((idx) => {
+                  const board = boards[idx];
+                  const stackInfo = stackGroups.lookup[idx];
+                  return (
+                    <div key={`${board.board_id}-${idx}`} className="space-y-1">
+                      <BoardTile
+                        board={board}
+                        index={idx}
+                        color={sizeColorMap[board.board_size]}
+                        stackInfo={stackInfo}
+                        onClick={() => setSelectedBoard(board)}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
         };
 
         /* Count total T0 boards (sheets, not strips) */
@@ -691,9 +684,9 @@ export default function OrderDetail() {
         return (
           <div className="flex flex-col w-full pt-8 pb-12 min-h-[60vh]">
             {/* Top Area (T1) */}
-            <div className="w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 content-start gap-x-10 gap-y-10 px-6 pb-12 border-b border-border/40">
-              {t1Entries.length > 0 ? t1Entries.flatMap(renderColumns) : (
-                <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px] col-span-full">
+            <div className="w-full flex flex-col gap-y-14 px-6 pb-12 border-b border-border/40">
+              {t1Entries.length > 0 ? t1Entries.map(renderGroup) : (
+                <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
                   T1 {t("orderDetail.notFound")}
                 </div>
               )}
