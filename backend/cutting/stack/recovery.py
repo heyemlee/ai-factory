@@ -17,6 +17,14 @@ from .primitives import _r1
 
 
 def _recovery_options_for_inventory(inventory: dict) -> dict[float, str]:
+    """Return mapping of recoverable width → board_type.
+
+    Capacity-driven recovery: any width residual that fits 303.8mm or
+    101.6mm produces a recovered offcut for inventory, regardless of
+    current order demand. The order's stretcher demand is consumed by
+    the allocation phase first; recovery here uses whatever width is
+    left.
+    """
     options: dict[float, str] = {
         STANDARD_NARROW: FALLBACK_T1_BY_WIDTH[STANDARD_NARROW],
         STRETCHER_WIDTH: f"T1-{STRETCHER_WIDTH}x2438.4",
@@ -40,27 +48,33 @@ def _recovery_cost(widths: list[float], existing_strip_count: int) -> float:
 
 
 def _choose_recovery_combo(remaining: float, existing_strip_count: int, disabled: bool) -> list[float]:
-    stretcher_combos = [
-        [STRETCHER_WIDTH, STRETCHER_WIDTH, STRETCHER_WIDTH, STRETCHER_WIDTH],
-        [STRETCHER_WIDTH, STRETCHER_WIDTH, STRETCHER_WIDTH],
-        [STRETCHER_WIDTH, STRETCHER_WIDTH],
-        [STRETCHER_WIDTH],
-    ]
-    combos = stretcher_combos if disabled else [
-        [STANDARD_NARROW, STANDARD_NARROW],
-        [STANDARD_NARROW, STRETCHER_WIDTH, STRETCHER_WIDTH, STRETCHER_WIDTH],
-        [STANDARD_NARROW, STRETCHER_WIDTH, STRETCHER_WIDTH],
-        [STANDARD_NARROW, STRETCHER_WIDTH],
-        [STANDARD_NARROW],
-        *stretcher_combos,
-    ]
-    feasible = [
-        combo for combo in combos
-        if _recovery_cost(combo, existing_strip_count) <= remaining + 1e-6
-    ]
-    if not feasible:
+    """Greedy capacity recovery: rip 303.8mm + 101.6mm from width residual.
+
+    Iterates widths largest-first. While ``width + (kerf if any prior strip)``
+    fits the remaining budget, append it and decrement. With only two candidate
+    widths (303.8, 101.6), greedy-largest-first is optimal — a 303.8 strip is
+    more valuable as inventory than the ~3 × 101.6 it could be replaced with.
+
+    The ``disabled`` parameter is retained for signature stability; callers
+    pass ``False`` now that 101.6 keeps recoveries useful even next to wide
+    main strips.
+    """
+    if disabled:
         return []
-    return max(feasible, key=lambda combo: (combo.count(STANDARD_NARROW), sum(combo), len(combo)))
+
+    chosen: list[float] = []
+    cnt = existing_strip_count
+    budget = remaining
+    for width in (STANDARD_NARROW, STRETCHER_WIDTH):
+        while True:
+            kerf = SAW_KERF if cnt > 0 else 0.0
+            cost = width + kerf
+            if cost > budget + 1e-6:
+                break
+            chosen.append(width)
+            budget -= cost
+            cnt += 1
+    return chosen
 
 
 def _t0_strip_source_width(strip: dict) -> float:

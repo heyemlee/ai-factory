@@ -1,8 +1,9 @@
 """
 T0 sheet packing for the stack-efficiency engine.
 
-Packs strips onto T0 sheets, finalizes the per-sheet plan with recovered
-strips, builds color-scoped inventory views, and bundles strips into stacks.
+Packs strips onto T0 sheets, merges identical-pattern sheets into stacked
+groups (叠切), finalizes the per-sheet plan with recovered strips, builds
+color-scoped inventory views, and bundles strips into stacks.
 """
 
 from __future__ import annotations
@@ -68,6 +69,77 @@ def _build_t0_sheet_pack(strips: list[dict], trim_loss: float) -> list[dict]:
     return sheets
 
 
+def _t0_sheet_rip_signature(sheet: dict) -> tuple[float, ...]:
+    """Compute a rip signature for a T0 sheet: ordered strip widths.
+
+    Two sheets with the same signature have identical strip rip layouts
+    and can be physically stacked (叠切) — the saw makes the same width
+    cuts through all layers.  Length-cut patterns (T1→T2) may differ
+    between layers; only the rip widths must match for stacking.
+    """
+    sig: list[float] = []
+    for strip in sheet.get("strips", []):
+        if strip.get("t0_source_strip_secondary"):
+            continue
+        sig.append(_r1(strip["strip_width"]))
+    return tuple(sig)
+
+
+def _merge_stackable_t0_sheets(sheets: list[dict], max_stack: int = 2) -> list[dict]:
+    """Merge T0 sheets with identical rip signatures into stacked groups.
+
+    When two (or more) T0 sheets share the exact same strip layout —
+    same widths, same pattern keys in the same order — they can be cut
+    together by physically stacking the raw T0 sheets (叠切 ×N).
+
+    The merged entry keeps the strips from the **first** sheet as the
+    representative pattern and stores the additional layers' strips in
+    ``t0_stacked_layers``.  ``t0_sheet_stack`` records the total layer
+    count so downstream code knows how many physical raw sheets this
+    entry consumes.
+    """
+    if max_stack < 2:
+        return sheets
+
+    from collections import defaultdict as _dd
+    by_sig: dict[tuple[float, ...], list[int]] = _dd(list)
+    for idx, sheet in enumerate(sheets):
+        sig = _t0_sheet_rip_signature(sheet)
+        by_sig[sig].append(idx)
+
+    merged: list[dict] = []
+    consumed: set[int] = set()
+
+    for sig, indices in by_sig.items():
+        remaining_indices = [i for i in indices if i not in consumed]
+        cursor = 0
+        while cursor < len(remaining_indices):
+            # Prefer stack of max_stack; fall back to singles
+            take = min(max_stack, len(remaining_indices) - cursor)
+            group_indices = remaining_indices[cursor:cursor + take]
+            cursor += take
+
+            primary = sheets[group_indices[0]]
+            consumed.add(group_indices[0])
+
+            if take == 1:
+                primary["t0_sheet_stack"] = 1
+                merged.append(primary)
+                continue
+
+            # Merge: primary keeps its strips; stacked layers are stored
+            stacked_layers: list[list[dict]] = []
+            for layer_idx in group_indices[1:]:
+                consumed.add(layer_idx)
+                stacked_layers.append(sheets[layer_idx]["strips"])
+
+            primary["t0_sheet_stack"] = take
+            primary["t0_stacked_layers"] = stacked_layers
+            merged.append(primary)
+
+    return merged
+
+
 def _place_stretcher_source_group_on_t0(
     source_strips: list[dict],
     sheets: list[dict],
@@ -100,41 +172,51 @@ def _place_stretcher_source_group_on_t0(
 
 def _finalize_t0_sheets(sheets: list[dict], color: str, inventory: dict, trim_loss: float, t0_id_offset: int) -> dict:
     t0_board_type = _t0_board_type(inventory)
-    usable_width = T0_WIDTH - 2 * trim_loss
-    direct_no_recovery_threshold = usable_width - STANDARD_NARROW - SAW_KERF
 
     recovery_types = _recovery_options_for_inventory(inventory)
     t0_sheets = []
     recovered_inventory = []
+    # Track how many physical T0 sheets each entry consumes for correct
+    # sheet_id assignment (stacked entries consume >1 raw sheet).
+    physical_sheet_counter = 0
 
-    for sheet_index, sheet in enumerate(sheets, 1):
-        sheet_id = f"{t0_board_type}-{color}-{t0_id_offset + sheet_index:03d}"
+    for sheet in sheets:
+        stack_count = sheet.get("t0_sheet_stack", 1)
+        physical_sheet_counter += 1
+        sheet_id = f"{t0_board_type}-{color}-{t0_id_offset + physical_sheet_counter:03d}"
+
+        # -- primary layer strips (representative pattern) --
         order_strips = sheet["strips"]
         order_cut_items = sum(0 if strip.get("t0_source_strip_secondary") else 1 for strip in order_strips)
-        disable_recovery = any(
-            strip["strip_width"] > direct_no_recovery_threshold + 1e-6
-            for strip in order_strips
-        )
         recovered_widths = _choose_recovery_combo(
             sheet["remaining"],
             order_cut_items,
-            disabled=disable_recovery,
+            disabled=False,
         )
         recovery_cost = _recovery_cost(recovered_widths, order_cut_items)
         sheet["remaining"] -= recovery_cost
+
+        # Recovery rips run the full effective board height. If any main strip
+        # on this sheet needs no_trim (a part longer than usable), the saw is
+        # already set up that way and the rip uses BOARD_HEIGHT.
+        sheet_no_trim = any(strip.get("no_trim") for strip in order_strips)
+        recovered_length = round(BOARD_HEIGHT if sheet_no_trim else BOARD_HEIGHT - 2 * trim_loss, 1)
 
         recovered_strips = []
         for width in recovered_widths:
             board_type = recovery_types[width]
             recovered = {
                 "width": width,
+                "length": recovered_length,
                 "board_type": board_type,
                 "type": board_type,
-                "label": f"Recovered {width}mm",
+                "label": f"Recovered {width}×{recovered_length}mm",
                 "color": color,
             }
             recovered_strips.append(recovered)
-            recovered_inventory.append(recovered)
+            # Each stacked layer also produces these recovered strips.
+            for _ in range(stack_count):
+                recovered_inventory.append(dict(recovered))
 
         all_strips_info = [
             {"strip_width": strip["strip_width"], "strip_index": idx}
@@ -148,6 +230,18 @@ def _finalize_t0_sheets(sheets: list[dict], color: str, inventory: dict, trim_lo
             strip["t0_all_strips"] = all_strips_info
             strip["t0_remaining_width"] = round(max(sheet["remaining"], 0), 1)
 
+        # Stamp stacked-layer strips with the same sheet_id so the frontend
+        # renders them as part of the same T0 sheet group.
+        stacked_layers = sheet.get("t0_stacked_layers", [])
+        for layer_strips in stacked_layers:
+            for idx, strip in enumerate(layer_strips):
+                strip["t0_sheet_id"] = sheet_id
+                strip["t0_sheet_index"] = idx
+                strip["t0_strip_position"] = strip.get("x_position", 0.0)
+                strip["t0_total_strips_on_sheet"] = len(order_strips)
+                strip["t0_all_strips"] = all_strips_info
+                strip["t0_remaining_width"] = round(max(sheet["remaining"], 0), 1)
+
         order_width = sum(_t0_strip_consumed_width(strip) for strip in order_strips)
         recovered_width = sum(recovered_widths)
         total_cut_items = order_cut_items + len(recovered_widths)
@@ -155,7 +249,7 @@ def _finalize_t0_sheets(sheets: list[dict], color: str, inventory: dict, trim_lo
         useful_width = order_width + recovered_width
         utilization = useful_width * BOARD_HEIGHT / (T0_WIDTH * BOARD_HEIGHT)
 
-        t0_sheets.append({
+        sheet_entry: dict[str, Any] = {
             "sheet_id": sheet_id,
             "color": color,
             "t0_size": f"{T0_WIDTH} × {BOARD_HEIGHT}",
@@ -186,18 +280,29 @@ def _finalize_t0_sheets(sheets: list[dict], color: str, inventory: dict, trim_lo
             "remaining_width": round(max(sheet["remaining"], 0), 1),
             "utilization": round(utilization, 4),
             "recovered_strips": recovered_strips,
-        })
+        }
+        if stack_count > 1:
+            sheet_entry["t0_sheet_stack"] = stack_count
+        t0_sheets.append(sheet_entry)
+
+    # Collect ALL strips: primary + stacked layers
+    all_t0_strips = []
+    for sheet in sheets:
+        all_t0_strips.extend(sheet["strips"])
+        for layer_strips in sheet.get("t0_stacked_layers", []):
+            all_t0_strips.extend(layer_strips)
 
     return {
         "t0_board_type": t0_board_type,
         "t0_sheets": t0_sheets,
-        "t0_strips": [strip for sheet in sheets for strip in sheet["strips"]],
+        "t0_strips": all_t0_strips,
         "recovered_inventory": recovered_inventory,
     }
 
 
 def _pack_t0_sheets(strips: list[dict], color: str, inventory: dict, trim_loss: float, t0_id_offset: int) -> dict:
     sheets = _build_t0_sheet_pack(strips, trim_loss)
+    sheets = _merge_stackable_t0_sheets(sheets)
     return _finalize_t0_sheets(sheets, color, inventory, trim_loss, t0_id_offset)
 
 

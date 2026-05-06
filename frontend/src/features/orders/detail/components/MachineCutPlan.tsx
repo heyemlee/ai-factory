@@ -57,6 +57,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     const ripMap = new Map<string, MachineT0RipBatch & { order: number }>();
     sheets.forEach((sheet, sheetIdx) => {
       const dims = parseT0SheetDims(sheet.sheet_id);
+      const stackCount = sheet.t0_sheet_stack || 1;
       const sheetStrips = t0BoardStripsBySheetId[sheet.sheet_id] || [];
       const rows = [
         ...sheetStrips.filter(({ board }) => !board.t0_source_strip_secondary).map(({ board }, stripIdx) => ({
@@ -83,13 +84,16 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         ].join("|||");
         const existing = ripMap.get(key);
         if (existing) {
-          existing.sheetIds.push(sheet.sheet_id);
+          // Expand by stack count: each stacked layer adds a physical sheet
+          for (let i = 0; i < stackCount; i++) existing.sheetIds.push(sheet.sheet_id);
         } else {
+          // Seed with stackCount copies of the sheet_id
+          const seedIds = Array.from({ length: stackCount }, () => sheet.sheet_id);
           ripMap.set(key, {
             key,
             order: sheetIdx,
             rowOrder: rowIdx,
-            sheetIds: [sheet.sheet_id],
+            sheetIds: seedIds,
             totalLength: dims.length,
             width: dims.width,
             trim: 5,
@@ -644,6 +648,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                                 .map((r) => ({ width: r.width as number, board_type: r.board_type ?? "", label: r.label }))}
                               patternNumbering={patternNumbering}
                               compactHeader={true}
+                              t0SheetStack={sampleSheet.t0_sheet_stack || 1}
                             />
                           </div>
                         )}

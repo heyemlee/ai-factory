@@ -5,7 +5,7 @@ import type { Board, SizeColor, PatternNumbering, RipStackInfo } from "./types";
 import { T0_STRIP_COLORS } from "./constants";
 import { clamp, getRipWidth, safeNum } from "./utils";
 
-export function T0SheetCard({ strips, onBoardClick, recoveredStrips = [], patternNumbering, stackLookup, ripStackLookup }: {
+export function T0SheetCard({ strips, onBoardClick, recoveredStrips = [], patternNumbering, stackLookup, ripStackLookup, t0SheetStack = 1 }: {
   sheetId: string;
   strips: { board: Board; index: number }[];
   sizeColorMap: Record<string, SizeColor>;
@@ -15,6 +15,8 @@ export function T0SheetCard({ strips, onBoardClick, recoveredStrips = [], patter
   stackLookup?: Record<number, { groupSize: number; stackOf: number; isLeader: boolean }>;
   ripStackLookup?: Record<number, RipStackInfo>;
   compactHeader?: boolean;
+  /** Number of physical T0 raw sheets stacked together (叠切). */
+  t0SheetStack?: number;
 }) {
   const { t } = useLanguage();
   const T0_FULL_WIDTH = 1219.2;
@@ -51,6 +53,11 @@ export function T0SheetCard({ strips, onBoardClick, recoveredStrips = [], patter
           <div className="flex items-center justify-center gap-2 mb-2">
             <div className="h-px bg-slate-200 flex-1" />
             <span className="text-[10px] text-slate-500 font-mono">1219.2 mm</span>
+            {t0SheetStack > 1 && (
+              <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-red-50 text-red-600 border border-red-200">
+                ×{t0SheetStack} T0 Stacked
+              </span>
+            )}
             <div className="h-px bg-slate-200 flex-1" />
           </div>
 

@@ -26,6 +26,8 @@ interface T0SheetLike {
   sheet_id?: string;
   color?: string;
   strips?: Array<{ board_type?: string; strip_label?: string }>;
+  /** Number of physical T0 raw sheets stacked together (叠切). */
+  t0_sheet_stack?: number;
 }
 
 interface BoardLike {
@@ -74,7 +76,8 @@ export function calculatePlannedBoardUsage(cutResult: CutResultLike | null | und
     const firstStrip = Array.isArray(sheet?.strips) ? sheet.strips[0] : null;
     const boardType = firstStrip?.board_type || firstStrip?.strip_label || "T0-RAW";
     const color = sheet?.color || DEFAULT_BOX_COLOR;
-    addUsage(usage, boardType, color, 1);
+    // Stacked T0 sheets consume multiple physical raw sheets
+    addUsage(usage, boardType, color, sheet?.t0_sheet_stack || 1);
   }
 
   for (const board of cutResult?.boards || []) {

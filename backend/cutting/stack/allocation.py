@@ -618,7 +618,7 @@ def _allocate_stretcher_from_t0_residual(
         # If we couldn't place the current front of the queue into existing lanes, create new lanes.
         same_count = _same_length_prefix_count(pending)
         target_sheets: list[dict] = []
-        target_stack_sizes = (4, 2) if same_count >= 2 else (1,)
+        target_stack_sizes = (4, 2, 1) if same_count >= 2 else (1,)
         for target_stack_size in target_stack_sizes:
             if same_count < target_stack_size:
                 continue
@@ -690,6 +690,56 @@ def _allocate_stretcher_from_t0_residual(
             break
 
     queue[:] = pending
+    return allocated
+
+
+def _allocate_stretcher_from_t0_width_residual(
+    queue: list[dict],
+    sheets: list[dict],
+    color: str,
+    trim_loss: float,
+    source_counter: dict[str, int],
+) -> list[dict]:
+    """Place stretchers in the WIDTH residual of existing T0 sheets.
+
+    After the length-residual pass nests stretchers below existing parts,
+    some sheets still have unused width on the right (e.g. a 1036.8mm back
+    panel leaves ~170mm — too narrow for 303.8 recovery, wide enough for
+    a 101.6 stretcher rip). This phase opens new stretcher rip lanes there
+    and length-nests as many same-length stretchers into each new lane as
+    fit. No new T0 sheets are opened.
+    """
+    allocated: list[dict] = []
+    if not queue:
+        return allocated
+
+    for sheet in sheets:
+        while queue:
+            kerf = SAW_KERF if sheet.get("strips") else 0.0
+            if sheet["remaining"] < STRETCHER_WIDTH + kerf - 1e-6:
+                break
+
+            strip = queue[0]
+            source_counter["t0_direct"] += 1
+            group_id = f"T0-WIDTH-{color}-{source_counter['t0_direct']:03d}"
+            _stamp_stretcher_source(strip, STRETCHER_WIDTH, group_id, 1, t0_source=True)
+
+            if not _append_strip_to_t0_sheet(sheet, strip):
+                break
+            queue.pop(0)
+            allocated.append(strip)
+
+            lane = sheet["strips"][-1]
+            base_length = _r1(_cut_length(lane["parts"][0]))
+            while queue:
+                next_part = queue[0]["parts"][0]
+                if _r1(_cut_length(next_part)) != base_length:
+                    break
+                if not _can_host_nested_stretcher(lane, next_part, trim_loss):
+                    break
+                _append_part_to_strip(lane, next_part, trim_loss)
+                queue.pop(0)
+
     return allocated
 
 
@@ -777,6 +827,7 @@ def _allocate_stretcher_sources(
         reverse=True,
     )
     t0_allocated.extend(_allocate_stretcher_from_t0_residual(queue, sheets, color, trim_loss, source_counter))
+    t0_allocated.extend(_allocate_stretcher_from_t0_width_residual(queue, sheets, color, trim_loss, source_counter))
 
     # Do not open a T0 raw sheet just to make stretchers. Any queue that remains
     # here could not be placed into existing T0 offcut lanes while preserving

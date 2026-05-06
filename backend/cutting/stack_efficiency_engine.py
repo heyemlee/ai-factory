@@ -59,8 +59,10 @@ from cutting.stack.t0_packer import (
     _build_t0_sheet_pack,
     _bundle_into_stacks,
     _finalize_t0_sheets,
+    _merge_stackable_t0_sheets,
     _pack_t0_sheets,
     _place_stretcher_source_group_on_t0,
+    _t0_sheet_rip_signature,
 )
 
 __all__ = [
@@ -83,6 +85,7 @@ __all__ = [
     "_cut_width",
     "_finalize_t0_sheets",
     "_inventory_stock_for_width",
+    "_merge_stackable_t0_sheets",
     "_is_standard_width",
     "_is_stretcher_width",
     "_new_lane_strip",
@@ -107,6 +110,7 @@ __all__ = [
     "_strip_used_length",
     "_t0_board_type",
     "_t0_stock",
+    "_t0_sheet_rip_signature",
     "_t0_strip_consumed_width",
     "_t0_strip_source_width",
     "_wider_inventory_widths",

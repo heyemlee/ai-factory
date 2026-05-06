@@ -41,6 +41,8 @@ interface CutPlanT0Sheet {
   sheet_id: string;
   recovered_strips?: CutPlanT0Recovered[];
   trim_loss?: number;
+  /** Number of physical T0 raw sheets stacked together (叠切). Defaults to 1. */
+  t0_sheet_stack?: number;
 }
 
 interface CutPlanPattern {
@@ -448,6 +450,7 @@ export function CutPlanTable({
 
     t0Sheets.forEach((sheet, sheetIdx) => {
       const dims = parseT0SheetDims(sheet.sheet_id);
+      const stackCount = sheet.t0_sheet_stack || 1;
       const ripRows = t0RipRowsForSheet(sheet, boards);
       if (ripRows.length === 0) return;
 
@@ -468,12 +471,13 @@ export function CutPlanTable({
         ].join("|||");
         const existing = t0RipMap.get(ripKey);
         if (existing) {
-          existing.sheetIds.push(sheet.sheet_id);
+          for (let i = 0; i < stackCount; i++) existing.sheetIds.push(sheet.sheet_id);
         } else {
+          const seedIds = Array.from({ length: stackCount }, () => sheet.sheet_id);
           t0RipMap.set(ripKey, {
             order: sheetIdx,
             rowOrder: rowIdx,
-            sheetIds: [sheet.sheet_id],
+            sheetIds: seedIds,
             totalLength: dims.length,
             width: dims.width,
             trim: sheetTrim,
@@ -777,7 +781,7 @@ export function CutPlanTable({
         </div>
         <div className="inline-flex h-5 items-center gap-2">
           <span className="text-apple-gray font-medium leading-none">T0 48&quot; × 96&quot;</span>
-          <span className="font-bold text-foreground leading-none">{t0Sheets.length}</span>
+          <span className="font-bold text-foreground leading-none">{t0Sheets.reduce((n, s) => n + (s.t0_sheet_stack || 1), 0)}</span>
         </div>
         <div className="inline-flex h-5 items-center gap-2">
           <span className="text-apple-gray font-medium leading-none">T1 Strips</span>

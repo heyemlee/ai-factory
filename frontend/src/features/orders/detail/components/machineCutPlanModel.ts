@@ -44,6 +44,8 @@ export interface MachineT0Sheet {
   waste_final?: number;
   waste_width?: number;
   utilization?: number;
+  /** Number of physical T0 raw sheets stacked together (叠切). Defaults to 1. */
+  t0_sheet_stack?: number;
 }
 
 export type MachinePattern = {

@@ -164,14 +164,18 @@ def _remaining_parts_count(queues: dict[float, list[dict]]) -> int:
     return sum(len(queue) for queue in queues.values())
 
 
-def _preferred_stack_size(count: int) -> int:
-    for stack_size in (4, 2, 1):
-        if count >= stack_size:
-            return stack_size
-    return 1
+def _append_symmetric_batches(
+    lanes: list[dict],
+    queues: dict[float, list[dict]],
+    sorted_lengths: list[float],
+    trim_loss: float,
+) -> None:
+    """Top up every lane in lockstep so they end with identical content.
 
-
-def _append_full_length_batches(lanes: list[dict], queues: dict[float, list[dict]], sorted_lengths: list[float], trim_loss: float) -> None:
+    Pops are always batches of exactly ``len(lanes)``. A length whose remaining
+    count is below ``lane_count`` (or whose next part will not fit on every
+    lane) is skipped — it stays queued for a later, smaller-lane group.
+    """
     lane_count = len(lanes)
     if lane_count <= 0:
         return
@@ -181,40 +185,35 @@ def _append_full_length_batches(lanes: list[dict], queues: dict[float, list[dict
         changed = False
         for length in sorted_lengths:
             queue = queues[length]
-            if lane_count == 1 and len(queue) >= 2:
-                continue
             while len(queue) >= lane_count:
-                batch = queue[:lane_count]
-                if any(not _can_append_part(lane, part, trim_loss) for lane, part in zip(lanes, batch)):
+                if not all(_can_append_part(lane, queue[0], trim_loss) for lane in lanes):
                     break
                 for lane in lanes:
                     _append_part_to_strip(lane, queue.pop(0), trim_loss)
                 changed = True
 
 
-def _append_even_partial_length_batches(lanes: list[dict], queues: dict[float, list[dict]], sorted_lengths: list[float], trim_loss: float) -> None:
-    if len(lanes) < 2:
-        return
-
-    changed = True
-    while changed:
-        changed = False
-        for length in sorted_lengths:
-            queue = queues[length]
-            if len(queue) < 2:
-                continue
-            candidate_lanes = [lane for lane in lanes if _can_append_part(lane, queue[0], trim_loss)]
-            take = min(len(queue), len(candidate_lanes))
-            if take % 2 == 1:
-                take -= 1
-            if take < 2:
-                continue
-            for lane in candidate_lanes[:take]:
-                _append_part_to_strip(lane, queue.pop(0), trim_loss)
-            changed = True
-
-
 def _build_stack_aligned_lanes(width: float, parts: list[dict], color: str, trim_loss: float) -> list[dict]:
+    """Build stack-aligned lanes with **pair-symmetric** content.
+
+    Strategy (叠切优先 + 同图案配对):
+    Each iteration produces a group of identical lanes (4, 2, or 1) so the
+    downstream bundler can stack them as ×4 or ×2 by ``pattern_key`` match.
+
+    1.  Pick the longest length whose remaining queue has ≥ 2 parts. If only
+        singletons remain, fall back to length-by-length emission.
+    2.  Choose ``lane_count`` (4 / 2 / 1) from the remaining count of that
+        length: 4 when the queue can fully feed four strips at this length's
+        capacity, 2 when ≥ 2 parts remain, else 1 (singleton).
+    3.  Seed every lane with one part of the base length, then top up across
+        ALL lanes in lockstep — every pop is a batch of exactly ``lane_count``
+        parts. A length whose remaining count is below ``lane_count`` is
+        deferred to a later, smaller-lane iteration.
+
+    Consequence: every lane in a group ends with the same length multiset →
+    same ``pattern_key``. ``_bundle_into_stacks`` then forms an x4 or x2 stack
+    automatically. Odd leftovers fall through to a singleton iteration.
+    """
     queues: dict[float, list[dict]] = defaultdict(list)
     for part in parts:
         queues[_r1(_cut_length(part))].append(part)
@@ -232,26 +231,30 @@ def _build_stack_aligned_lanes(width: float, parts: list[dict], color: str, trim
             break
 
         base_queue = queues[base_length]
-        lane_count = _preferred_stack_size(len(base_queue))
+        capacity, _no_trim, _usable_length = _strip_capacity(base_length, trim_loss)
+        base_count = len(base_queue)
+
+        # Pair-symmetric lane count. Use x4 only when the base length has
+        # enough parts to fully feed four lanes at its per-lane capacity;
+        # otherwise prefer x2, falling back to a singleton when only one
+        # part of this length remains.
+        if base_count >= 4 * capacity:
+            lane_count = 4
+        elif base_count >= 2:
+            lane_count = 2
+        else:
+            lane_count = 1
+
         lanes = [_new_lane_strip(width, base_queue.pop(0), color, trim_loss) for _ in range(lane_count)]
 
-        capacity = 1
-        probe = {**lanes[0], "parts": list(lanes[0].get("parts", []))}
-        while base_queue and _append_part_to_strip(probe, base_queue[0], trim_loss):
-            capacity += 1
-            base_queue.pop(0)
-        # Put the probed same-length extras back so they can be distributed evenly.
-        if capacity > 1:
-            restored = probe["parts"][1:]
-            base_queue[:0] = restored
+        # Fill the base length symmetrically: pop in batches of lane_count.
+        while len(base_queue) >= lane_count and \
+                all(_can_append_part(lane, base_queue[0], trim_loss) for lane in lanes):
+            for lane in lanes:
+                _append_part_to_strip(lane, base_queue.pop(0), trim_loss)
 
-        same_length_per_lane = min(capacity, max(1, len(base_queue) // lane_count + 1))
-        for lane in lanes:
-            while len(lane.get("parts", [])) < same_length_per_lane and base_queue and _append_part_to_strip(lane, base_queue[0], trim_loss):
-                base_queue.pop(0)
-
-        _append_full_length_batches(lanes, queues, sorted_lengths, trim_loss)
-        _append_even_partial_length_batches(lanes, queues, sorted_lengths, trim_loss)
+        # Top-up with other lengths, also strictly in batches of lane_count.
+        _append_symmetric_batches(lanes, queues, sorted_lengths, trim_loss)
         packed.extend(lanes)
 
     return packed

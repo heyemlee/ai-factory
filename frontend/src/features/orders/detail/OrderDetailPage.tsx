@@ -716,6 +716,7 @@ export default function OrderDetail() {
                         patternNumbering={patternNumbering}
                         stackLookup={cutAlgorithm === "stack_efficiency" ? stackGroups.lookup : undefined}
                         ripStackLookup={cutAlgorithm === "stack_efficiency" ? t0RipStackGroups.lookup : undefined}
+                        t0SheetStack={(sheetPlan as { t0_sheet_stack?: number } | undefined)?.t0_sheet_stack || 1}
                       />
                     );
                   })}

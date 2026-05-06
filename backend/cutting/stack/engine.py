@@ -46,6 +46,7 @@ from .t0_packer import (
     _build_t0_sheet_pack,
     _bundle_into_stacks,
     _finalize_t0_sheets,
+    _merge_stackable_t0_sheets,
 )
 
 
@@ -58,6 +59,11 @@ def _sheet_stack_context(sheet: dict) -> str:
             continue
         signature.append(f"{_r1(strip.get('strip_width', 0))}:{strip.get('pattern_key', '')}")
     return "|".join(signature)
+
+
+def _physical_t0_count(sheets: list[dict]) -> int:
+    """Count physical raw T0 sheets, accounting for stacked entries."""
+    return sum(int(sheet.get("t0_sheet_stack", 1)) for sheet in sheets)
 
 
 def _run_color(parts: list[dict], inventory: dict, color: str, force_t0_start: bool, trim_loss: float, t0_id_offset: int) -> dict:
@@ -116,12 +122,24 @@ def _run_color(parts: list[dict], inventory: dict, color: str, force_t0_start: b
         unplaced_stretchers = []
 
     inventory_only_strips = [s for s, _ in inventory_strips]
-    t0_all_strips = [strip for sheet in sheets for strip in sheet["strips"]]
+
+    # ── T0 sheet stacking (叠切): merge sheets with identical rip patterns ──
+    sheets = _merge_stackable_t0_sheets(sheets)
+
+    t0_all_strips = []
+    for sheet in sheets:
+        t0_all_strips.extend(sheet["strips"])
+        for layer_strips in sheet.get("t0_stacked_layers", []):
+            t0_all_strips.extend(layer_strips)
     for sheet in sheets:
         context = _sheet_stack_context(sheet)
         for strip in sheet.get("strips", []):
             if _is_stretcher_width(strip.get("strip_width", 0)):
                 strip["stack_context_key"] = context
+        for layer_strips in sheet.get("t0_stacked_layers", []):
+            for strip in layer_strips:
+                if _is_stretcher_width(strip.get("strip_width", 0)):
+                    strip["stack_context_key"] = context
     _bundle_into_stacks(inventory_only_strips, pattern_prefix=f"INV-{color}-")
     _bundle_into_stacks(t0_all_strips, pattern_prefix=f"T0-{color}-")
 
@@ -230,7 +248,8 @@ def run_engine(
             recovered["width"] * BOARD_HEIGHT
             for recovered in partial["recovered_inventory"]
         )
-        t0_area = len(partial["t0_sheets"]) * T0_WIDTH * BOARD_HEIGHT
+        physical_t0_count = _physical_t0_count(partial["t0_sheets"])
+        t0_area = physical_t0_count * T0_WIDTH * BOARD_HEIGHT
         t1_area = sum(board["board_area"] for board in partial["boards"] if board.get("source") == "inventory")
         total_area = t0_area + t1_area
         by_color[color] = {
@@ -238,7 +257,7 @@ def run_engine(
             "parts_placed": sum(len(board["parts"]) for board in partial["boards"]),
             "total_parts_placed": sum(len(board["parts"]) for board in partial["boards"]),
             "boards_used": len(partial["boards"]),
-            "t0_sheets_used": len(partial["t0_sheets"]),
+            "t0_sheets_used": physical_t0_count,
             "t0_recovered_strips": len(partial["recovered_inventory"]),
             "overall_utilization": round((parts_area + recovered_area) / total_area if total_area > 0 else 0, 4),
         }
@@ -253,7 +272,7 @@ def run_engine(
         if not color_t0_sheets:
             continue
         t0_board_type, stock = _t0_stock(inventory_by_color[color])
-        needed = len(color_t0_sheets)
+        needed = _physical_t0_count(color_t0_sheets)
         if needed > stock:
             t0_shortages.append({
                 "board_type": t0_board_type,
@@ -266,14 +285,18 @@ def run_engine(
     total_parts_required = len(valid_parts)
     total_parts_placed = sum(len(board["parts"]) for board in all_boards)
     total_oversized = len(oversized_parts)
+    total_physical_t0 = _physical_t0_count(all_t0_sheets)
     total_board_area = (
-        len(all_t0_sheets) * T0_WIDTH * BOARD_HEIGHT
+        total_physical_t0 * T0_WIDTH * BOARD_HEIGHT
         + sum(board["board_area"] for board in all_boards if board.get("source") == "inventory")
     )
     total_parts_area = sum(board["parts_total_area"] for board in all_boards)
     total_recovered_area = sum(recovered["width"] * BOARD_HEIGHT for recovered in recovered_inventory)
     total_length_kerf_area = sum(board["kerf_total"] * board["strip_width"] for board in all_boards)
-    total_t0_rip_kerf_area = sum(float(sheet.get("kerf_loss", 0)) * BOARD_HEIGHT for sheet in all_t0_sheets)
+    total_t0_rip_kerf_area = sum(
+        float(sheet.get("kerf_loss", 0)) * BOARD_HEIGHT * int(sheet.get("t0_sheet_stack", 1))
+        for sheet in all_t0_sheets
+    )
     total_waste_area = total_board_area - total_parts_area - total_recovered_area - total_length_kerf_area - total_t0_rip_kerf_area
     overall_utilization = (total_parts_area + total_recovered_area) / total_board_area if total_board_area > 0 else 0
 
@@ -331,7 +354,7 @@ def run_engine(
         "all_parts_cut": total_parts_placed == total_parts_required and total_oversized == 0,
         "strips_used": len(all_boards),
         "boards_used": len(all_boards),
-        "t0_sheets_used": len(all_t0_sheets),
+        "t0_sheets_used": total_physical_t0,
         "t0_recovered_strips": len(recovered_inventory),
         "inventory_used": used_inventory,
         "inventory_shortage": t0_shortages,
@@ -371,7 +394,7 @@ def run_engine(
     }
     if all_t0_sheets:
         output["t0_plan"] = {
-            "t0_sheets_needed": len(all_t0_sheets),
+            "t0_sheets_needed": total_physical_t0,
             "t0_sheets": all_t0_sheets,
             "total_utilization": round(
                 sum(float(sheet.get("utilization", 0)) for sheet in all_t0_sheets) / len(all_t0_sheets),
@@ -398,5 +421,6 @@ def run_engine(
         json.dump(output, handle, indent=2, ensure_ascii=False)
 
     print(f"\nStack efficiency complete: {total_parts_placed}/{total_parts_required} parts, "
-          f"{len(all_boards)} strips, {len(all_t0_sheets)} T0 sheets")
+          f"{len(all_boards)} strips, {total_physical_t0} T0 sheets "
+          f"({len(all_t0_sheets)} patterns)")
     return output
