@@ -123,7 +123,7 @@ const copy: Record<LocaleKey, Record<string, string>> = {
 	    t1SectionTitle: 'Take 24" / 12"',
 	    ripWidth: "Cut Width",
 	    cutWidth: "Cut Width",
-	    widthCut: "Width",
+	    widthCut: "W",
 	    cutLength: "Cut Length",
 	    lengthCut: "L",
 	    take: "Take",
@@ -166,7 +166,7 @@ const copy: Record<LocaleKey, Record<string, string>> = {
 	    t1SectionTitle: '拿 24" / 12"',
 	    ripWidth: "裁切宽度",
 	    cutWidth: "裁切宽度",
-	    widthCut: "Width",
+	    widthCut: "W",
 	    cutLength: "裁切长度",
 	    lengthCut: "L",
 	    take: "拿料",
@@ -209,7 +209,7 @@ const copy: Record<LocaleKey, Record<string, string>> = {
 	    t1SectionTitle: 'Tomar 24" / 12"',
 	    ripWidth: "Cortar Ancho",
 	    cutWidth: "Cortar Ancho",
-	    widthCut: "Width",
+	    widthCut: "W",
 	    cutLength: "Longitud Corte",
 	    lengthCut: "L",
 	    take: "Tomar",
@@ -866,13 +866,19 @@ export function CutPlanTable({
 	        break-before: page;
 	        page-break-before: always;
 	      }
-      .cut-plan-batch {
-        break-inside: avoid;
-        page-break-inside: avoid;
-      }
-      .cut-plan-batch-start td {
-        border-top: 5px solid #e5e7eb !important;
-      }
+	      .cut-plan-batch {
+	        break-inside: avoid;
+	        page-break-inside: avoid;
+	      }
+	      .cut-plan-gap-row td {
+	        height: 16px !important;
+	        padding: 0 !important;
+	        background: #e5e7eb !important;
+	        border-top: 0 !important;
+	        border-bottom: 0 !important;
+	        border-left: 0 !important;
+	        border-right: 0 !important;
+	      }
       * {
         transition: none !important;
         animation: none !important;
@@ -932,42 +938,46 @@ export function CutPlanTable({
             <th className="text-center py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.pieces}</th>
             <th className="text-left py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">Note</th>
           </tr>
-        </thead>
-        <tbody>
-          {blocks.flatMap((block) => block.steps.flatMap((step, stepIdx) =>
-            step.rows.map((row, rowIdx) => (
-              <tr
-                key={`${block.key}-${step.key}-${row.key}`}
-                className={`border-b border-border/20 hover:bg-black/[0.01] ${stepIdx === 0 && rowIdx === 0 ? "cut-plan-batch-start" : ""}`}
-              >
-                {rowIdx === 0 && (
-                  <>
-                    <td rowSpan={step.rows.length} className="py-2 px-1.5 align-top whitespace-nowrap border-r border-border/20">{step.take}</td>
-	                    <td rowSpan={step.rows.length} className="py-2 px-1.5 align-top text-center whitespace-nowrap border-r border-border/20">
-	                      {step.stackQty > 1 ? (
-	                        <span className="font-bold text-apple-red">x{step.stackQty}</span>
-	                      ) : (
-	                        <span className="text-slate-900">1</span>
+	        </thead>
+	        <tbody>
+	          {blocks.map((block, blockIdx) => (
+	            <React.Fragment key={block.key}>
+	              {blockIdx > 0 && (
+	                <tr className="cut-plan-gap-row"><td colSpan={8} /></tr>
+	              )}
+	              {block.steps.flatMap((step) =>
+	                step.rows.map((row, rowIdx) => (
+	                  <tr key={`${block.key}-${step.key}-${row.key}`} className="border-b border-border/20 hover:bg-black/[0.01]">
+	                    {rowIdx === 0 && (
+	                      <>
+	                        <td rowSpan={step.rows.length} className="py-2 px-1.5 align-top whitespace-nowrap border-r border-border/20">{step.take}</td>
+	                        <td rowSpan={step.rows.length} className="py-2 px-1.5 align-top text-center whitespace-nowrap border-r border-border/20">
+	                          {step.stackQty > 1 ? (
+	                            <span className="font-bold text-apple-red">x{step.stackQty}</span>
+	                          ) : (
+	                            <span className="text-slate-900">1</span>
+	                          )}
+	                        </td>
+	                        <td rowSpan={step.rows.length} className="py-2 px-1.5 align-top text-center text-apple-gray border-r border-border/20">{step.stepNo}</td>
+	                      </>
+	                    )}
+	                    <td className="py-2 px-1.5 text-center text-apple-gray">{row.rowNo}</td>
+	                    {rowIdx === 0 && (
+	                      <td rowSpan={step.rows.length} className={`py-2 px-1.5 align-top text-center border-r border-border/20 ${step.cutLabel === lc.widthCut ? "font-bold" : "font-normal"}`}>{step.cutLabel}</td>
+	                    )}
+	                    <td className="py-2 px-1.5 text-right font-mono">{fmt(row.value)}</td>
+	                    <td className="py-2 px-1.5 text-center">{row.pieces}</td>
+	                    <td className="py-2 px-1.5 text-left">
+	                      {row.note === "recover" && (
+	                        <span className="font-bold text-apple-green">{lc.recover}</span>
 	                      )}
 	                    </td>
-	                    <td rowSpan={step.rows.length} className="py-2 px-1.5 align-top text-center text-apple-gray border-r border-border/20">{step.stepNo}</td>
-	                  </>
-	                )}
-                <td className="py-2 px-1.5 text-center text-apple-gray">{row.rowNo}</td>
-                {rowIdx === 0 && (
-                  <td rowSpan={step.rows.length} className={`py-2 px-1.5 align-top text-center border-r border-border/20 ${step.cutLabel === lc.widthCut ? "font-bold" : "font-normal"}`}>{step.cutLabel}</td>
-                )}
-                <td className="py-2 px-1.5 text-right font-mono">{fmt(row.value)}</td>
-                <td className="py-2 px-1.5 text-center">{row.pieces}</td>
-                <td className="py-2 px-1.5 text-left">
-                  {row.note === "recover" && (
-                    <span className="font-bold text-apple-green">{lc.recover}</span>
-                  )}
-                </td>
-              </tr>
-            ))
-          ))}
-        </tbody>
+	                  </tr>
+	                ))
+	              )}
+	            </React.Fragment>
+	          ))}
+	        </tbody>
       </table>
     </div>
   );
