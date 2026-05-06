@@ -1,25 +1,11 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { UploadCloud, Trash2, AlertOctagon, AlertTriangle, ChevronDown, ChevronUp, Package, Scissors, Zap, Layers } from "lucide-react";
+import { UploadCloud, Trash2, AlertOctagon, AlertTriangle, ChevronDown, ChevronUp, Zap, Layers } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { revertCut } from "@/lib/order_actions";
+import { revertCut, submitOrder, CutAlgorithm, UploadSettings } from "@/lib/order_actions";
+import CutSettingsModal from "@/features/orders/components/CutSettingsModal";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/lib/i18n";
-
-type CutMode = "inventory_first" | "t0_start";
-type CutAlgorithm = "efficient" | "stack_efficiency";
-
-interface UploadSettings {
-  cutAlgorithm: CutAlgorithm;
-  cutMode: CutMode;
-  trimLossMm: number;
-}
-
-const DEFAULT_UPLOAD_SETTINGS: UploadSettings = {
-  cutAlgorithm: "stack_efficiency",
-  cutMode: "inventory_first",
-  trimLossMm: 2,
-};
 
 interface Order {
   id: string;
@@ -66,7 +52,6 @@ export default function Orders() {
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [isDeleteMode, setIsDeleteMode] = useState(false);
   const [pendingUploadFile, setPendingUploadFile] = useState<File | null>(null);
-  const [uploadSettings, setUploadSettings] = useState<UploadSettings>(DEFAULT_UPLOAD_SETTINGS);
 
   const openDeleteModal = useCallback((ordersList: Order[]) => {
     setDeleteError(null);
@@ -161,7 +146,6 @@ export default function Orders() {
 
   const openUploadSettings = (file: File) => {
     setUploadError(null);
-    setUploadSettings(DEFAULT_UPLOAD_SETTINGS);
     setPendingUploadFile(file);
   };
 
@@ -192,88 +176,15 @@ export default function Orders() {
   const uploadFile = async (file: File, settings: UploadSettings) => {
     setUploading(true);
     setUploadError(null);
-    const now = new Date();
-    const randomSuffix = Math.random().toString(36).substring(2, 6);
-    const jobId = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}${String(now.getSeconds()).padStart(2,"0")}_${randomSuffix}`;
-    const uniqueSuffix = Date.now();
-    // Sanitize filename for storage path: keep only ASCII-safe chars to avoid
-    // encoding issues with Chinese / special-character filenames.
-    const ext = file.name.replace(/^.*\./, ".") || ".xlsx";
-    const safeName = file.name
-      .replace(/\.[^.]+$/, "")            // strip extension
-      .replace(/[^\w\s-]/g, "")           // drop non-ASCII / special chars
-      .replace(/\s+/g, "_")              // spaces → underscores
-      .substring(0, 60) || "order";       // length cap + fallback
-    const storagePath = `orders/${jobId}_${uniqueSuffix}_${safeName}${ext}`;
-
-    // Upload to Supabase Storage (upsert to avoid conflicts)
-    const { error: storageError } = await supabase.storage
-      .from("order-files")
-      .upload(storagePath, file, { upsert: true });
-
-    if (storageError) {
-      console.error("Storage upload failed:", storageError.message);
-      // Show error to user — the file won't be available for backend processing
-      const friendlyMsg = storageError.message.includes("Bucket not found")
-        ? `文件上传失败: Supabase Storage 中 "order-files" bucket 不存在。请在 Supabase Dashboard → Storage 中创建名为 "order-files" 的 bucket。`
-        : `文件上传失败: ${storageError.message}`;
-      setUploadError(friendlyMsg);
-      setUploading(false);
-      return;
-    }
-
-    const fileUrl = supabase.storage.from("order-files").getPublicUrl(storagePath).data.publicUrl;
-
-    const settingsPayload = {
-      cut_algorithm: settings.cutAlgorithm,
-      trim_loss_mm: settings.trimLossMm,
-    };
-    const orderPayload = {
-      job_id: jobId,
-      filename: file.name,
-      status: "pending",
-      file_url: fileUrl,
-      cut_mode: settings.cutMode,
-    };
-
-    // Insert order row. Prefer dedicated columns, but fall back to
-    // cut_result_json when Supabase REST schema cache has not picked them up.
-    const { error: insertError } = await supabase
-      .from("orders")
-      .insert({
-        ...orderPayload,
-        ...settingsPayload,
-      });
-
-    if (insertError) {
-      const missingSettingsColumn = insertError.message.includes("cut_algorithm")
-        || insertError.message.includes("trim_loss_mm");
-      if (missingSettingsColumn) {
-        const { error: fallbackError } = await supabase
-          .from("orders")
-          .insert({
-            ...orderPayload,
-            cut_result_json: {
-              upload_settings: {
-                ...settingsPayload,
-                cut_mode: settings.cutMode,
-              },
-            },
-          });
-        if (fallbackError) {
-          setUploadError(`订单创建失败: ${fallbackError.message}`);
-        } else {
-          await fetchOrders();
-          setPendingUploadFile(null);
-        }
-      } else {
-        setUploadError(`订单创建失败: ${insertError.message}`);
-      }
-    } else {
+    try {
+      await submitOrder({ blob: file, filename: file.name, settings });
       await fetchOrders();
       setPendingUploadFile(null);
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setUploading(false);
     }
-    setUploading(false);
   };
 
   const toggleOrderSelection = (id: string) => {
@@ -415,155 +326,13 @@ export default function Orders() {
       </div>
 
       {pendingUploadFile && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          onClick={(e) => { e.stopPropagation(); closeUploadSettings(); }}
-        >
-          <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
-          <div
-            className="relative bg-white w-full max-w-lg rounded-[24px] shadow-[0_8px_40px_rgba(0,0,0,0.16)] border border-black/5 p-7"
-            onClick={(e) => e.stopPropagation()}
-            style={{ animation: 'modalIn 0.22s cubic-bezier(0.16, 1, 0.3, 1)' }}
-          >
-            <style>{`
-              @keyframes modalIn {
-                from { opacity: 0; transform: scale(0.92) translateY(8px); }
-                to   { opacity: 1; transform: scale(1) translateY(0); }
-              }
-            `}</style>
-            <div className="mb-6">
-              <h3 className="text-[20px] font-semibold tracking-tight">{t("orders.uploadSettings")}</h3>
-              <p className="text-[13px] text-apple-gray mt-1 truncate">
-                {t("orders.uploadSettings.file")}: {pendingUploadFile.name}
-              </p>
-            </div>
-
-            <div className="space-y-5">
-              <div>
-                <div className="text-[12px] font-semibold text-apple-gray mb-2">
-                  {t("orders.algorithm")}
-                </div>
-                <div className="grid grid-cols-2 gap-1 rounded-full bg-black/5 p-1">
-                  <button
-                    type="button"
-                    aria-pressed={uploadSettings.cutAlgorithm === "stack_efficiency"}
-                    onClick={() => setUploadSettings(prev => ({ ...prev, cutAlgorithm: "stack_efficiency", trimLossMm: prev.trimLossMm || 2 }))}
-                    className={`inline-flex min-w-0 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-[13px] font-semibold transition-colors whitespace-nowrap ${
-                      uploadSettings.cutAlgorithm === "stack_efficiency"
-                        ? "bg-white text-foreground shadow-sm"
-                        : "text-apple-gray hover:text-foreground"
-                    }`}
-                  >
-                    <Layers size={14} className="shrink-0" />
-                    <span className="truncate">{t("orders.algorithm.stackEfficiency")}</span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={uploadSettings.cutAlgorithm === "efficient"}
-                    onClick={() => setUploadSettings(prev => ({ ...prev, cutAlgorithm: "efficient" }))}
-                    className={`inline-flex min-w-0 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-[13px] font-semibold transition-colors whitespace-nowrap ${
-                      uploadSettings.cutAlgorithm === "efficient"
-                        ? "bg-white text-foreground shadow-sm"
-                        : "text-apple-gray hover:text-foreground"
-                    }`}
-                  >
-                    <Zap size={14} className="shrink-0" />
-                    <span className="truncate">{t("orders.algorithm.efficient")}</span>
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <div className="text-[12px] font-semibold text-apple-gray mb-2">
-                  {t("orders.cutMode")}
-                </div>
-                <div className="grid grid-cols-2 gap-1 rounded-full bg-black/5 p-1">
-                  <button
-                    type="button"
-                    aria-pressed={uploadSettings.cutMode === "inventory_first"}
-                    onClick={() => setUploadSettings(prev => ({ ...prev, cutMode: "inventory_first" }))}
-                    className={`inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-2 text-[13px] font-semibold transition-colors whitespace-nowrap ${
-                      uploadSettings.cutMode === "inventory_first"
-                        ? "bg-white text-foreground shadow-sm"
-                        : "text-apple-gray hover:text-foreground"
-                    }`}
-                  >
-                    <Package size={14} />
-                    {t("orders.cutMode.inventory")}
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={uploadSettings.cutMode === "t0_start"}
-                    onClick={() => setUploadSettings(prev => ({ ...prev, cutMode: "t0_start" }))}
-                    className={`inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-2 text-[13px] font-semibold transition-colors whitespace-nowrap ${
-                      uploadSettings.cutMode === "t0_start"
-                        ? "bg-white text-foreground shadow-sm"
-                        : "text-apple-gray hover:text-foreground"
-                    }`}
-                  >
-                    <Scissors size={14} />
-                    {t("orders.cutMode.t0")}
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[12px] font-semibold text-apple-gray mb-2 block">
-                  {t("orders.trim")}
-                </label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="number"
-                    min={0}
-                    max={10}
-                    step={0.5}
-                    value={uploadSettings.trimLossMm}
-                    disabled={uploadSettings.cutAlgorithm === "efficient"}
-                    onChange={(e) => {
-                      const value = Number(e.target.value);
-                      setUploadSettings(prev => ({
-                        ...prev,
-                        trimLossMm: Number.isFinite(value) ? Math.max(0, Math.min(10, value)) : 2,
-                      }));
-                    }}
-                    className="w-28 rounded-xl bg-black/[0.04] border border-transparent px-4 py-2.5 text-[14px] font-semibold focus:outline-none focus:bg-white focus:border-apple-blue/30 disabled:opacity-50"
-                  />
-                  <span className="text-[14px] font-medium text-apple-gray">mm</span>
-                </div>
-                {uploadSettings.cutAlgorithm === "efficient" && (
-                  <p className="text-[12px] text-apple-gray mt-2">{t("orders.trim.efficientDisabled")}</p>
-                )}
-              </div>
-
-              {uploadError && (
-                <div className="p-3 rounded-xl bg-apple-red/10 text-apple-red text-[13px] font-medium flex items-start gap-2">
-                  <AlertTriangle size={16} className="shrink-0 mt-0.5" />
-                  <span>{uploadError}</span>
-                </div>
-              )}
-            </div>
-
-            <div className="flex gap-3 mt-7">
-              <button
-                onClick={(e) => { e.stopPropagation(); closeUploadSettings(); }}
-                disabled={uploading}
-                className="flex-1 px-4 py-3 rounded-xl bg-black/5 text-foreground text-[15px] font-semibold hover:bg-black/10 transition-colors disabled:opacity-50"
-              >
-                {t("orders.cancel")}
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  uploadFile(pendingUploadFile, uploadSettings);
-                }}
-                disabled={uploading}
-                className="flex-1 px-4 py-3 rounded-xl bg-apple-blue text-white text-[15px] font-semibold hover:bg-apple-blue/90 transition-colors disabled:opacity-50"
-              >
-                {uploading ? t("orders.uploading") : t("orders.upload")}
-              </button>
-            </div>
-          </div>
-        </div>
+        <CutSettingsModal
+          filename={pendingUploadFile.name}
+          submitting={uploading}
+          error={uploadError}
+          onCancel={closeUploadSettings}
+          onConfirm={(settings) => uploadFile(pendingUploadFile, settings)}
+        />
       )}
 
       {/* Delete Confirmation Modal */}

@@ -10,10 +10,12 @@ import {
   FileSpreadsheet,
   Layers3,
   Search,
+  Send,
   Upload,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import clsx from "clsx";
+import { useRouter } from "next/navigation";
 import readXlsxFile from "read-excel-file/browser";
 import writeXlsxFile from "write-excel-file/browser";
 import type { SheetData } from "write-excel-file/browser";
@@ -23,6 +25,8 @@ import {
   cabinetCategories,
   resolveCabinetDimensions,
 } from "@/lib/cabinet_catalog";
+import { submitOrder, UploadSettings } from "@/lib/order_actions";
+import CutSettingsModal from "@/features/orders/components/CutSettingsModal";
 
 type ResolvedOrderStatus = "ready" | "skip" | "error";
 
@@ -202,8 +206,92 @@ function toExportRows(rows: ResolvedOrderRow[]) {
   }));
 }
 
+const RESOLVED_SHEET_HEADERS = [
+  "ABC Item",
+  "W",
+  "H",
+  "D",
+  "Qty",
+  "Adjustable Shelf Qty",
+  "Fixed Shelf Qty",
+  "Box Color",
+  "Type",
+];
+
+const RESOLVED_SHEET_COLUMNS = [
+  { width: 18 },
+  { width: 8 },
+  { width: 8 },
+  { width: 8 },
+  { width: 8 },
+  { width: 22 },
+  { width: 18 },
+  { width: 16 },
+  { width: 10 },
+];
+
+const CATALOG_EXPORT_COLUMNS: Array<{
+  header: string;
+  width: number;
+  value: (record: CabinetCatalogRecord) => string | number | null;
+}> = [
+  { header: "Category", width: 24, value: (record) => record.category },
+  { header: "ABC Item", width: 18, value: (record) => record.abcItem },
+  { header: "Type", width: 10, value: (record) => record.type },
+  { header: "W", width: 8, value: (record) => record.width },
+  { header: "H", width: 8, value: (record) => record.height },
+  { header: "D", width: 8, value: (record) => record.depth },
+  { header: "List Price", width: 12, value: (record) => record.listPrice },
+  { header: "Door Qty", width: 10, value: (record) => record.doorQty },
+  { header: "Hinge Qty", width: 11, value: (record) => record.hingeQty },
+  { header: "Adjustable Shelf Qty", width: 22, value: (record) => record.adjustableShelfQty },
+  { header: "Fixed Shelf Qty", width: 18, value: (record) => record.fixedShelfQty },
+  { header: "Drawer Qty", width: 11, value: (record) => record.drawerQty },
+  { header: "Door Plank Area", width: 17, value: (record) => record.doorPlankArea },
+  { header: "Left Panel Area", width: 17, value: (record) => record.leftPanelArea },
+  { header: "Right Panel Area", width: 18, value: (record) => record.rightPanelArea },
+  { header: "Top Panel Area", width: 16, value: (record) => record.topPanelArea },
+  { header: "Base Panel Area", width: 17, value: (record) => record.basePanelArea },
+  { header: "Backboard Area", width: 16, value: (record) => record.backboardArea },
+  { header: "Laminate Area", width: 16, value: (record) => record.laminateArea },
+  { header: "Box Face Area", width: 16, value: (record) => record.boxFaceArea },
+  { header: "Door Edge Banding Length", width: 26, value: (record) => record.doorEdgeBandingLength },
+  { header: "Cabinet Edge Banding Length", width: 29, value: (record) => record.cabinetEdgeBandingLength },
+  { header: "Straight Blind Hinge", width: 21, value: (record) => record.straightBlindHinge },
+  { header: "155 Hinge", width: 12, value: (record) => record.lazySusan155Hinge },
+  { header: "Pie Cut Hinge", width: 15, value: (record) => record.lazySusanPieCut },
+  { header: "Pentagon Hinge", width: 16, value: (record) => record.pentagonHinge },
+];
+
+function buildResolvedSheetData(rows: ResolvedOrderRow[]): SheetData {
+  return [
+    RESOLVED_SHEET_HEADERS,
+    ...toExportRows(rows).map((row) => [
+      row["ABC Item"],
+      row.W === "" ? null : row.W,
+      row.H === "" ? null : row.H,
+      row.D === "" ? null : row.D,
+      row.Qty,
+      row["Adjustable Shelf Qty"],
+      row["Fixed Shelf Qty"],
+      row["Box Color"],
+      row.Type,
+    ]),
+  ];
+}
+
+function buildCatalogSheetData(): SheetData {
+  return [
+    CATALOG_EXPORT_COLUMNS.map((column) => column.header),
+    ...cabinetCatalog.map((record) =>
+      CATALOG_EXPORT_COLUMNS.map((column) => column.value(record))
+    ),
+  ];
+}
+
 
 export default function StandardCabinetsPage() {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
@@ -212,6 +300,10 @@ export default function StandardCabinetsPage() {
   const [resolvedRows, setResolvedRows] = useState<ResolvedOrderRow[]>([]);
   const [uploadName, setUploadName] = useState("");
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [submitOpen, setSubmitOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submittedJobId, setSubmittedJobId] = useState<string | null>(null);
 
   const trimmedQuery = query.trim();
 
@@ -288,44 +380,46 @@ export default function StandardCabinetsPage() {
   const handleExportResolvedRows = async () => {
     if (resolvedRows.length === 0) return;
     const baseName = uploadName.replace(/\.(xlsx|xls|csv)$/i, "") || "resolved_order";
-    const data: SheetData = [
-      [
-        "ABC Item",
-        "W",
-        "H",
-        "D",
-        "Qty",
-        "Adjustable Shelf Qty",
-        "Fixed Shelf Qty",
-        "Box Color",
-        "Type",
-      ],
-      ...toExportRows(resolvedRows).map((row) => [
-        row["ABC Item"],
-        row.W === "" ? null : row.W,
-        row.H === "" ? null : row.H,
-        row.D === "" ? null : row.D,
-        row.Qty,
-        row["Adjustable Shelf Qty"],
-        row["Fixed Shelf Qty"],
-        row["Box Color"],
-        row.Type,
-      ]),
-    ];
-    await writeXlsxFile(data, {
+    await writeXlsxFile(buildResolvedSheetData(resolvedRows), {
       sheet: "Resolved Order",
-      columns: [
-        { width: 18 },
-        { width: 8 },
-        { width: 8 },
-        { width: 8 },
-        { width: 8 },
-        { width: 22 },
-        { width: 18 },
-        { width: 16 },
-        { width: 10 },
-      ],
+      columns: RESOLVED_SHEET_COLUMNS,
     }).toFile(`${baseName}_standard_cabinets.xlsx`);
+  };
+
+  const openSubmitModal = () => {
+    if (resolvedRows.length === 0) return;
+    if (uploadStats.error > 0) {
+      const proceed = window.confirm(
+        `${uploadStats.error} 行未能解析尺寸,这些行会以原值进入流水线,可能导致后端报错。继续提交吗?`
+      );
+      if (!proceed) return;
+    }
+    setSubmitError(null);
+    setSubmitOpen(true);
+  };
+
+  const handleSubmitToPipeline = async (settings: UploadSettings) => {
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const blob = await writeXlsxFile(buildResolvedSheetData(resolvedRows), {
+        sheet: "Resolved Order",
+        columns: RESOLVED_SHEET_COLUMNS,
+      }).toBlob();
+
+      const baseName = uploadName.replace(/\.(xlsx|xls|csv)$/i, "") || "resolved_order";
+      const ts = new Date();
+      const stamp = `${ts.getFullYear()}${String(ts.getMonth() + 1).padStart(2, "0")}${String(ts.getDate()).padStart(2, "0")}-${String(ts.getHours()).padStart(2, "0")}${String(ts.getMinutes()).padStart(2, "0")}`;
+      const filename = `standard_cabinets_${baseName}_${stamp}.xlsx`;
+
+      const result = await submitOrder({ blob, filename, settings });
+      setSubmitOpen(false);
+      setSubmittedJobId(result.jobId);
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleDownloadTemplate = async () => {
@@ -344,13 +438,30 @@ export default function StandardCabinetsPage() {
     }).toFile("standard_cabinet_order_template.xlsx");
   };
 
+  const handleDownloadAllData = async () => {
+    await writeXlsxFile(buildCatalogSheetData(), {
+      sheet: "Standard Cabinets",
+      columns: CATALOG_EXPORT_COLUMNS.map((column) => ({ width: column.width })),
+    }).toFile("standard_cabinets_all_data.xlsx");
+  };
+
   return (
     <div className="w-full space-y-6 py-4">
-      <div className="flex flex-col gap-2">
-        <h1 className="text-[32px] font-semibold tracking-tight">Standard Cabinets Database</h1>
-        <p className="text-apple-gray text-[15px]">
-          ABC Item dimensions, prices, and production parameters.
-        </p>
+      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+        <div className="flex flex-col gap-2">
+          <h1 className="text-[32px] font-semibold tracking-tight">Standard Cabinets Database</h1>
+          <p className="text-apple-gray text-[15px]">
+            ABC Item dimensions, prices, and production parameters.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleDownloadAllData()}
+          className="h-10 px-4 rounded-lg bg-apple-blue text-white text-[13px] font-medium flex items-center justify-center gap-2 transition-colors hover:bg-apple-blue/90 lg:mt-1"
+        >
+          <Download size={16} />
+          Download All Data
+        </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -403,6 +514,15 @@ export default function StandardCabinetsPage() {
               <Download size={16} />
               Export Result
             </button>
+            <button
+              type="button"
+              onClick={openSubmitModal}
+              disabled={resolvedRows.length === 0}
+              className="h-10 px-4 rounded-lg bg-apple-blue text-white text-[13px] font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              <Send size={16} />
+              Submit to Pipeline
+            </button>
           </div>
         </div>
 
@@ -412,6 +532,33 @@ export default function StandardCabinetsPage() {
               <div className="rounded-lg border border-apple-red/20 bg-apple-red/5 p-3 text-[13px] text-apple-red flex items-start gap-2">
                 <AlertCircle size={16} className="mt-0.5 shrink-0" />
                 <span>{uploadError}</span>
+              </div>
+            )}
+
+            {submittedJobId && (
+              <div className="rounded-lg border border-apple-blue/20 bg-apple-blue/5 p-3 text-[13px] flex items-start gap-2">
+                <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-apple-blue" />
+                <div className="flex-1 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <span className="text-foreground">
+                    Order submitted: <span className="font-mono font-semibold">{submittedJobId}</span>
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => router.push("/orders")}
+                      className="h-7 px-3 rounded-md bg-apple-blue text-white text-[12px] font-medium hover:bg-apple-blue/90 transition-colors"
+                    >
+                      View in Orders
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSubmittedJobId(null)}
+                      className="h-7 px-3 rounded-md bg-black/[0.05] text-apple-gray text-[12px] font-medium hover:bg-black/[0.1] transition-colors"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -674,6 +821,16 @@ export default function StandardCabinetsPage() {
           </div>
         )}
       </div>
+
+      {submitOpen && (
+        <CutSettingsModal
+          filename={uploadName || "resolved_order.xlsx"}
+          submitting={submitting}
+          error={submitError}
+          onCancel={() => { if (!submitting) setSubmitOpen(false); }}
+          onConfirm={handleSubmitToPipeline}
+        />
+      )}
     </div>
   );
 }

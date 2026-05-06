@@ -7,6 +7,97 @@ import {
   summarizeRecoveredInventory,
 } from "@/lib/inventory_movements";
 
+export type CutMode = "inventory_first" | "t0_start";
+export type CutAlgorithm = "efficient" | "stack_efficiency";
+
+export interface UploadSettings {
+  cutAlgorithm: CutAlgorithm;
+  cutMode: CutMode;
+  trimLossMm: number;
+}
+
+export const DEFAULT_UPLOAD_SETTINGS: UploadSettings = {
+  cutAlgorithm: "stack_efficiency",
+  cutMode: "inventory_first",
+  trimLossMm: 2,
+};
+
+export interface SubmitOrderInput {
+  blob: Blob;
+  filename: string;
+  settings: UploadSettings;
+}
+
+export interface SubmitOrderResult {
+  jobId: string;
+  fileUrl: string;
+}
+
+export async function submitOrder({ blob, filename, settings }: SubmitOrderInput): Promise<SubmitOrderResult> {
+  const now = new Date();
+  const randomSuffix = Math.random().toString(36).substring(2, 6);
+  const jobId = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}_${randomSuffix}`;
+  const uniqueSuffix = Date.now();
+
+  const ext = filename.replace(/^.*\./, ".") || ".xlsx";
+  const safeName = filename
+    .replace(/\.[^.]+$/, "")
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "_")
+    .substring(0, 60) || "order";
+  const storagePath = `orders/${jobId}_${uniqueSuffix}_${safeName}${ext}`;
+
+  const { error: storageError } = await supabase.storage
+    .from("order-files")
+    .upload(storagePath, blob, { upsert: true });
+
+  if (storageError) {
+    const friendly = storageError.message.includes("Bucket not found")
+      ? `文件上传失败: Supabase Storage 中 "order-files" bucket 不存在。请在 Supabase Dashboard → Storage 中创建名为 "order-files" 的 bucket。`
+      : `文件上传失败: ${storageError.message}`;
+    throw new Error(friendly);
+  }
+
+  const fileUrl = supabase.storage.from("order-files").getPublicUrl(storagePath).data.publicUrl;
+
+  const settingsPayload = {
+    cut_algorithm: settings.cutAlgorithm,
+    trim_loss_mm: settings.trimLossMm,
+  };
+  const orderPayload = {
+    job_id: jobId,
+    filename,
+    status: "pending",
+    file_url: fileUrl,
+    cut_mode: settings.cutMode,
+  };
+
+  const { error: insertError } = await supabase
+    .from("orders")
+    .insert({ ...orderPayload, ...settingsPayload });
+
+  if (insertError) {
+    const missingSettingsColumn = insertError.message.includes("cut_algorithm")
+      || insertError.message.includes("trim_loss_mm");
+    if (!missingSettingsColumn) {
+      throw new Error(`订单创建失败: ${insertError.message}`);
+    }
+    const { error: fallbackError } = await supabase
+      .from("orders")
+      .insert({
+        ...orderPayload,
+        cut_result_json: {
+          upload_settings: { ...settingsPayload, cut_mode: settings.cutMode },
+        },
+      });
+    if (fallbackError) {
+      throw new Error(`订单创建失败: ${fallbackError.message}`);
+    }
+  }
+
+  return { jobId, fileUrl };
+}
+
 interface RevertOrder {
   id: string;
   job_id: string;
