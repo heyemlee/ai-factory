@@ -143,6 +143,60 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     return board.board;
   }, [useStandardLengthPool]);
 
+  const buildMachinePatterns = (groupedBoards: Board[], width: number): MachinePattern[] => {
+    if (useStandardLengthPool && groupedBoards.length > 1) {
+      const lengthStats = new Map<number, { stackOf: number; pieces: number }>();
+      for (const board of groupedBoards) {
+        const perBoard = new Map<number, number>();
+        for (const part of board.parts) {
+          const cutLength = part.cut_length || part.Height;
+          perBoard.set(cutLength, (perBoard.get(cutLength) || 0) + 1);
+        }
+        for (const [cutLength, qty] of perBoard) {
+          const current = lengthStats.get(cutLength) || { stackOf: 0, pieces: 0 };
+          current.stackOf += 1;
+          current.pieces = Math.max(current.pieces, qty);
+          lengthStats.set(cutLength, current);
+        }
+      }
+      const cutRows = Array.from(lengthStats.entries())
+        .map(([cutLength, stat]) => ({ cutLength, pieces: stat.pieces, stackOf: stat.stackOf }))
+        .sort((a, b) => b.stackOf - a.stackOf || a.cutLength - b.cutLength);
+      const boardCount = Math.max(1, ...cutRows.map((row) => row.stackOf || 1));
+      return [{ sampleBoard: groupedBoards[0], boardCount, cutRows }];
+    }
+
+    const fpMap: Record<string, Board[]> = {};
+    for (const board of groupedBoards) {
+      const fp = boardFingerprint(board);
+      if (!fpMap[fp]) fpMap[fp] = [];
+      fpMap[fp].push(board);
+    }
+    return Object.values(fpMap).flatMap((boardsOfPattern) => {
+      const sampleBoard = boardsOfPattern[0];
+      const cutMap: Record<number, number> = {};
+      for (const part of sampleBoard.parts) {
+        const cutLength = part.cut_length || part.Height;
+        cutMap[cutLength] = (cutMap[cutLength] || 0) + 1;
+      }
+      const cutRows = Object.entries(cutMap)
+        .map(([len, qty]) => ({ cutLength: parseFloat(len), pieces: qty }))
+        .sort((a, b) => a.cutLength - b.cutLength);
+      const chunks: MachinePattern[] = [];
+      for (let i = 0; i < boardsOfPattern.length; i += 4) {
+        chunks.push({
+          sampleBoard,
+          boardCount: boardsOfPattern.slice(i, i + 4).length,
+          cutRows,
+        });
+      }
+      return chunks;
+    }).sort((a, b) => comparePatternPriority(
+      { pattern: a, boardWidth: getRipWidth(a.sampleBoard) || width, sourcePriority: sourcePriority(boardCutSource(a.sampleBoard)) },
+      { pattern: b, boardWidth: getRipWidth(b.sampleBoard) || width, sourcePriority: sourcePriority(boardCutSource(b.sampleBoard)) }
+    ));
+  };
+
   const buildCutSections = (sectionBoards: Board[]): MachineCutSection[] => {
     const sectionMap: Record<string, Board[]> = {};
     for (const b of sectionBoards) {
@@ -179,35 +233,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         const width = parseFloat(keyParts[2]);
         const sample = groupedBoards[0];
         const boardType = productionLengthBoardType(sample);
-        const fpMap: Record<string, Board[]> = {};
-        for (const b of groupedBoards) {
-          const fp = boardFingerprint(b);
-          if (!fpMap[fp]) fpMap[fp] = [];
-          fpMap[fp].push(b);
-        }
-        const patterns = Object.values(fpMap).flatMap((boardsOfPattern) => {
-          const sampleBoard = boardsOfPattern[0];
-          const cutMap: Record<number, number> = {};
-          for (const p of sampleBoard.parts) {
-            const cl = p.cut_length || p.Height;
-            cutMap[cl] = (cutMap[cl] || 0) + 1;
-          }
-          const cutRows = Object.entries(cutMap)
-            .map(([len, qty]) => ({ cutLength: parseFloat(len), pieces: qty }))
-            .sort((a, b) => a.cutLength - b.cutLength);
-          const chunks: MachinePattern[] = [];
-          for (let i = 0; i < boardsOfPattern.length; i += 4) {
-            chunks.push({
-              sampleBoard,
-              boardCount: boardsOfPattern.slice(i, i + 4).length,
-              cutRows,
-            });
-          }
-          return chunks;
-        }).sort((a, b) => comparePatternPriority(
-          { pattern: a, boardWidth: getRipWidth(a.sampleBoard) || width, sourcePriority: sourcePriority(boardCutSource(a.sampleBoard)) },
-          { pattern: b, boardWidth: getRipWidth(b.sampleBoard) || width, sourcePriority: sourcePriority(boardCutSource(b.sampleBoard)) }
-        ));
+        const patterns = buildMachinePatterns(groupedBoards, width);
 
         let ripStockWidthMm: number | null = null;
         for (const b of groupedBoards) {
@@ -288,38 +314,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       const boardTypes = [...new Set(grpBoards.map(b => productionLengthBoardType(b)))];
       const boardType = boardTypes.join(" / ");
 
-      // Group boards by cut patterns
-      const fpMap: Record<string, Board[]> = {};
-      for (const b of grpBoards) {
-        const fp = boardFingerprint(b);
-        if (!fpMap[fp]) fpMap[fp] = [];
-        fpMap[fp].push(b);
-      }
-      
-        const patterns = Object.values(fpMap).flatMap((boardsOfPattern) => {
-        const sampleBoard = boardsOfPattern[0];
-        const cutMap: Record<number, number> = {};
-        for (const p of sampleBoard.parts) {
-          const cl = p.cut_length || p.Height;
-          cutMap[cl] = (cutMap[cl] || 0) + 1;
-        }
-        const cutRows = Object.entries(cutMap)
-          .map(([len, qty]) => ({ cutLength: parseFloat(len), pieces: qty }))
-          .sort((a, b) => a.cutLength - b.cutLength);
-
-        const chunks = [];
-        for (let i = 0; i < boardsOfPattern.length; i += 4) {
-          chunks.push({
-            sampleBoard,
-            boardCount: boardsOfPattern.slice(i, i + 4).length,
-            cutRows,
-          });
-        }
-        return chunks;
-      }).sort((a, b) => comparePatternPriority(
-        { pattern: a, boardWidth: getRipWidth(a.sampleBoard) || width, sourcePriority: sourcePriority(boardCutSource(a.sampleBoard)) },
-        { pattern: b, boardWidth: getRipWidth(b.sampleBoard) || width, sourcePriority: sourcePriority(boardCutSource(b.sampleBoard)) }
-      ));
+      const patterns = buildMachinePatterns(grpBoards, width);
       const distinctCutPatterns = patterns.length;
 
       let ripStockWidthMm: number | null = null;
@@ -707,7 +702,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
                                   <td className="text-center py-2.5 px-4 font-mono text-[15px]">{row.cutLength}</td>
                                   <td className="text-center py-2.5 px-4 text-[15px]">{row.pieces}</td>
                                   <td className="py-2.5 px-4 text-[12px] font-mono text-slate-500 whitespace-nowrap">
-                                    {formatCutNote(machineLang, pattern.sampleBoard, pattern.boardCount, section.boardWidth, row.cutLength, pattern.cutRows.length)}
+                                    {formatCutNote(machineLang, pattern.sampleBoard, row.stackOf || pattern.boardCount, section.boardWidth, row.cutLength, pattern.cutRows.length)}
                                   </td>
                                 </tr>
                               ))}

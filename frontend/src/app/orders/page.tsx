@@ -296,11 +296,11 @@ export default function Orders() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-1">
-          <div className="bg-card rounded-2xl p-8 shadow-apple h-full flex flex-col">
+          <div className="bg-card rounded-2xl p-8 shadow-apple lg:sticky lg:top-8 min-h-[360px] flex flex-col">
             <h2 className="text-xl font-semibold mb-6">{t("orders.upload")}</h2>
 
             <div
-              className={`flex-1 border-2 border-dashed rounded-xl flex flex-col items-center justify-center p-8 transition-colors duration-200 ${
+              className={`flex-1 min-h-[240px] border-2 border-dashed rounded-xl flex flex-col items-center justify-center p-8 transition-colors duration-200 ${
                 isDragging
                   ? "border-apple-blue bg-apple-blue/5"
                   : "border-border bg-black/[0.02]"

@@ -93,7 +93,7 @@ export function ConfirmCutModal({ order, onConfirmed, onClose }: {
   const managedRecoveredCounts = useMemo(() => {
     return recoveredCounts
       .filter((row) => stockManagedColors.has(row.color || DEFAULT_BOX_COLOR))
-      .filter((row) => !nonRecoverableBTs.has(row.board_type));
+      .filter((row) => row.width === 101.6 || !nonRecoverableBTs.has(row.board_type));
   }, [recoveredCounts, stockManagedColors, nonRecoverableBTs]);
 
   const isT0StartOrder = order.cut_mode === "t0_start"

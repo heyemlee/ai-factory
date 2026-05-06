@@ -49,7 +49,7 @@ export interface MachineT0Sheet {
 export type MachinePattern = {
   sampleBoard: Board;
   boardCount: number;
-  cutRows: { cutLength: number; pieces: number }[];
+  cutRows: { cutLength: number; pieces: number; stackOf?: number }[];
 };
 
 export type MachineCutSection = {
@@ -134,6 +134,11 @@ export function formatCutNote(
     const yieldCount = board.source_stock_yield_count || 1;
     const width = fmtMm(targetWidth || 101.6);
     const len = fmtMm(rowCutLength);
+    if (stackQty <= 1) {
+      if (lang === "zh") return `[rip ${yieldCount}×${width} / length→${len}]`;
+      if (lang === "es") return `[rip ${yieldCount}×${width} / largo→${len}]`;
+      return `[rip ${yieldCount}×${width} / length→${len}]`;
+    }
     if (lang === "zh") return `[叠 ${stackQty} / rip ${yieldCount}×${width} / length→${len}]`;
     if (lang === "es") return `[apilar ${stackQty} / rip ${yieldCount}×${width} / largo→${len}]`;
     return `[stack ${stackQty} / rip ${yieldCount}×${width} / length→${len}]`;
@@ -146,4 +151,3 @@ export function formatCutNote(
   if (lang === "es") return `[apilar ${stackQty}${widthPart} / largo ${cutRows} corte${cutRows === 1 ? "" : "s"}]`;
   return `[stack ${stackQty}${widthPart} / length ${cutRows} cut${cutRows === 1 ? "" : "s"}]`;
 }
-

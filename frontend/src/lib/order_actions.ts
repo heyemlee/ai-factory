@@ -81,7 +81,7 @@ export async function revertCut(order: RevertOrder) {
 
   for (const row of recoveredRows) {
     if (!stockManagedColors.has(row.color || DEFAULT_BOX_COLOR)) continue;
-    if (nonRecoverableBTs.has(row.board_type)) continue;
+    if (row.width !== 101.6 && nonRecoverableBTs.has(row.board_type)) continue;
     await adjustInventoryStock(row.board_type, row.color, -row.count, { width: row.width, createIfMissing: true });
     await logInventoryTransaction("revert_recover", row.board_type, row.color, -row.count, {
       order_id: order.id,

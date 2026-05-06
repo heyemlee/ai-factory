@@ -227,7 +227,8 @@ def _bundle_into_stacks(strips: list[dict], pattern_prefix: str = "") -> list[di
     """
     by_pattern: dict[str, list[dict]] = defaultdict(list)
     for strip in strips:
-        by_pattern[strip.get("pattern_key", "")].append(strip)
+        context = strip.get("stack_context_key", "")
+        by_pattern[f"{context}||{strip.get('pattern_key', '')}"].append(strip)
 
     bundled: list[dict] = []
     for pattern in sorted(by_pattern.keys()):
@@ -244,7 +245,7 @@ def _bundle_into_stacks(strips: list[dict], pattern_prefix: str = "") -> list[di
                     strip["stack_group_id"] = stack_id
                     strip["stack_size"] = size
                     strip["stack_layer"] = layer
-                    strip["stack_pattern_key"] = pattern
+                    strip["stack_pattern_key"] = strip.get("pattern_key", pattern)
                     bundled.append(strip)
                 stack_idx += 1
                 cursor += size

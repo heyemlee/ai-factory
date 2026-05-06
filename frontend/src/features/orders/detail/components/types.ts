@@ -60,7 +60,13 @@ export interface Board {
   t0_source_strip_width?: number;
   t0_source_strip_label?: string;
   t0_source_strip_secondary?: boolean;
+  stack_group_id?: string;
+  stack_size?: number;
+  stack_layer?: number;
+  stack_pattern_key?: string;
+  stack_context_key?: string;
   stretcher_phase?: boolean;
+  nested_stretcher_phase?: boolean;
   source_stock_group_id?: string;
   source_stock_width?: number;
   source_stock_board_type?: string;
@@ -197,7 +203,7 @@ export interface EngineeringGroup {
   patterns: {
     sampleBoard: Board;
     boardCount: number;
-    cutRows: { cutLength: number; pieces: number }[];
+    cutRows: { cutLength: number; pieces: number; stackOf?: number }[];
   }[];
   needsWidthRip: boolean;
   ripStockWidthMm: number | null;

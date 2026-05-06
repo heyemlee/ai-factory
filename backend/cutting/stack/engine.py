@@ -4,12 +4,12 @@ stack-efficiency cutting strategy.
 
 This engine prioritizes repeatable stack cuts over raw material utilization:
 
-1. T1 is used only when cut_width exactly matches 303.8 or 608.6.
+1. T1 is used first when cut_width exactly matches an available inventory width.
 2. Production is staged: rip T0 standard-width strips first, then length-cut
    standard strips together with matching T1 inventory as one stack pool.
 3. T0 Sheet mode ignores existing T1; standard-width strips cut from T0 serve
    the current order first. Extra standard strips are recovered to inventory.
-4. T0 recovery uses only 303.8 and 608.6 widths.
+4. T0 recovery preserves 303.8 width only.
 """
 
 from __future__ import annotations
@@ -47,6 +47,17 @@ from .t0_packer import (
     _bundle_into_stacks,
     _finalize_t0_sheets,
 )
+
+
+def _sheet_stack_context(sheet: dict) -> str:
+    signature = []
+    for strip in sheet.get("strips", []):
+        if strip.get("t0_source_strip_secondary"):
+            continue
+        if _is_stretcher_width(strip.get("strip_width", 0)):
+            continue
+        signature.append(f"{_r1(strip.get('strip_width', 0))}:{strip.get('pattern_key', '')}")
+    return "|".join(signature)
 
 
 def _run_color(parts: list[dict], inventory: dict, color: str, force_t0_start: bool, trim_loss: float, t0_id_offset: int) -> dict:
@@ -90,7 +101,7 @@ def _run_color(parts: list[dict], inventory: dict, color: str, force_t0_start: b
 
     if stretcher_parts:
         stretcher_strips = _build_stretcher_strips(stretcher_parts, color, trim_loss)
-        stretcher_inventory, _ = _allocate_stretcher_sources(
+        stretcher_inventory, _, unplaced_stretchers = _allocate_stretcher_sources(
             stretcher_strips,
             sheets,
             color,
@@ -101,9 +112,16 @@ def _run_color(parts: list[dict], inventory: dict, color: str, force_t0_start: b
             inventory_remaining=inventory_remaining,
         )
         inventory_strips.extend(stretcher_inventory)
+    else:
+        unplaced_stretchers = []
 
     inventory_only_strips = [s for s, _ in inventory_strips]
     t0_all_strips = [strip for sheet in sheets for strip in sheet["strips"]]
+    for sheet in sheets:
+        context = _sheet_stack_context(sheet)
+        for strip in sheet.get("strips", []):
+            if _is_stretcher_width(strip.get("strip_width", 0)):
+                strip["stack_context_key"] = context
     _bundle_into_stacks(inventory_only_strips, pattern_prefix=f"INV-{color}-")
     _bundle_into_stacks(t0_all_strips, pattern_prefix=f"T0-{color}-")
 
@@ -143,6 +161,7 @@ def _run_color(parts: list[dict], inventory: dict, color: str, force_t0_start: b
         "t0_sheets": t0_pack["t0_sheets"],
         "recovered_inventory": t0_pack["recovered_inventory"] + rip_recovered,
         "used_inventory": used_inventory,
+        "unplaced_stretchers": unplaced_stretchers,
         "color": color,
     }
 
@@ -180,6 +199,7 @@ def run_engine(
     by_color: dict[str, dict[str, Any]] = {}
     t0_id_offset = 0
     inventory_by_color: dict[str, dict] = {}
+    unplaced_stretchers: list[dict] = []
 
     for color, color_parts in parts_by_color.items():
         color_inventory = _build_color_inventory(color, inventory_per_color)
@@ -195,6 +215,7 @@ def run_engine(
         all_boards.extend(partial["boards"])
         all_t0_sheets.extend(partial["t0_sheets"])
         recovered_inventory.extend(partial["recovered_inventory"])
+        unplaced_stretchers.extend(partial.get("unplaced_stretchers", []))
         t0_id_offset += len(partial["t0_sheets"])
 
         for board_type, count in partial["used_inventory"].items():
@@ -275,6 +296,19 @@ def run_engine(
             for part in oversized_parts
         ],
     }
+    if unplaced_stretchers:
+        issues["unmatched_parts"].extend([
+            {
+                "part_id": strip["parts"][0].get("part_id", "?"),
+                "cab_id": strip["parts"][0].get("cab_id", "?"),
+                "component": strip["parts"][0].get("component", "Stretcher"),
+                "Height": strip["parts"][0].get("Height"),
+                "Width": strip["parts"][0].get("Width"),
+                "color": strip["parts"][0].get("color", DEFAULT_BOX_COLOR),
+                "reason": "拉条只能使用现有 T0 余料；禁止从 T0 大板或 T1 库存单独开拉条",
+            }
+            for strip in unplaced_stretchers
+        ])
 
     stack_size_breakdown: dict[int, int] = defaultdict(int)
     distinct_stack_groups: set[str] = set()

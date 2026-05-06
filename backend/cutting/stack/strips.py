@@ -160,13 +160,108 @@ def _new_lane_strip(width: float, part: dict, color: str, trim_loss: float, *, s
     return strip
 
 
+def _remaining_parts_count(queues: dict[float, list[dict]]) -> int:
+    return sum(len(queue) for queue in queues.values())
+
+
+def _preferred_stack_size(count: int) -> int:
+    for stack_size in (4, 2, 1):
+        if count >= stack_size:
+            return stack_size
+    return 1
+
+
+def _append_full_length_batches(lanes: list[dict], queues: dict[float, list[dict]], sorted_lengths: list[float], trim_loss: float) -> None:
+    lane_count = len(lanes)
+    if lane_count <= 0:
+        return
+
+    changed = True
+    while changed:
+        changed = False
+        for length in sorted_lengths:
+            queue = queues[length]
+            if lane_count == 1 and len(queue) >= 2:
+                continue
+            while len(queue) >= lane_count:
+                batch = queue[:lane_count]
+                if any(not _can_append_part(lane, part, trim_loss) for lane, part in zip(lanes, batch)):
+                    break
+                for lane in lanes:
+                    _append_part_to_strip(lane, queue.pop(0), trim_loss)
+                changed = True
+
+
+def _append_even_partial_length_batches(lanes: list[dict], queues: dict[float, list[dict]], sorted_lengths: list[float], trim_loss: float) -> None:
+    if len(lanes) < 2:
+        return
+
+    changed = True
+    while changed:
+        changed = False
+        for length in sorted_lengths:
+            queue = queues[length]
+            if len(queue) < 2:
+                continue
+            candidate_lanes = [lane for lane in lanes if _can_append_part(lane, queue[0], trim_loss)]
+            take = min(len(queue), len(candidate_lanes))
+            if take % 2 == 1:
+                take -= 1
+            if take < 2:
+                continue
+            for lane in candidate_lanes[:take]:
+                _append_part_to_strip(lane, queue.pop(0), trim_loss)
+            changed = True
+
+
+def _build_stack_aligned_lanes(width: float, parts: list[dict], color: str, trim_loss: float) -> list[dict]:
+    queues: dict[float, list[dict]] = defaultdict(list)
+    for part in parts:
+        queues[_r1(_cut_length(part))].append(part)
+    for queue in queues.values():
+        queue.sort(key=lambda part: part.get("part_id", ""))
+
+    sorted_lengths = sorted(queues.keys(), reverse=True)
+    packed: list[dict] = []
+
+    while _remaining_parts_count(queues) > 0:
+        base_length = next((length for length in sorted_lengths if len(queues[length]) >= 2), None)
+        if base_length is None:
+            base_length = next((length for length in sorted_lengths if queues[length]), None)
+        if base_length is None:
+            break
+
+        base_queue = queues[base_length]
+        lane_count = _preferred_stack_size(len(base_queue))
+        lanes = [_new_lane_strip(width, base_queue.pop(0), color, trim_loss) for _ in range(lane_count)]
+
+        capacity = 1
+        probe = {**lanes[0], "parts": list(lanes[0].get("parts", []))}
+        while base_queue and _append_part_to_strip(probe, base_queue[0], trim_loss):
+            capacity += 1
+            base_queue.pop(0)
+        # Put the probed same-length extras back so they can be distributed evenly.
+        if capacity > 1:
+            restored = probe["parts"][1:]
+            base_queue[:0] = restored
+
+        same_length_per_lane = min(capacity, max(1, len(base_queue) // lane_count + 1))
+        for lane in lanes:
+            while len(lane.get("parts", [])) < same_length_per_lane and base_queue and _append_part_to_strip(lane, base_queue[0], trim_loss):
+                base_queue.pop(0)
+
+        _append_full_length_batches(lanes, queues, sorted_lengths, trim_loss)
+        _append_even_partial_length_batches(lanes, queues, sorted_lengths, trim_loss)
+        packed.extend(lanes)
+
+    return packed
+
+
 def _repack_t0_strips_by_width(strips: list[dict], color: str, trim_loss: float) -> list[dict]:
     """Repack strips by width for stack-aligned cutting.
 
-    Phase 1: Pack each cut-length group to strip capacity → uniform patterns.
-    Phase 2: Absorb short strips into long strips' leftover space in
-             stack-aligned batches (4/3/2/1) to boost utilization without
-             breaking stackability.
+    Build same-width lanes as 4/2/1 stackable length sequences first, then
+    append later lengths in full or paired batches where they fit.
     """
     by_width: dict[float, list[dict]] = defaultdict(list)
     for strip in strips:
@@ -174,91 +269,7 @@ def _repack_t0_strips_by_width(strips: list[dict], color: str, trim_loss: float)
 
     packed: list[dict] = []
     for width in sorted(by_width.keys(), reverse=True):
-        queues: dict[float, list[dict]] = defaultdict(list)
-        for part in by_width[width]:
-            queues[_r1(_cut_length(part))].append(part)
-        for queue in queues.values():
-            queue.sort(key=lambda part: part.get("part_id", ""))
-
-        sorted_lengths = sorted(queues.keys(), reverse=True)
-
-        # ── Phase 1: pack each length group to capacity ──
-        lanes_by_length: dict[float, list[dict]] = {}
-        for length in sorted_lengths:
-            queue = queues[length]
-            lanes: list[dict] = []
-            while queue:
-                lane = _new_lane_strip(width, queue.pop(0), color, trim_loss)
-                while queue and _append_part_to_strip(lane, queue[0], trim_loss):
-                    queue.pop(0)
-                lanes.append(lane)
-            lanes_by_length[length] = lanes
-
-        # ── Phase 2: redistribute short parts into strips with leftover ──
-        # Unpack donor strips into individual parts, distribute 1-per-receiver
-        # in stack-aligned batches so patterns stay identical within each batch.
-
-        # Build a flat list of all lanes and sort by utilization descending
-        # so high-util strips are preferred receivers.
-        all_lanes: list[dict] = []
-        for length in sorted_lengths:
-            all_lanes.extend(lanes_by_length[length])
-
-        absorbed: set[int] = set()
-
-        # Process donors from shortest length first
-        for donor_length in reversed(sorted_lengths):
-            donor_lanes = [l for l in lanes_by_length[donor_length] if id(l) not in absorbed]
-            if not donor_lanes:
-                continue
-
-            # Collect all individual parts from donor lanes
-            donor_parts: list[dict] = []
-            for lane in donor_lanes:
-                donor_parts.extend(lane["parts"])
-            if not donor_parts:
-                continue
-
-            # Find receiver lanes (any length group) that can fit 1 donor part
-            test_part = donor_parts[0]
-            receivers = [
-                l for l in all_lanes
-                if id(l) not in absorbed
-                and id(l) not in {id(dl) for dl in donor_lanes}
-                and _can_append_part(l, test_part, trim_loss)
-            ]
-            if not receivers:
-                continue
-
-            # Distribute 1 part per receiver in stack-aligned batches
-            r_cursor = 0
-            for stack_size in STACK_PREFERENCE:
-                while (donor_parts
-                       and len(donor_parts) >= stack_size
-                       and r_cursor + stack_size <= len(receivers)):
-                    for j in range(stack_size):
-                        _append_part_to_strip(receivers[r_cursor + j], donor_parts.pop(0), trim_loss)
-                    r_cursor += stack_size
-
-            # Mark emptied donor lanes as absorbed
-            if not donor_parts:
-                for lane in donor_lanes:
-                    absorbed.add(id(lane))
-            else:
-                # Rebuild donor lanes with remaining parts
-                for lane in donor_lanes:
-                    absorbed.add(id(lane))
-                while donor_parts:
-                    lane = _new_lane_strip(width, donor_parts.pop(0), color, trim_loss)
-                    while donor_parts and _append_part_to_strip(lane, donor_parts[0], trim_loss):
-                        donor_parts.pop(0)
-                    all_lanes.append(lane)
-
-        # Collect non-absorbed lanes
-        for lane in all_lanes:
-            if id(lane) not in absorbed:
-                packed.append(lane)
-
+        packed.extend(_build_stack_aligned_lanes(width, by_width[width], color, trim_loss))
     return packed
 
 
@@ -324,6 +335,8 @@ def _board_from_strip(strip: dict, board_type: str, source: str, index: int, tri
         "rip_leftover",
         "rip_leftover_recovered",
         "stretcher_phase",
+        "nested_stretcher_phase",
+        "stack_context_key",
         "source_stock_group_id",
         "source_stock_width",
         "source_stock_board_type",

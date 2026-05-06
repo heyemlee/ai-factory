@@ -203,19 +203,24 @@ export default function OrderDetail() {
 
   const t0RipStackGroups = useMemo(() => {
     const groupMap: Record<string, { index: number }[]> = {};
+    const lookup: Record<number, { stackOf: number; isLeader: boolean }> = {};
     for (let i = 0; i < boards.length; i++) {
       const board = boards[i];
       if (!board.t0_sheet_id) continue;
       if (board.t0_source_strip_secondary) continue;
+      if (board.stack_size && board.stack_size > 0) {
+        lookup[i] = { stackOf: board.stack_size, isLeader: (board.stack_layer || 0) === 0 };
+        continue;
+      }
       const color = board.color || DEFAULT_BOX_COLOR;
       const ripWidth = Math.round((board.t0_source_strip_width || getRipWidth(board) || board.actual_strip_width || board.strip_width || 0) * 10) / 10;
       const rowIndex = board.t0_sheet_index ?? 0;
-      const key = `${color}|||${rowIndex}|||${ripWidth}`;
+      const context = board.stack_context_key || "";
+      const key = `${color}|||${context}|||${rowIndex}|||${ripWidth}`;
       if (!groupMap[key]) groupMap[key] = [];
       groupMap[key].push({ index: i });
     }
 
-    const lookup: Record<number, { stackOf: number; isLeader: boolean }> = {};
     for (const group of Object.values(groupMap)) {
       for (let start = 0; start < group.length; start += 4) {
         const chunk = group.slice(start, start + 4);

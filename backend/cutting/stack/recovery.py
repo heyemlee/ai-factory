@@ -11,21 +11,21 @@ from .constants import (
     FALLBACK_T1_BY_WIDTH,
     SAW_KERF,
     STANDARD_NARROW,
-    STANDARD_WIDE,
-    STANDARD_WIDTHS,
+    STRETCHER_WIDTH,
 )
 from .primitives import _r1
 
 
 def _recovery_options_for_inventory(inventory: dict) -> dict[float, str]:
-    options: dict[float, str] = {}
-    for width in STANDARD_WIDTHS:
-        options[width] = FALLBACK_T1_BY_WIDTH[width]
+    options: dict[float, str] = {
+        STANDARD_NARROW: FALLBACK_T1_BY_WIDTH[STANDARD_NARROW],
+        STRETCHER_WIDTH: f"T1-{STRETCHER_WIDTH}x2438.4",
+    }
     for board_type, info in inventory.items():
         if str(board_type).upper().startswith("T0"):
             continue
         width = _r1(info.get("Width", 0))
-        if width in STANDARD_WIDTHS:
+        if width in (STANDARD_NARROW, STRETCHER_WIDTH):
             options[width] = board_type
     return options
 
@@ -40,13 +40,19 @@ def _recovery_cost(widths: list[float], existing_strip_count: int) -> float:
 
 
 def _choose_recovery_combo(remaining: float, existing_strip_count: int, disabled: bool) -> list[float]:
-    if disabled:
-        return []
-    combos = [
-        [STANDARD_WIDE, STANDARD_NARROW],
-        [STANDARD_WIDE],
+    stretcher_combos = [
+        [STRETCHER_WIDTH, STRETCHER_WIDTH, STRETCHER_WIDTH, STRETCHER_WIDTH],
+        [STRETCHER_WIDTH, STRETCHER_WIDTH, STRETCHER_WIDTH],
+        [STRETCHER_WIDTH, STRETCHER_WIDTH],
+        [STRETCHER_WIDTH],
+    ]
+    combos = stretcher_combos if disabled else [
         [STANDARD_NARROW, STANDARD_NARROW],
+        [STANDARD_NARROW, STRETCHER_WIDTH, STRETCHER_WIDTH, STRETCHER_WIDTH],
+        [STANDARD_NARROW, STRETCHER_WIDTH, STRETCHER_WIDTH],
+        [STANDARD_NARROW, STRETCHER_WIDTH],
         [STANDARD_NARROW],
+        *stretcher_combos,
     ]
     feasible = [
         combo for combo in combos
@@ -54,7 +60,7 @@ def _choose_recovery_combo(remaining: float, existing_strip_count: int, disabled
     ]
     if not feasible:
         return []
-    return max(feasible, key=lambda combo: (sum(combo), len(combo)))
+    return max(feasible, key=lambda combo: (combo.count(STANDARD_NARROW), sum(combo), len(combo)))
 
 
 def _t0_strip_source_width(strip: dict) -> float:

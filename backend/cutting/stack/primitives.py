@@ -55,13 +55,14 @@ def _t0_board_type(inventory: dict) -> str:
 
 def _inventory_stock_for_width(width: float, inventory: dict) -> tuple[str, int]:
     target = _r1(width)
-    board_type = _standard_board_type(target, inventory)
     for candidate, info in inventory.items():
         if str(candidate).upper().startswith("T0"):
             continue
         if _r1(info.get("Width", 0)) == target:
             return candidate, int(info.get("qty", 0))
-    return board_type, 0
+    if target in FALLBACK_T1_BY_WIDTH:
+        return FALLBACK_T1_BY_WIDTH[target], 0
+    return f"T1-{target}x2438.4", 0
 
 
 def _t0_stock(inventory: dict) -> tuple[str, int]:
