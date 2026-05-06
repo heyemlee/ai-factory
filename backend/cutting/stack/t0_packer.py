@@ -69,19 +69,20 @@ def _build_t0_sheet_pack(strips: list[dict], trim_loss: float) -> list[dict]:
     return sheets
 
 
-def _t0_sheet_rip_signature(sheet: dict) -> tuple[float, ...]:
-    """Compute a rip signature for a T0 sheet: ordered strip widths.
+def _t0_sheet_rip_signature(sheet: dict) -> tuple[tuple[float, str], ...]:
+    """Compute a full identity signature for a T0 sheet.
 
-    Two sheets with the same signature have identical strip rip layouts
-    and can be physically stacked (叠切) — the saw makes the same width
-    cuts through all layers.  Length-cut patterns (T1→T2) may differ
-    between layers; only the rip widths must match for stacking.
+    Two sheets share a signature only when both rip widths AND length-cut
+    patterns match in the same order. This matches the physical machine
+    constraint where stacked sheets go through both rip and cross-cut as
+    a single bundled operation — so every layer must produce the same
+    parts in the same positions, not just share rip widths.
     """
-    sig: list[float] = []
+    sig: list[tuple[float, str]] = []
     for strip in sheet.get("strips", []):
         if strip.get("t0_source_strip_secondary"):
             continue
-        sig.append(_r1(strip["strip_width"]))
+        sig.append((_r1(strip["strip_width"]), str(strip.get("pattern_key", ""))))
     return tuple(sig)
 
 

@@ -124,22 +124,31 @@ def _run_color(parts: list[dict], inventory: dict, color: str, force_t0_start: b
     inventory_only_strips = [s for s, _ in inventory_strips]
 
     # ── T0 sheet stacking (叠切): merge sheets with identical rip patterns ──
-    sheets = _merge_stackable_t0_sheets(sheets)
+    sheets = _merge_stackable_t0_sheets(sheets, max_stack=MAX_STACK)
 
     t0_all_strips = []
     for sheet in sheets:
         t0_all_strips.extend(sheet["strips"])
         for layer_strips in sheet.get("t0_stacked_layers", []):
             t0_all_strips.extend(layer_strips)
-    for sheet in sheets:
-        context = _sheet_stack_context(sheet)
+    for sheet_idx, sheet in enumerate(sheets):
+        sheet_signature_context = _sheet_stack_context(sheet)
+        sheet_instance_context = f"t0-{sheet_idx:04d}"
         for strip in sheet.get("strips", []):
+            if strip.get("t0_source_strip_secondary"):
+                continue
             if _is_stretcher_width(strip.get("strip_width", 0)):
-                strip["stack_context_key"] = context
+                strip["stack_context_key"] = sheet_signature_context
+            else:
+                strip["stack_context_key"] = sheet_instance_context
         for layer_strips in sheet.get("t0_stacked_layers", []):
             for strip in layer_strips:
+                if strip.get("t0_source_strip_secondary"):
+                    continue
                 if _is_stretcher_width(strip.get("strip_width", 0)):
-                    strip["stack_context_key"] = context
+                    strip["stack_context_key"] = sheet_signature_context
+                else:
+                    strip["stack_context_key"] = sheet_instance_context
     _bundle_into_stacks(inventory_only_strips, pattern_prefix=f"INV-{color}-")
     _bundle_into_stacks(t0_all_strips, pattern_prefix=f"T0-{color}-")
 
