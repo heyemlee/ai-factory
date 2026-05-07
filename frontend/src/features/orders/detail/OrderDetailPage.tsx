@@ -12,7 +12,7 @@ import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
 /* ── Component imports ── */
 import type { Part, Board, CutResult, Order, Cabinet } from "./components/types";
 import { SIZE_COLORS } from "./components/constants";
-import { boardFingerprint, getRipWidth, nominalStockWidthForBoard } from "./components/utils";
+import { boardFingerprint, getRipWidth, nominalStockWidthForBoard, safeNum } from "./components/utils";
 import { BoardTile } from "./components/BoardTile";
 import { T0SheetCard } from "./components/T0SheetCard";
 import { BoardDetailModal } from "./components/BoardDetailModal";
@@ -20,6 +20,7 @@ import { ConfirmCutModal } from "./components/ConfirmCutModal";
 import { MachineCutPlan } from "./components/MachineCutPlan";
 import { CabinetReconciliation } from "./components/CabinetReconciliation";
 import { CutPlanTable } from "./components/CutPlanTable";
+import { RecoveryCuttingBoardCard } from "./components/RecoveryCuttingBoardCard";
 
 const CabinetCanvas = dynamic(() => import("@/components/CabinetViewer"), { ssr: false });
 const EMPTY_BOARDS: Board[] = [];
@@ -130,6 +131,8 @@ export default function OrderDetail() {
       boards,
       cabinet_breakdown,
       recovered_inventory: cutResult.recovered_inventory?.filter((r) => (r.color || DEFAULT_BOX_COLOR) === selectedColor),
+      recovery_cutting_boards: cutResult.recovery_cutting_boards?.filter((r) => (r.color || DEFAULT_BOX_COLOR) === selectedColor),
+      waste_blocks: cutResult.waste_blocks?.filter((r) => (r.color || DEFAULT_BOX_COLOR) === selectedColor),
       t0_plan: cutResult.t0_plan ? {
         ...cutResult.t0_plan,
         t0_sheets: cutResult.t0_plan.t0_sheets?.filter((s) => ((s as { color?: string }).color || DEFAULT_BOX_COLOR) === selectedColor),
@@ -601,6 +604,7 @@ export default function OrderDetail() {
       )}
       {viewMode === "layout" && !selectedHasLegacyMissingCutData && (() => {
         const typeGroups = boards.reduce((acc, b, idx) => {
+          if (String(b.source || "").toLowerCase() === "recovery") return acc;
           const type = b.board || b.board_type || "Unknown";
           const color = b.color || DEFAULT_BOX_COLOR;
           const key = `${color}|||${type}`;
@@ -612,7 +616,114 @@ export default function OrderDetail() {
         const getTypeFromKey = (key: string) => key.split("|||")[1] || key;
         const getColorFromKey = (key: string) => key.split("|||")[0] || DEFAULT_BOX_COLOR;
         const t1Entries = Object.entries(typeGroups).filter(([key]) => getTypeFromKey(key).toUpperCase().includes("T1")).sort(([a], [b]) => a.localeCompare(b));
-        const t0Entries = Object.entries(typeGroups).filter(([key]) => !getTypeFromKey(key).toUpperCase().includes("T1")).sort(([a], [b]) => a.localeCompare(b));
+        const t0Entries = Object.entries(typeGroups).filter(([key]) => getTypeFromKey(key).toUpperCase().includes("T0")).sort(([a], [b]) => a.localeCompare(b));
+        const recoveryCuttingBoards = selectedCutResult?.recovery_cutting_boards || [];
+        const wasteCategories = [
+          { label: '90mm-8"', min: 90, max: 8 * 25.4 },
+          { label: '8"-12"', min: 8 * 25.4, max: 12 * 25.4 },
+          { label: '12"-18"', min: 12 * 25.4, max: 18 * 25.4 },
+          { label: '18"-24"', min: 18 * 25.4, max: 24 * 25.4 },
+        ];
+        const wasteCategoryForWidth = (width: number) => {
+          return wasteCategories.find((category, index) => {
+            const isLast = index === wasteCategories.length - 1;
+            return width >= category.min && (isLast ? width <= category.max : width < category.max);
+          });
+        };
+        const directWasteBlocks = boards
+          .filter((b) => String(b.source || "").toLowerCase() !== "recovery")
+          .flatMap((b) => {
+            const rows: Array<{ id: string; source: string; width: number; length: number; kind: string }> = [];
+            const partsLen = (b.parts || []).reduce((sum, part) => sum + (safeNum(part.cut_length) || safeNum(part.Height)), 0);
+            const kerfLen = Math.max(0, (b.parts?.length || 0) - 1) * safeNum(b.saw_kerf);
+            const lengthWaste = safeNum(b.usable_length) - partsLen - kerfLen;
+            if (lengthWaste > 0.5) {
+              rows.push({
+                id: `${b.board_id}-length`,
+                source: b.board_id,
+                width: safeNum(b.strip_width),
+                length: lengthWaste,
+                kind: "length",
+              });
+            }
+            const stockWidth = b.t0_sheet_id ? 0 : (safeNum(b.source_stock_width) || safeNum(b.rip_from) || nominalStockWidthForBoard(b) || 0);
+            const widthWaste = stockWidth > 0 ? stockWidth - safeNum(b.strip_width) - safeNum(b.saw_kerf) : 0;
+            if (widthWaste > 0.5 && !b.rip_leftover_recovered) {
+              rows.push({
+                id: `${b.board_id}-width`,
+                source: b.board_id,
+                width: widthWaste,
+                length: 2438.4,
+                kind: "width",
+              });
+            }
+            return rows;
+          })
+          .filter((waste) => waste.width >= 90 && wasteCategoryForWidth(waste.width));
+        const finalWasteBlocks = selectedCutResult?.waste_blocks
+          ? selectedCutResult.waste_blocks.map((waste) => ({
+              id: waste.id,
+              source: waste.source_board_id || waste.source || waste.id,
+              width: safeNum(waste.width),
+              length: safeNum(waste.length),
+              kind: waste.kind || waste.origin || "waste",
+            })).filter((waste) => waste.width >= 90 && wasteCategoryForWidth(waste.width))
+          : directWasteBlocks;
+        const directWasteRows = Array.from(finalWasteBlocks.reduce((map, waste) => {
+          const width = Math.round(waste.width * 10) / 10;
+          const length = Math.round(waste.length * 10) / 10;
+          const category = wasteCategoryForWidth(width);
+          if (!category) return map;
+          const key = `${category.label}|||${waste.kind}|||${width.toFixed(1)}|||${length.toFixed(1)}`;
+          const existing = map.get(key);
+          if (existing) {
+            existing.count += 1;
+            if (existing.sources.length < 3) existing.sources.push(waste.source);
+          } else {
+            map.set(key, {
+              key,
+              category: category.label,
+              kind: waste.kind,
+              width,
+              length,
+              count: 1,
+              sources: [waste.source],
+            });
+          }
+          return map;
+        }, new Map<string, { key: string; category: string; kind: string; width: number; length: number; count: number; sources: string[] }>()).values())
+          .sort((a, b) => a.kind.localeCompare(b.kind) || b.width - a.width || b.length - a.length);
+        const directWasteGroups = wasteCategories
+          .map((category) => ({
+            label: category.label,
+            rows: directWasteRows.filter((row) => row.category === category.label),
+          }))
+          .filter((group) => group.rows.length > 0);
+        const recoveredBoardRows = Array.from((selectedCutResult?.recovered_inventory || [])
+          .filter((item) => Math.abs(safeNum(item.width) - 303.8) < 0.5 || Math.abs(safeNum(item.width) - 608.6) < 0.5)
+          .reduce((map, item) => {
+            const width = Math.round(safeNum(item.width) * 10) / 10;
+            const length = Math.round(safeNum(item.length, 2438.4) * 10) / 10;
+            const type = Math.abs(width - 303.8) < 0.5 ? '12" recovered' : '24" recovered';
+            const source = item.source_board_id || item.id || item.label || item.board_type;
+            const key = `${type}|||${width.toFixed(1)}|||${length.toFixed(1)}`;
+            const existing = map.get(key);
+            if (existing) {
+              existing.count += 1;
+              if (existing.sources.length < 3) existing.sources.push(source || "-");
+            } else {
+              map.set(key, {
+                key,
+                type,
+                width,
+                length,
+                count: 1,
+                sources: [source || "-"],
+              });
+            }
+            return map;
+          }, new Map<string, { key: string; type: string; width: number; length: number; count: number; sources: string[] }>()).values())
+          .sort((a, b) => b.width - a.width || b.length - a.length);
 
         /* Group T0 boards by t0_sheet_id for visual grouping */
         const t0SheetGroups: Record<string, { board: Board; index: number }[]> = {};
@@ -688,8 +799,11 @@ export default function OrderDetail() {
 
         return (
           <div className="flex flex-col w-full pt-8 pb-12 min-h-[60vh]">
-            {/* Top Area (T1) */}
+            {/* Area 1: T1 */}
             <div className="w-full flex flex-col gap-y-14 px-6 pb-12 border-b border-border/40">
+              <div className="px-2">
+                <h2 className="text-[18px] font-bold text-foreground">1. T1 裁切区域</h2>
+              </div>
               {t1Entries.length > 0 ? t1Entries.map(renderGroup) : (
                 <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
                   T1 {t("orderDetail.notFound")}
@@ -697,8 +811,11 @@ export default function OrderDetail() {
               )}
             </div>
 
-            {/* Bottom Area (T0) */}
-            <div className="w-full px-6 pt-10">
+            {/* Area 2: T0 */}
+            <div className="w-full px-6 py-12 border-b border-border/40">
+              <div className="px-2 pb-6">
+                <h2 className="text-[18px] font-bold text-foreground">2. T0 裁切区域</h2>
+              </div>
               {t0SheetCount > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 items-start">
                   {/* T0 Sheet Groups */}
@@ -743,6 +860,104 @@ export default function OrderDetail() {
               ) : (
                 <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
                   T0 {t("orderDetail.notFound")}
+                </div>
+              )}
+            </div>
+
+            {/* Area 3: Recovery boards used for stretchers */}
+            <div className="w-full px-6 py-12 border-b border-border/40">
+              <div className="px-2 pb-6">
+                <h2 className="text-[18px] font-bold text-foreground">3. 回收板材裁切拉条区域</h2>
+                <p className="mt-1 text-[13px] text-apple-gray">绿色为未使用回收板，黄色为本区裁出的拉条，灰色为本区就地废料。</p>
+              </div>
+              {recoveryCuttingBoards.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 items-start">
+                  {recoveryCuttingBoards.map((board) => (
+                    <RecoveryCuttingBoardCard key={board.id} board={board} />
+                  ))}
+                </div>
+              ) : (
+                <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
+                  No recovery cutting boards
+                </div>
+              )}
+            </div>
+
+            {/* Area 4: Direct waste */}
+            <div className="w-full px-6 pt-12">
+              <div className="px-2 pb-6">
+                <h2 className="text-[18px] font-bold text-foreground">4. 废料区域</h2>
+                <p className="mt-1 text-[13px] text-apple-gray">只汇总 T1/T0 主裁切阶段产生的废料；第 3 区裁拉条后的废料留在第 3 区。</p>
+              </div>
+              {directWasteGroups.length > 0 ? (
+                <div className="space-y-4">
+                  {directWasteGroups.map((group) => (
+                    <div key={group.label} className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+                      <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 text-[13px] font-bold text-slate-800">
+                        {group.label}
+                      </div>
+                      <table className="w-full text-[13px]">
+                        <thead>
+                          <tr className="border-b border-slate-200 bg-white text-left text-[11px] uppercase tracking-wide text-slate-500">
+                            <th className="px-4 py-3 font-semibold">Type</th>
+                            <th className="px-4 py-3 font-semibold">Size</th>
+                            <th className="px-4 py-3 text-right font-semibold">Qty</th>
+                            <th className="px-4 py-3 font-semibold">Source examples</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {group.rows.map((row) => (
+                            <tr key={row.key} className="border-b border-slate-100 last:border-0">
+                              <td className="px-4 py-3 font-medium text-slate-700">{row.kind}</td>
+                              <td className="px-4 py-3 font-mono text-slate-700">{row.width.toFixed(1)} × {row.length.toFixed(1)} mm</td>
+                              <td className="px-4 py-3 text-right font-mono font-semibold text-slate-900">{row.count}</td>
+                              <td className="px-4 py-3 text-[11px] text-slate-500">{row.sources.join(", ")}{row.count > row.sources.length ? " ..." : ""}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
+                  No direct waste blocks
+                </div>
+              )}
+            </div>
+
+            {/* Area 5: Final recovered boards */}
+            <div className="w-full px-6 pt-12">
+              <div className="px-2 pb-6">
+                <h2 className="text-[18px] font-bold text-foreground">5. 回收板材区域</h2>
+                <p className="mt-1 text-[13px] text-apple-gray">只汇总最终入库的 12&quot; / 24&quot; 回收板材。</p>
+              </div>
+              {recoveredBoardRows.length > 0 ? (
+                <div className="overflow-x-auto rounded-xl border border-emerald-200 bg-white shadow-sm">
+                  <table className="w-full text-[13px]">
+                    <thead>
+                      <tr className="border-b border-emerald-200 bg-emerald-50 text-left text-[11px] uppercase tracking-wide text-emerald-700">
+                        <th className="px-4 py-3 font-semibold">Type</th>
+                        <th className="px-4 py-3 font-semibold">Size</th>
+                        <th className="px-4 py-3 text-right font-semibold">Qty</th>
+                        <th className="px-4 py-3 font-semibold">Source examples</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recoveredBoardRows.map((row) => (
+                        <tr key={row.key} className="border-b border-emerald-100 last:border-0">
+                          <td className="px-4 py-3 font-medium text-emerald-800">{row.type}</td>
+                          <td className="px-4 py-3 font-mono text-slate-700">{row.width.toFixed(1)} × {row.length.toFixed(1)} mm</td>
+                          <td className="px-4 py-3 text-right font-mono font-semibold text-slate-900">{row.count}</td>
+                          <td className="px-4 py-3 text-[11px] text-slate-500">{row.sources.join(", ")}{row.count > row.sources.length ? " ..." : ""}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
+                  No 12&quot; / 24&quot; recovered boards
                 </div>
               )}
             </div>

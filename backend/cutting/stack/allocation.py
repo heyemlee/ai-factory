@@ -8,6 +8,7 @@ width-rip from a wider stock and stretcher-from-T0-residual heuristics.
 from __future__ import annotations
 
 from .constants import (
+    BOARD_HEIGHT,
     FALLBACK_T1_BY_WIDTH,
     SAW_KERF,
     STACK_PREFERENCE,
@@ -28,6 +29,7 @@ from .primitives import (
 from .strips import _append_part_to_strip, _can_append_part
 from .t0_packer import _append_strip_to_t0_sheet
 from .recovery import _recovery_cost
+from cutting.efficient.primitives import common_recovery_board_type
 
 
 def _wider_inventory_widths(target: float, inventory: dict, remaining_qty: dict) -> list[tuple[float, str, int]]:
@@ -52,26 +54,44 @@ def _wider_inventory_widths(target: float, inventory: dict, remaining_qty: dict)
     return results
 
 
-def _rip_recovery_entry(leftover: float, color: str) -> dict | None:
-    """Return a recovered_inventory entry if leftover hits a standard width."""
+def _recovery_board_type(width: float, preferred: str | None = None) -> str:
+    width = _r1(width)
+    if preferred:
+        return preferred
+    return FALLBACK_T1_BY_WIDTH.get(width, common_recovery_board_type(width))
+
+
+def _rip_recovery_entry(
+    leftover: float,
+    color: str,
+    source_board_type: str | None = None,
+    source_id: str | None = None,
+) -> dict | None:
+    """Return a full-length recovery candidate for a width-rip leftover."""
     width = _r1(leftover)
-    if width not in STANDARD_WIDTHS:
+    if _stretcher_yield_for_width(width) <= 0:
         return None
-    board_type = FALLBACK_T1_BY_WIDTH[width]
+    board_type = _recovery_board_type(width)
     return {
+        "id": source_id or f"RC-T1-{color}-{board_type}",
+        "source": "T1",
+        "origin": "width_residual",
+        "source_board_id": source_id,
+        "source_board_type": source_board_type,
         "width": width,
+        "length": BOARD_HEIGHT,
         "board_type": board_type,
         "type": board_type,
-        "label": f"Recovered {width}mm (width-rip)",
+        "label": f"Recovered {width}×{BOARD_HEIGHT}mm (width-rip)",
         "color": color,
-        "source": "width_rip",
     }
 
 
 def _stamp_rip_meta(strip: dict, src_width: float, target_width: float, color: str,
-                    rip_recovered_out: list[dict]) -> None:
+                    rip_recovered_out: list[dict], source_board_type: str | None = None) -> None:
     leftover = max(0.0, src_width - target_width - SAW_KERF)
-    recovery = _rip_recovery_entry(leftover, color)
+    source_id = f"RC-T1-{color}-{source_board_type or _r1(src_width)}-{len(rip_recovered_out) + 1:03d}"
+    recovery = _rip_recovery_entry(leftover, color, source_board_type=source_board_type, source_id=source_id)
     strip["rip_from"] = _r1(src_width)
     strip["rip_leftover"] = round(leftover, 1)
     strip["rip_leftover_recovered"] = bool(recovery)
@@ -121,7 +141,7 @@ def _allocate_strip_sources(
                 continue
             take = min(avail, len(remaining))
             for s in remaining[:take]:
-                _stamp_rip_meta(s, src_width, width, color, rip_recovered_out)
+                _stamp_rip_meta(s, src_width, width, color, rip_recovered_out, source_board_type=src_bt)
                 inventory_strips.append((s, src_bt))
             used_inventory[src_bt] = used_inventory.get(src_bt, 0) + take
             inventory_remaining[src_bt] = avail - take
@@ -131,7 +151,34 @@ def _allocate_strip_sources(
 
 
 def _source_board_waste(source_width: float, yield_count: int) -> float:
-    return round(max(0.0, source_width - yield_count * STRETCHER_WIDTH - yield_count * SAW_KERF), 1)
+    kerfs = max(0, yield_count - 1) * SAW_KERF
+    return round(max(0.0, source_width - yield_count * STRETCHER_WIDTH - kerfs), 1)
+
+
+def _stretcher_yield_for_width(width: float) -> int:
+    width = _r1(width)
+    for lane_count in range(max(STACK_PREFERENCE), 0, -1):
+        needed = lane_count * STRETCHER_WIDTH + max(0, lane_count - 1) * SAW_KERF
+        if needed <= width + 1e-6:
+            return lane_count
+    return 0
+
+
+def _available_stretcher_inventory_sources(inventory: dict, inventory_remaining: dict) -> list[tuple[float, str, int, int]]:
+    sources: list[tuple[float, str, int, int]] = []
+    for board_type, info in inventory.items():
+        if str(board_type).upper().startswith("T0"):
+            continue
+        qty = inventory_remaining.get(board_type, int(info.get("qty", 0)))
+        if qty <= 0:
+            continue
+        width = _r1(info.get("Width", 0))
+        yield_count = _stretcher_yield_for_width(width)
+        if yield_count <= 0:
+            continue
+        sources.append((width, board_type, qty, yield_count))
+    sources.sort(key=lambda row: (row[0], row[1]))
+    return sources
 
 
 def _stamp_stretcher_source(
@@ -753,8 +800,9 @@ def _allocate_stretcher_from_inventory_width(
     used_inventory: dict,
     inventory_remaining: dict,
     source_counter: dict[str, int],
+    board_type: str | None = None,
 ) -> list[tuple[dict, str]]:
-    board_type = _standard_board_type(width, inventory)
+    board_type = board_type or _standard_board_type(width, inventory)
     available = inventory_remaining.get(board_type, 0)
     allocated: list[tuple[dict, str]] = []
     while queue and available > 0:
@@ -807,6 +855,332 @@ def _allocate_stretcher_from_t0_standard(
     return allocated
 
 
+def _strip_length_signature(strip: dict) -> tuple[float, ...]:
+    return tuple(_r1(_cut_length(part)) for part in strip.get("parts", []))
+
+
+def _is_final_recovery_width(width: float) -> bool:
+    width = _r1(width)
+    return any(abs(width - standard) < 0.5 for standard in STANDARD_WIDTHS)
+
+
+def _candidate_recovered_inventory_entry(candidate: dict) -> dict:
+    width = _r1(candidate.get("width", 0))
+    length = _r1(candidate.get("length", BOARD_HEIGHT))
+    board_type = candidate.get("board_type") or _recovery_board_type(width)
+    return {
+        "id": candidate.get("id"),
+        "width": width,
+        "length": length,
+        "board_type": board_type,
+        "type": board_type,
+        "label": candidate.get("label") or f"Recovered {width}×{length}mm",
+        "color": candidate.get("color"),
+        "source": candidate.get("source"),
+        "source_board_id": candidate.get("source_board_id"),
+        "origin": candidate.get("origin", "width_residual"),
+    }
+
+
+def _recovery_cut_board_signature(board: dict) -> tuple:
+    lane_sig = tuple(
+        tuple(_r1(_cut_length(part)) for part in lane.get("parts", []))
+        for lane in board.get("lanes", [])
+    )
+    return (
+        _r1(board.get("width", 0)),
+        _r1(board.get("length", 0)),
+        lane_sig,
+        _r1(board.get("inline_waste_width", 0)),
+    )
+
+
+def _stamp_recovery_cut_stacks(recovery_boards: list[dict]) -> None:
+    by_sig: dict[tuple, list[dict]] = {}
+    for board in recovery_boards:
+        if board.get("status") != "used":
+            continue
+        by_sig.setdefault(_recovery_cut_board_signature(board), []).append(board)
+
+    for sig_idx, boards in enumerate(by_sig.values(), start=1):
+        cursor = 0
+        while cursor < len(boards):
+            take = min(max(STACK_PREFERENCE), len(boards) - cursor)
+            stack_id = f"REC-STACK-{sig_idx:03d}-{cursor // max(STACK_PREFERENCE) + 1:02d}"
+            for layer, board in enumerate(boards[cursor:cursor + take]):
+                board["stack_group_id"] = stack_id
+                board["stack_size"] = take
+                board["stack_layer"] = layer
+                for lane in board.get("lane_strips", []):
+                    lane["stack_group_id"] = stack_id
+                    lane["stack_size"] = take
+                    lane["stack_layer"] = layer
+                    lane["stack_context_key"] = stack_id
+            cursor += take
+
+
+def _allocate_stretcher_from_recovery_candidates(
+    queue: list[dict],
+    candidates: list[dict],
+    color: str,
+    trim_loss: float,
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """Cut remaining stretchers from full-length recovery candidates.
+
+    Returns (lane_strips, recovery_cutting_boards, final_recovered_inventory,
+    still_unplaced). Used candidates show yellow stretcher lanes and inline
+    waste; unused candidates stay green and become final recovered inventory.
+    """
+    recovery_boards: list[dict] = []
+    lane_strips: list[dict] = []
+    final_recovered: list[dict] = []
+    sorted_candidates = sorted(
+        candidates,
+        key=lambda c: (
+            _r1(c.get("width", 0)),
+            str(c.get("source", "")),
+            str(c.get("id", "")),
+        ),
+    )
+
+    for idx, candidate in enumerate(sorted_candidates, start=1):
+        width = _r1(candidate.get("width", 0))
+        length = _r1(candidate.get("length", BOARD_HEIGHT))
+        yield_count = _stretcher_yield_for_width(width)
+        board_id = candidate.get("id") or f"RC-{color}-{idx:03d}"
+        board_type = candidate.get("board_type") or _recovery_board_type(width)
+        base_entry = {
+            "id": board_id,
+            "source": candidate.get("source", "recovery"),
+            "origin": candidate.get("origin", "width_residual"),
+            "source_board_id": candidate.get("source_board_id"),
+            "source_board_type": candidate.get("source_board_type"),
+            "board_type": board_type,
+            "color": candidate.get("color", color),
+            "width": width,
+            "length": length,
+            "label": candidate.get("label") or f"Recovered {width}×{length}mm",
+            "yield_count": yield_count,
+        }
+
+        if not queue or yield_count <= 0:
+            final_recovered.append(_candidate_recovered_inventory_entry({**candidate, "id": board_id, "board_type": board_type}))
+            recovery_boards.append({
+                **base_entry,
+                "status": "unused",
+                "lanes": [],
+                "lane_strips": [],
+                "inline_waste_width": 0,
+                "recovered_inventory": [_candidate_recovered_inventory_entry({**candidate, "id": board_id, "board_type": board_type})],
+            })
+            continue
+
+        lane_count, parts_per_lane = _choose_stretcher_stack_shape(queue, yield_count, trim_loss)
+        source_strips = _pop_stretcher_stack_lanes(queue, lane_count, parts_per_lane, trim_loss)
+        if not source_strips:
+            final_recovered.append(_candidate_recovered_inventory_entry({**candidate, "id": board_id, "board_type": board_type}))
+            recovery_boards.append({
+                **base_entry,
+                "status": "unused",
+                "lanes": [],
+                "lane_strips": [],
+                "inline_waste_width": 0,
+                "recovered_inventory": [_candidate_recovered_inventory_entry({**candidate, "id": board_id, "board_type": board_type})],
+            })
+            continue
+
+        group_id = f"REC-STRETCHER-{color}-{idx:03d}"
+        lanes = []
+        for lane_idx, strip in enumerate(source_strips):
+            _stamp_stretcher_source(strip, width, group_id, yield_count, board_type=board_type)
+            strip["source"] = "recovery"
+            strip["recovery_cutting_board_id"] = board_id
+            strip["recovery_source_board_id"] = candidate.get("source_board_id")
+            strip["recovery_origin"] = candidate.get("origin", "width_residual")
+            strip["recovery_lane_index"] = lane_idx
+            strip["color"] = candidate.get("color", color)
+            lane_strips.append(strip)
+            lanes.append({
+                "lane_index": lane_idx,
+                "x_position": _r1(lane_idx * (STRETCHER_WIDTH + SAW_KERF)),
+                "width": STRETCHER_WIDTH,
+                "parts": strip.get("parts", []),
+                "used_length": _r1(sum(_cut_length(part) for part in strip.get("parts", [])) + max(0, len(strip.get("parts", [])) - 1) * SAW_KERF),
+                "length_signature": list(_strip_length_signature(strip)),
+            })
+
+        used_width = len(source_strips) * STRETCHER_WIDTH + max(0, len(source_strips) - 1) * SAW_KERF
+        recovery_boards.append({
+            **base_entry,
+            "status": "used",
+            "lanes": lanes,
+            "lane_strips": source_strips,
+            "inline_waste_width": _r1(max(0.0, width - used_width)),
+            "recovered_inventory": [],
+        })
+
+    _stamp_recovery_cut_stacks(recovery_boards)
+    for board in recovery_boards:
+        board.pop("lane_strips", None)
+    return lane_strips, recovery_boards, final_recovered, list(queue)
+
+
+def _waste_category_order(width: float) -> tuple[int, float]:
+    width = _r1(width)
+    if width < 90:
+        return (99, width)
+    if width < 8 * 25.4:
+        return (0, width)
+    if width < 12 * 25.4:
+        return (1, width)
+    if width < 18 * 25.4:
+        return (2, width)
+    if width <= 24 * 25.4:
+        return (3, width)
+    return (99, width)
+
+
+def _waste_lane_width(width: float) -> float:
+    width = _r1(width)
+    return width if width < STRETCHER_WIDTH else STRETCHER_WIDTH
+
+
+def _waste_lane_count(width: float) -> int:
+    width = _r1(width)
+    if width < 90 or width > 24 * 25.4:
+        return 0
+    if width < STRETCHER_WIDTH:
+        return 1
+    lane_count = 0
+    used = 0.0
+    while True:
+        next_used = used + (SAW_KERF if lane_count > 0 else 0.0) + STRETCHER_WIDTH
+        if next_used > width + 1e-6:
+            break
+        lane_count += 1
+        used = next_used
+    return lane_count
+
+
+def _pop_fitting_stretcher(queue: list[dict], max_length: float, current_used: float = 0.0) -> dict | None:
+    for idx, strip in enumerate(queue):
+        part_len = _cut_length(strip["parts"][0])
+        needed = part_len if current_used <= 0 else current_used + SAW_KERF + part_len
+        if needed <= max_length + 1e-6:
+            return queue.pop(idx)
+    return None
+
+
+def _append_fitting_stretchers_from_queue(strip: dict, queue: list[dict], max_length: float) -> None:
+    while queue:
+        current_used = sum(_cut_length(part) for part in strip.get("parts", [])) + max(0, len(strip.get("parts", [])) - 1) * SAW_KERF
+        found_idx = None
+        for idx, candidate in enumerate(queue):
+            part = candidate["parts"][0]
+            if current_used + SAW_KERF + _cut_length(part) <= max_length + 1e-6:
+                found_idx = idx
+                break
+        if found_idx is None:
+            return
+        strip["parts"].append(queue.pop(found_idx)["parts"][0])
+        lengths = sorted((_r1(_cut_length(part)) for part in strip.get("parts", [])), reverse=True)
+        strip["pattern_key"] = f"WASTE-STRETCHER|{_r1(strip['strip_width'])}|{'+'.join(str(length) for length in lengths)}|{len(lengths)}"
+
+
+def _allocate_stretcher_from_waste_candidates(
+    queue: list[dict],
+    candidates: list[dict],
+    color: str,
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    waste_boards: list[dict] = []
+    lane_strips: list[dict] = []
+    remaining_waste: list[dict] = []
+
+    sorted_candidates = sorted(
+        candidates,
+        key=lambda c: (
+            _waste_category_order(c.get("width", 0)),
+            _r1(c.get("length", BOARD_HEIGHT)),
+            str(c.get("id", "")),
+        ),
+    )
+
+    for idx, candidate in enumerate(sorted_candidates, start=1):
+        width = _r1(candidate.get("width", 0))
+        length = _r1(candidate.get("length", BOARD_HEIGHT))
+        lane_width = _waste_lane_width(width)
+        lane_capacity = _waste_lane_count(width)
+        board_id = candidate.get("id") or f"WASTE-{color}-{idx:03d}"
+        base_entry = {
+            "id": board_id,
+            "source": "waste",
+            "origin": candidate.get("origin", "waste"),
+            "source_board_id": candidate.get("source_board_id"),
+            "source_board_type": candidate.get("source_board_type"),
+            "board_type": candidate.get("board_type") or f"WASTE-{width}x{length}",
+            "color": candidate.get("color", color),
+            "width": width,
+            "length": length,
+            "label": candidate.get("label") or f"Waste {width}×{length}mm",
+            "yield_count": lane_capacity,
+        }
+
+        source_strips: list[dict] = []
+        lanes = []
+        if queue and lane_capacity > 0:
+            for lane_idx in range(lane_capacity):
+                strip = _pop_fitting_stretcher(queue, length)
+                if not strip:
+                    break
+                strip["strip_width"] = lane_width
+                strip["parts"] = [
+                    {**part, "cut_width": lane_width}
+                    for part in strip.get("parts", [])
+                ]
+                strip["source"] = "recovery"
+                strip["stretcher_phase"] = True
+                strip["source_stock_group_id"] = f"WASTE-STRETCHER-{color}-{idx:03d}"
+                strip["source_stock_width"] = width
+                strip["source_stock_board_type"] = base_entry["board_type"]
+                strip["source_stock_yield_count"] = lane_capacity
+                strip["source_stock_waste_width"] = _r1(max(0.0, width - (lane_capacity * lane_width + max(0, lane_capacity - 1) * SAW_KERF)))
+                strip["recovery_cutting_board_id"] = board_id
+                strip["recovery_source_board_id"] = candidate.get("source_board_id")
+                strip["recovery_origin"] = candidate.get("origin", "waste")
+                strip["recovery_lane_index"] = lane_idx
+                strip["color"] = candidate.get("color", color)
+                _append_fitting_stretchers_from_queue(strip, queue, length)
+                strip["parts"] = [
+                    {**part, "cut_width": lane_width}
+                    for part in strip.get("parts", [])
+                ]
+                source_strips.append(strip)
+                lane_strips.append(strip)
+                used_length = sum(_cut_length(part) for part in strip.get("parts", [])) + max(0, len(strip.get("parts", [])) - 1) * SAW_KERF
+                lanes.append({
+                    "lane_index": lane_idx,
+                    "x_position": _r1(lane_idx * (lane_width + SAW_KERF)),
+                    "width": lane_width,
+                    "parts": strip.get("parts", []),
+                    "used_length": _r1(used_length),
+                    "length_signature": list(_strip_length_signature(strip)),
+                })
+
+        if lanes:
+            used_width = len(lanes) * lane_width + max(0, len(lanes) - 1) * SAW_KERF
+            waste_boards.append({
+                **base_entry,
+                "status": "used",
+                "lanes": lanes,
+                "inline_waste_width": _r1(max(0.0, width - used_width)),
+                "recovered_inventory": [],
+            })
+        else:
+            remaining_waste.append({**base_entry, "kind": candidate.get("kind", candidate.get("origin", "waste"))})
+
+    return lane_strips, waste_boards, remaining_waste, list(queue)
+
+
 def _allocate_stretcher_sources(
     stretcher_strips: list[dict],
     sheets: list[dict],
@@ -819,17 +1193,14 @@ def _allocate_stretcher_sources(
 ) -> tuple[list[tuple[dict, str]], list[dict]]:
     inventory_allocated: list[tuple[dict, str]] = []
     t0_allocated: list[dict] = []
-    source_counter = {"t0_direct": 0, "inventory": 0, "t0_standard": 0}
 
     queue = sorted(
         list(stretcher_strips),
         key=lambda strip: (_cut_length(strip["parts"][0]), strip["parts"][0].get("part_id", "")),
         reverse=True,
     )
-    t0_allocated.extend(_allocate_stretcher_from_t0_residual(queue, sheets, color, trim_loss, source_counter))
-    t0_allocated.extend(_allocate_stretcher_from_t0_width_residual(queue, sheets, color, trim_loss, source_counter))
 
-    # Do not open a T0 raw sheet just to make stretchers. Any queue that remains
-    # here could not be placed into existing T0 offcut lanes while preserving
-    # the sheet stack context.
+    # New production rule: T1/T0 main-layout regions are cut first and their
+    # full-length leftovers become recovery candidates. Stretchers are never
+    # nested into main-strip length waste, including Back Panel leftovers.
     return inventory_allocated, t0_allocated, list(queue)

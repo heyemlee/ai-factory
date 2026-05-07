@@ -442,6 +442,7 @@ function countStockTakes(boards: Board[]): { twelve: number; twentyFour: number 
   const twelve = new Set<string>();
   const twentyFour = new Set<string>();
   for (const board of boards) {
+    if (String(board.source || "").toLowerCase() === "recovery") continue;
     if (boardCutSource(board) !== "T1") continue;
     const key = board.source_stock_group_id || board.board_id;
     const take = sourceTakeLabel(board, targetWidthForBoard(board));
@@ -462,6 +463,7 @@ function countRecoveredParts(cutResult: CutResult | null | undefined, t0Sheets: 
 function buildCutSections(sectionBoards: Board[], mergeStandardPool = false): CutPlanSection[] {
   const sectionMap: Record<string, Board[]> = {};
   for (const board of sectionBoards) {
+    if (String(board.source || "").toLowerCase() === "recovery") continue;
     const width = board.strip_width || 0;
     const color = board.color || DEFAULT_BOX_COLOR;
     const boardType = productionLengthBoardType(board, mergeStandardPool);
@@ -685,7 +687,7 @@ export function CutPlanTable({
       patternIdx: number;
     }> = [];
 
-    const stockBoards = boards.filter((board) => boardCutSource(board) === "T1");
+    const stockBoards = boards.filter((board) => String(board.source || "").toLowerCase() !== "recovery" && boardCutSource(board) === "T1");
     buildCutSections(stockBoards, mergeStandardPool).forEach((section, sectionIdx) => {
       section.patterns.forEach((pattern, patternIdx) => {
         const targetWidth = section.boardWidth;

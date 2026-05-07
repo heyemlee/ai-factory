@@ -81,6 +81,7 @@ export function calculatePlannedBoardUsage(cutResult: CutResultLike | null | und
   }
 
   for (const board of cutResult?.boards || []) {
+    if (String(board?.source || "").toLowerCase() === "recovery") continue;
     const boardType = board?.board || board?.board_type;
     const color = board?.color || DEFAULT_BOX_COLOR;
     const sourceBoardType = board?.source_stock_board_type;

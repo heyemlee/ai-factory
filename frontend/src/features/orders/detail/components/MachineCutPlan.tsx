@@ -8,6 +8,7 @@ import { SIZE_COLORS } from "./constants";
 import { boardFingerprint, getRipWidth, nominalStockWidthForBoard, parseBoardDims } from "./utils";
 import { BoardTile } from "./BoardTile";
 import { T0SheetCard } from "./T0SheetCard";
+import { RecoveryCuttingBoardCard } from "./RecoveryCuttingBoardCard";
 import { MachineCutErrorBoundary } from "./MachineCutErrorBoundary";
 import { machineI18n, type MachineLanguage } from "./machineCutPlanCopy";
 import { boardCutSource, comparePatternPriority, formatCutNote, indexToNumberStr, maxPatternStack, parseT0SheetDims, sourcePriority, type MachineCutSection, type MachinePattern, type MachineT0RipBatch, type MachineT0Sheet } from "./machineCutPlanModel";
@@ -24,6 +25,10 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     });
     return map;
   }, [boards]);
+  const recoveryCuttingBoards = useMemo(
+    () => cutResult?.recovery_cutting_boards || [],
+    [cutResult]
+  );
   const mt = useCallback(
     (key: string) => machineI18n[machineLang]?.[key] || machineI18n.en[key] || key,
     [machineLang]
@@ -147,7 +152,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     return board.board;
   }, [useStandardLengthPool]);
 
-  const buildMachinePatterns = (groupedBoards: Board[], width: number): MachinePattern[] => {
+  const buildMachinePatterns = useCallback((groupedBoards: Board[], width: number): MachinePattern[] => {
     if (useStandardLengthPool && groupedBoards.length > 1) {
       const lengthStats = new Map<number, { stackOf: number; pieces: number }>();
       for (const board of groupedBoards) {
@@ -199,11 +204,12 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
       { pattern: a, boardWidth: getRipWidth(a.sampleBoard) || width, sourcePriority: sourcePriority(boardCutSource(a.sampleBoard)) },
       { pattern: b, boardWidth: getRipWidth(b.sampleBoard) || width, sourcePriority: sourcePriority(boardCutSource(b.sampleBoard)) }
     ));
-  };
+  }, [useStandardLengthPool]);
 
   const buildCutSections = (sectionBoards: Board[]): MachineCutSection[] => {
     const sectionMap: Record<string, Board[]> = {};
     for (const b of sectionBoards) {
+      if (String(b.source || "").toLowerCase() === "recovery") continue;
       const w = b.strip_width || 0;
       const color = b.color || DEFAULT_BOX_COLOR;
       const boardType = productionLengthBoardType(b);
@@ -267,6 +273,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
     // Group boards by strip_width AND board type AND board size to prevent mixing different sheet types/sizes
     const groupMap: Record<string, Board[]> = {};
     for (const b of boards) {
+      if (String(b.source || "").toLowerCase() === "recovery") continue;
       const w = b.strip_width || 0;
       const color = b.color || DEFAULT_BOX_COLOR;
       const boardType = productionLengthBoardType(b);
@@ -372,7 +379,7 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         return a.key.localeCompare(b.key);
       })
       .map((group, idx) => ({ ...group, engNo: idx + 1 }));
-  }, [boards, productionLengthBoardType]);
+  }, [boards, buildMachinePatterns, productionLengthBoardType]);
 
   const displayGroups = useMemo(() => {
     const useCrossSheetT0Stack = useStandardLengthPool;
@@ -747,6 +754,20 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
           </MachineCutErrorBoundary>
         );
         })}
+
+        {recoveryCuttingBoards.length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
+            <div className="bg-white text-slate-800 p-5 border-b border-border/60">
+              <h3 className="text-xl font-bold">回收板材裁切拉条区域</h3>
+              <p className="mt-1 text-[13px] text-slate-500">绿色为最终回收，橙色为拉条，灰色为本区就地废料。</p>
+            </div>
+            <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+              {recoveryCuttingBoards.map((board) => (
+                <RecoveryCuttingBoardCard key={board.id} board={board} />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </MachineCutErrorBoundary>
   );

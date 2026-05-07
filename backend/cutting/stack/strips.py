@@ -345,6 +345,10 @@ def _board_from_strip(strip: dict, board_type: str, source: str, index: int, tri
         "source_stock_board_type",
         "source_stock_yield_count",
         "source_stock_waste_width",
+        "recovery_cutting_board_id",
+        "recovery_source_board_id",
+        "recovery_origin",
+        "recovery_lane_index",
     ):
         if key in strip:
             board[key] = strip[key]

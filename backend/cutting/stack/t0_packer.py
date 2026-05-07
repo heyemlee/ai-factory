@@ -28,6 +28,7 @@ from .recovery import (
 )
 
 from cutting.efficient import DEFAULT_BOX_COLOR
+from cutting.efficient.primitives import common_recovery_board_type
 
 
 def _append_strip_to_t0_sheet(sheet: dict, strip: dict) -> bool:
@@ -176,7 +177,7 @@ def _finalize_t0_sheets(sheets: list[dict], color: str, inventory: dict, trim_lo
 
     recovery_types = _recovery_options_for_inventory(inventory)
     t0_sheets = []
-    recovered_inventory = []
+    recovery_candidates = []
     # Track how many physical T0 sheets each entry consumes for correct
     # sheet_id assignment (stacked entries consume >1 raw sheet).
     physical_sheet_counter = 0
@@ -204,20 +205,30 @@ def _finalize_t0_sheets(sheets: list[dict], color: str, inventory: dict, trim_lo
         recovered_length = round(BOARD_HEIGHT if sheet_no_trim else BOARD_HEIGHT - 2 * trim_loss, 1)
 
         recovered_strips = []
-        for width in recovered_widths:
-            board_type = recovery_types[width]
+        for rec_idx, width in enumerate(recovered_widths, start=1):
+            board_type = recovery_types.get(width, common_recovery_board_type(width))
+            candidate_id = f"RC-T0-{sheet_id}-{rec_idx:02d}"
             recovered = {
+                "id": candidate_id,
                 "width": width,
                 "length": recovered_length,
                 "board_type": board_type,
                 "type": board_type,
                 "label": f"Recovered {width}×{recovered_length}mm",
                 "color": color,
+                "source": "T0",
+                "origin": "t0_width_residual",
+                "source_board_id": sheet_id,
             }
             recovered_strips.append(recovered)
-            # Each stacked layer also produces these recovered strips.
-            for _ in range(stack_count):
-                recovered_inventory.append(dict(recovered))
+            # Each stacked layer produces a physical recovery candidate for
+            # the downstream recovery-board stretcher pass.
+            for layer in range(stack_count):
+                recovery_candidates.append({
+                    **recovered,
+                    "id": f"{candidate_id}-L{layer + 1}",
+                    "source_stack_layer": layer,
+                })
 
         all_strips_info = [
             {"strip_width": strip["strip_width"], "strip_index": idx}
@@ -297,7 +308,7 @@ def _finalize_t0_sheets(sheets: list[dict], color: str, inventory: dict, trim_lo
         "t0_board_type": t0_board_type,
         "t0_sheets": t0_sheets,
         "t0_strips": all_t0_strips,
-        "recovered_inventory": recovered_inventory,
+        "recovery_candidates": recovery_candidates,
     }
 
 

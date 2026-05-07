@@ -75,6 +75,10 @@ export interface Board {
   rip_from?: number;
   rip_leftover?: number;
   rip_leftover_recovered?: boolean;
+  recovery_cutting_board_id?: string;
+  recovery_source_board_id?: string;
+  recovery_origin?: string;
+  recovery_lane_index?: number;
 }
 
 export interface InventoryShortage {
@@ -86,10 +90,59 @@ export interface InventoryShortage {
 }
 
 export interface RecoveredStrip {
+  id?: string;
   width: number;
+  length?: number;
   board_type: string;
   color?: string;
   type?: string;
+  label?: string;
+  source?: string;
+  source_board_id?: string;
+  origin?: string;
+}
+
+export interface RecoveryCuttingLane {
+  lane_index: number;
+  x_position: number;
+  width: number;
+  used_length?: number;
+  parts: Part[];
+  length_signature?: number[];
+}
+
+export interface RecoveryCuttingBoard {
+  id: string;
+  source?: string;
+  origin?: string;
+  source_board_id?: string;
+  source_board_type?: string;
+  board_type?: string;
+  color?: string;
+  width: number;
+  length: number;
+  label?: string;
+  yield_count?: number;
+  status: "used" | "unused";
+  lanes: RecoveryCuttingLane[];
+  inline_waste_width?: number;
+  recovered_inventory?: RecoveredStrip[];
+  stack_group_id?: string;
+  stack_size?: number;
+  stack_layer?: number;
+}
+
+export interface WasteBlock {
+  id: string;
+  source?: string;
+  origin?: string;
+  kind?: string;
+  source_board_id?: string;
+  source_board_type?: string;
+  board_type?: string;
+  color?: string;
+  width: number;
+  length: number;
   label?: string;
 }
 
@@ -125,6 +178,8 @@ export interface CutResult {
     trim_loss_mm?: number;
   };
   recovered_inventory?: RecoveredStrip[];
+  recovery_cutting_boards?: RecoveryCuttingBoard[];
+  waste_blocks?: WasteBlock[];
   t0_plan?: {
     t0_sheets?: Array<{
       sheet_id: string;

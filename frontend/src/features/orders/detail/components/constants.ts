@@ -15,5 +15,5 @@ export const T0_STRIP_COLORS = [
   { bg: "#f9a8d4", border: "#ec4899", text: "#9d174d" },   // pink
   { bg: "#fdba74", border: "#f97316", text: "#9a3412" },   // orange
   { bg: "#c4b5fd", border: "#8b5cf6", text: "#5b21b6" },   // violet
-  { bg: "#fde68a", border: "#f59e0b", text: "#92400e" },   // amber
+  { bg: "#fad2a4", border: "#f47820", text: "#c2410c" },   // orange (matches T1 BoardTile)
 ];

@@ -8,8 +8,9 @@ This engine prioritizes repeatable stack cuts over raw material utilization:
 2. Production is staged: rip T0 standard-width strips first, then length-cut
    standard strips together with matching T1 inventory as one stack pool.
 3. T0 Sheet mode ignores existing T1; standard-width strips cut from T0 serve
-   the current order first. Extra standard strips are recovered to inventory.
-4. T0 recovery preserves 303.8 width only.
+   the current order first.
+4. Leftover stretchers are cut from full-length recovery candidates before
+   any unused candidates become final recovered inventory.
 """
 
 from __future__ import annotations
@@ -26,7 +27,13 @@ from cutting.efficient import (
     load_parts,
 )
 
-from .allocation import _allocate_strip_sources, _allocate_stretcher_sources
+from .allocation import (
+    _allocate_stretcher_from_waste_candidates,
+    _allocate_stretcher_from_recovery_candidates,
+    _allocate_strip_sources,
+    _allocate_stretcher_sources,
+    _is_final_recovery_width,
+)
 from .constants import (
     BOARD_HEIGHT,
     MAX_STACK,
@@ -66,6 +73,80 @@ def _physical_t0_count(sheets: list[dict]) -> int:
     return sum(int(sheet.get("t0_sheet_stack", 1)) for sheet in sheets)
 
 
+def _strip_used_length_from_board(board: dict) -> float:
+    parts = board.get("parts", [])
+    return sum(float(part.get("cut_length") or part.get("Height") or 0) for part in parts) + max(0, len(parts) - 1) * SAW_KERF
+
+
+def _waste_candidate_entry(
+    *,
+    waste_id: str,
+    source_board_id: str,
+    color: str,
+    width: float,
+    length: float,
+    origin: str,
+    kind: str,
+    source_board_type: str | None = None,
+) -> dict | None:
+    width = _r1(width)
+    length = _r1(length)
+    if width < 90 or width > 24 * 25.4 or length <= 0.5:
+        return None
+    return {
+        "id": waste_id,
+        "source": "waste",
+        "origin": origin,
+        "kind": kind,
+        "source_board_id": source_board_id,
+        "source_board_type": source_board_type,
+        "board_type": f"WASTE-{width}x{length}",
+        "color": color,
+        "width": width,
+        "length": length,
+        "label": f"Waste {width}×{length}mm",
+    }
+
+
+def _collect_board_waste_candidates(boards: list[dict], color: str) -> list[dict]:
+    candidates: list[dict] = []
+    for board in boards:
+        if str(board.get("source", "")).lower() == "recovery":
+            continue
+        board_id = board.get("board_id", "?")
+        board_type = board.get("board") or board.get("board_type")
+        length_waste = float(board.get("usable_length", 0)) - _strip_used_length_from_board(board)
+        entry = _waste_candidate_entry(
+            waste_id=f"WASTE-{board_id}-L",
+            source_board_id=board_id,
+            source_board_type=board_type,
+            color=board.get("color", color),
+            width=float(board.get("strip_width", 0)),
+            length=length_waste,
+            origin="length_waste",
+            kind="length",
+        )
+        if entry:
+            candidates.append(entry)
+
+        if board.get("t0_sheet_id") or board.get("rip_leftover_recovered"):
+            continue
+        width_waste = float(board.get("rip_leftover") or 0)
+        entry = _waste_candidate_entry(
+            waste_id=f"WASTE-{board_id}-W",
+            source_board_id=board_id,
+            source_board_type=board_type,
+            color=board.get("color", color),
+            width=width_waste,
+            length=BOARD_HEIGHT,
+            origin="width_waste",
+            kind="width",
+        )
+        if entry:
+            candidates.append(entry)
+    return candidates
+
+
 def _run_color(parts: list[dict], inventory: dict, color: str, force_t0_start: bool, trim_loss: float, t0_id_offset: int) -> dict:
     main_parts = [part for part in parts if not _is_stretcher_width(_cut_width(part))]
     stretcher_parts = [part for part in parts if _is_stretcher_width(_cut_width(part))]
@@ -82,7 +163,7 @@ def _run_color(parts: list[dict], inventory: dict, color: str, force_t0_start: b
         for bt, info in inventory.items()
         if not str(bt).upper().startswith("T0")
     }
-    rip_recovered: list[dict] = []
+    recovery_candidates: list[dict] = []
 
     for width in sorted(parts_by_width.keys(), reverse=True):
         strips = _build_stack_first_strips(parts_by_width[width], width, color, trim_loss)
@@ -97,7 +178,7 @@ def _run_color(parts: list[dict], inventory: dict, color: str, force_t0_start: b
             force_t0_start,
             used_inventory,
             inventory_remaining,
-            rip_recovered,
+            recovery_candidates,
         )
         inventory_strips.extend(allocated)
         t0_candidate_strips.extend(t0_extra)
@@ -149,10 +230,30 @@ def _run_color(parts: list[dict], inventory: dict, color: str, force_t0_start: b
                     strip["stack_context_key"] = sheet_signature_context
                 else:
                     strip["stack_context_key"] = sheet_instance_context
+    t0_pack = _finalize_t0_sheets(sheets, color, inventory, trim_loss, t0_id_offset)
+    recovery_candidates.extend(t0_pack.get("recovery_candidates", []))
+    standard_recovery_candidates = [
+        candidate for candidate in recovery_candidates
+        if _is_final_recovery_width(float(candidate.get("width", 0)))
+    ]
+    waste_candidates = [
+        {**candidate, "kind": candidate.get("kind", candidate.get("origin", "width_waste"))}
+        for candidate in recovery_candidates
+        if not _is_final_recovery_width(float(candidate.get("width", 0)))
+    ]
+    recovery_lane_strips, recovery_cutting_boards, recovered_inventory, unplaced_stretchers = (
+        _allocate_stretcher_from_recovery_candidates(
+            unplaced_stretchers,
+            standard_recovery_candidates,
+            color,
+            trim_loss,
+        )
+    )
+    inventory_only_strips = [s for s, _ in inventory_strips]
     _bundle_into_stacks(inventory_only_strips, pattern_prefix=f"INV-{color}-")
     _bundle_into_stacks(t0_all_strips, pattern_prefix=f"T0-{color}-")
+    _bundle_into_stacks(recovery_lane_strips, pattern_prefix=f"REC-{color}-")
 
-    t0_pack = _finalize_t0_sheets(sheets, color, inventory, trim_loss, t0_id_offset)
     t0_board_type = t0_pack["t0_board_type"]
     board_results = []
     board_index = 1
@@ -164,6 +265,25 @@ def _run_color(parts: list[dict], inventory: dict, color: str, force_t0_start: b
     for strip in t0_pack["t0_strips"]:
         board_results.append(_board_from_strip(strip, t0_board_type, "T0", board_index, trim_loss))
         board_index += 1
+
+    waste_candidates.extend(_collect_board_waste_candidates(board_results, color))
+    waste_lane_strips, waste_cutting_boards, waste_blocks, unplaced_stretchers = (
+        _allocate_stretcher_from_waste_candidates(
+            unplaced_stretchers,
+            waste_candidates,
+            color,
+        )
+    )
+
+    for strip in recovery_lane_strips:
+        board_type = strip.get("source_stock_board_type") or f"REC-{strip.get('source_stock_width', strip.get('strip_width'))}x{BOARD_HEIGHT}"
+        board_results.append(_board_from_strip(strip, board_type, "recovery", board_index, trim_loss))
+        board_index += 1
+    for strip in waste_lane_strips:
+        board_type = strip.get("source_stock_board_type") or f"WASTE-{strip.get('source_stock_width', strip.get('strip_width'))}x{BOARD_HEIGHT}"
+        board_results.append(_board_from_strip(strip, board_type, "recovery", board_index, trim_loss))
+        board_index += 1
+    recovery_cutting_boards.extend(waste_cutting_boards)
 
     sheet_to_parts_area: dict[str, float] = defaultdict(float)
     sheet_to_recovered_area: dict[str, float] = defaultdict(float)
@@ -186,7 +306,9 @@ def _run_color(parts: list[dict], inventory: dict, color: str, force_t0_start: b
     return {
         "boards": board_results,
         "t0_sheets": t0_pack["t0_sheets"],
-        "recovered_inventory": t0_pack["recovered_inventory"] + rip_recovered,
+        "recovery_cutting_boards": recovery_cutting_boards,
+        "recovered_inventory": recovered_inventory,
+        "waste_blocks": waste_blocks,
         "used_inventory": used_inventory,
         "unplaced_stretchers": unplaced_stretchers,
         "color": color,
@@ -220,6 +342,8 @@ def run_engine(
 
     all_boards: list[dict] = []
     all_t0_sheets: list[dict] = []
+    recovery_cutting_boards: list[dict] = []
+    waste_blocks: list[dict] = []
     recovered_inventory: list[dict] = []
     used_inventory: dict[str, int] = {}
     inventory_used_by_color: dict[str, dict[str, int]] = {}
@@ -241,6 +365,8 @@ def run_engine(
         )
         all_boards.extend(partial["boards"])
         all_t0_sheets.extend(partial["t0_sheets"])
+        recovery_cutting_boards.extend(partial.get("recovery_cutting_boards", []))
+        waste_blocks.extend(partial.get("waste_blocks", []))
         recovered_inventory.extend(partial["recovered_inventory"])
         unplaced_stretchers.extend(partial.get("unplaced_stretchers", []))
         t0_id_offset += len(partial["t0_sheets"])
@@ -337,7 +463,7 @@ def run_engine(
                 "Height": strip["parts"][0].get("Height"),
                 "Width": strip["parts"][0].get("Width"),
                 "color": strip["parts"][0].get("color", DEFAULT_BOX_COLOR),
-                "reason": "拉条只能使用现有 T0 余料；禁止从 T0 大板或 T1 库存单独开拉条",
+                "reason": "现有 T0 余料和临时回收板材都不足，拉条无法排版",
             }
             for strip in unplaced_stretchers
         ])
@@ -388,7 +514,8 @@ def run_engine(
             "rip_t0_standard_strips",
             "stack_length_cut_standard_pool",
             "cut_nonstandard_t0_strips",
-            "cut_stretcher_phase",
+            "collect_recovery_boards",
+            "cut_stretchers_from_recovery_boards",
         ],
     }
     if total_oversized:
@@ -420,6 +547,10 @@ def run_engine(
         }
     if recovered_inventory:
         output["recovered_inventory"] = recovered_inventory
+    if recovery_cutting_boards:
+        output["recovery_cutting_boards"] = recovery_cutting_boards
+    if waste_blocks:
+        output["waste_blocks"] = waste_blocks
     if cabinet_breakdown:
         output["cabinet_breakdown"] = cabinet_breakdown
 

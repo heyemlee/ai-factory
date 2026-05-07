@@ -233,7 +233,7 @@ export function BoardTile({ board, color, stackInfo, onClick, disableHover = fal
             {stripHeight < 100 && (() => {
               const remainingWidthMm = ((100 - stripHeight) / 100) * boardDims.width;
               // Only leftovers that maintain the full 2438.4 length (width rips) can be recovered
-              const isRecovered = remainingWidthMm >= 200;
+              const isRecovered = remainingWidthMm >= 101.6;
               return (
                 <div className="absolute" style={{
                   left: 0, width: '100%',
