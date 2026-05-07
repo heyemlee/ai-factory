@@ -802,7 +802,7 @@ export default function OrderDetail() {
             {/* Area 1: T1 */}
             <div className="w-full flex flex-col gap-y-14 px-6 pb-12 border-b border-border/40">
               <div className="px-2">
-                <h2 className="text-[18px] font-bold text-foreground">1. T1 裁切区域</h2>
+                <h2 className="text-[18px] font-bold text-foreground">{t("orderDetail.sectionT1")}</h2>
               </div>
               {t1Entries.length > 0 ? t1Entries.map(renderGroup) : (
                 <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
@@ -814,7 +814,7 @@ export default function OrderDetail() {
             {/* Area 2: T0 */}
             <div className="w-full px-6 py-12 border-b border-border/40">
               <div className="px-2 pb-6">
-                <h2 className="text-[18px] font-bold text-foreground">2. T0 裁切区域</h2>
+                <h2 className="text-[18px] font-bold text-foreground">{t("orderDetail.sectionT0")}</h2>
               </div>
               {t0SheetCount > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 items-start">
@@ -867,8 +867,8 @@ export default function OrderDetail() {
             {/* Area 3: Recovery boards used for stretchers */}
             <div className="w-full px-6 py-12 border-b border-border/40">
               <div className="px-2 pb-6">
-                <h2 className="text-[18px] font-bold text-foreground">3. 回收板材裁切拉条区域</h2>
-                <p className="mt-1 text-[13px] text-apple-gray">绿色为未使用回收板，黄色为本区裁出的拉条，灰色为本区就地废料。</p>
+                <h2 className="text-[18px] font-bold text-foreground">{t("orderDetail.sectionRecovery")}</h2>
+                <p className="mt-1 text-[13px] text-apple-gray">{t("orderDetail.sectionRecoveryDesc")}</p>
               </div>
               {recoveryCuttingBoards.length > 0 ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 items-start">
@@ -878,7 +878,7 @@ export default function OrderDetail() {
                 </div>
               ) : (
                 <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
-                  No recovery cutting boards
+                  {t("orderDetail.noRecoveryBoards")}
                 </div>
               )}
             </div>
@@ -886,8 +886,8 @@ export default function OrderDetail() {
             {/* Area 4: Direct waste */}
             <div className="w-full px-6 pt-12">
               <div className="px-2 pb-6">
-                <h2 className="text-[18px] font-bold text-foreground">4. 废料区域</h2>
-                <p className="mt-1 text-[13px] text-apple-gray">只汇总 T1/T0 主裁切阶段产生的废料；第 3 区裁拉条后的废料留在第 3 区。</p>
+                <h2 className="text-[18px] font-bold text-foreground">{t("orderDetail.sectionWaste")}</h2>
+                <p className="mt-1 text-[13px] text-apple-gray">{t("orderDetail.sectionWasteDesc")}</p>
               </div>
               {directWasteGroups.length > 0 ? (
                 <div className="space-y-4">
@@ -899,10 +899,10 @@ export default function OrderDetail() {
                       <table className="w-full text-[13px]">
                         <thead>
                           <tr className="border-b border-slate-200 bg-white text-left text-[11px] uppercase tracking-wide text-slate-500">
-                            <th className="px-4 py-3 font-semibold">Type</th>
-                            <th className="px-4 py-3 font-semibold">Size</th>
-                            <th className="px-4 py-3 text-right font-semibold">Qty</th>
-                            <th className="px-4 py-3 font-semibold">Source examples</th>
+                            <th className="px-4 py-3 font-semibold">{t("orderDetail.colType")}</th>
+                            <th className="px-4 py-3 font-semibold">{t("orderDetail.colSize")}</th>
+                            <th className="px-4 py-3 text-right font-semibold">{t("orderDetail.colQty")}</th>
+                            <th className="px-4 py-3 font-semibold">{t("orderDetail.colSourceExamples")}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -921,7 +921,7 @@ export default function OrderDetail() {
                 </div>
               ) : (
                 <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
-                  No direct waste blocks
+                  {t("orderDetail.noWasteBlocks")}
                 </div>
               )}
             </div>
@@ -929,18 +929,18 @@ export default function OrderDetail() {
             {/* Area 5: Final recovered boards */}
             <div className="w-full px-6 pt-12">
               <div className="px-2 pb-6">
-                <h2 className="text-[18px] font-bold text-foreground">5. 回收板材区域</h2>
-                <p className="mt-1 text-[13px] text-apple-gray">只汇总最终入库的 12&quot; / 24&quot; 回收板材。</p>
+                <h2 className="text-[18px] font-bold text-foreground">{t("orderDetail.sectionRecovered")}</h2>
+                <p className="mt-1 text-[13px] text-apple-gray">{t("orderDetail.sectionRecoveredDesc")}</p>
               </div>
               {recoveredBoardRows.length > 0 ? (
                 <div className="overflow-x-auto rounded-xl border border-emerald-200 bg-white shadow-sm">
                   <table className="w-full text-[13px]">
                     <thead>
                       <tr className="border-b border-emerald-200 bg-emerald-50 text-left text-[11px] uppercase tracking-wide text-emerald-700">
-                        <th className="px-4 py-3 font-semibold">Type</th>
-                        <th className="px-4 py-3 font-semibold">Size</th>
-                        <th className="px-4 py-3 text-right font-semibold">Qty</th>
-                        <th className="px-4 py-3 font-semibold">Source examples</th>
+                        <th className="px-4 py-3 font-semibold">{t("orderDetail.colType")}</th>
+                        <th className="px-4 py-3 font-semibold">{t("orderDetail.colSize")}</th>
+                        <th className="px-4 py-3 text-right font-semibold">{t("orderDetail.colQty")}</th>
+                        <th className="px-4 py-3 font-semibold">{t("orderDetail.colSourceExamples")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -957,7 +957,7 @@ export default function OrderDetail() {
                 </div>
               ) : (
                 <div className="w-full h-32 flex items-center justify-center text-apple-gray/50 text-[14px]">
-                  No 12&quot; / 24&quot; recovered boards
+                  {t("orderDetail.noRecoveredBoards")}
                 </div>
               )}
             </div>

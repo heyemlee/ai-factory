@@ -15,7 +15,7 @@ import { boardCutSource, comparePatternPriority, formatCutNote, indexToNumberStr
 import { openMachineCutPrintWindow } from "./machineCutPlanPrint";
 
 export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang, patternNumbering, cutResult }: { boards: Board[], orderLabel: string, machineLang: MachineLanguage, setMachineLang: (l: MachineLanguage) => void, patternNumbering: { byIndex: Record<number, number>; byFingerprint: Record<string, number>; total: number }, cutResult?: CutResult | null }) {
-  const { locale } = useLanguage();
+  const { locale, t } = useLanguage();
   const { getColor } = useBoxColors();
   const sizeColorMap = useMemo(() => {
     const map: Record<string, typeof SIZE_COLORS[0]> = {};
@@ -758,8 +758,8 @@ export function MachineCutPlan({ boards, orderLabel, machineLang, setMachineLang
         {recoveryCuttingBoards.length > 0 && (
           <div className="bg-white rounded-xl shadow-sm border border-border overflow-hidden">
             <div className="bg-white text-slate-800 p-5 border-b border-border/60">
-              <h3 className="text-xl font-bold">回收板材裁切拉条区域</h3>
-              <p className="mt-1 text-[13px] text-slate-500">绿色为最终回收，橙色为拉条，灰色为本区就地废料。</p>
+              <h3 className="text-xl font-bold">{t("orderDetail.recoverySectionTitle")}</h3>
+              <p className="mt-1 text-[13px] text-slate-500">{t("orderDetail.recoverySectionDesc")}</p>
             </div>
             <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
               {recoveryCuttingBoards.map((board) => (

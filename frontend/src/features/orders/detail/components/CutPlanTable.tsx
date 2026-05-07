@@ -2,7 +2,7 @@
 
 import React, { useMemo, useRef } from "react";
 import { Printer } from "lucide-react";
-import type { Board, CutResult } from "./types";
+import type { Board, CutResult, RecoveryCuttingBoard, WasteBlock } from "./types";
 import { boardFingerprint, getRipWidth, nominalStockWidthForBoard, parseBoardDims } from "./utils";
 import { colorLabel, DEFAULT_BOX_COLOR, useBoxColors } from "@/lib/box_colors";
 import { useLanguage } from "@/lib/i18n";
@@ -27,6 +27,14 @@ const PRINT_FONT_STACK = [
 ].join(", ");
 
 const T0_RAW_LENGTH_MM = 2438.4;
+const SAW_KERF_MM = 3.2;
+
+const WASTE_CATEGORY_DEFS = [
+  { key: "under8", min: 90, max: 8 * 25.4 },
+  { key: "8to12", min: 8 * 25.4, max: 12 * 25.4 },
+  { key: "12to18", min: 12 * 25.4, max: 18 * 25.4 },
+  { key: "18to24", min: 18 * 25.4, max: 24 * 25.4 },
+];
 
 type LocaleKey = "en" | "zh" | "es";
 
@@ -48,7 +56,7 @@ interface CutPlanT0Sheet {
 interface CutPlanPattern {
   sampleBoard: Board;
   boardCount: number;
-  cutRows: { cutLength: number; pieces: number }[];
+  cutRows: { cutLength: number; pieces: number; stackOf?: number }[];
 }
 
 interface CutPlanSection {
@@ -62,10 +70,12 @@ interface CutPlanSection {
 
 interface CutPlanInputRow {
   key: string;
-  rowNo: number;
+  rowNo: number | string;
   value: number;
+  sizeLabel?: string;
   pieces: number;
-  note?: "recover";
+  note?: string;
+  isLeftover?: boolean;
 }
 
 interface CutPlanStep {
@@ -93,6 +103,15 @@ interface WidthGroup {
   width: number;
   pieces: number;
   boards: Board[];
+  note?: string;
+}
+
+interface SummaryRow {
+  key: string;
+  label: string;
+  size?: string;
+  count: number;
+  source?: string;
 }
 
 const copy: Record<LocaleKey, Record<string, string>> = {
@@ -119,8 +138,19 @@ const copy: Record<LocaleKey, Record<string, string>> = {
 	    size: "Size",
 	    pieces: "Pieces",
 	    recover: "RCV",
-	    t0SectionTitle: 'Take 48" x 96"',
-	    t1SectionTitle: 'Take 24" / 12"',
+	    t0SectionTitle: "2. T0 Cutting Area",
+	    t1SectionTitle: "1. T1 Cutting Area",
+	    recoverySectionTitle: "3. Waste Reuse Zone",
+	    wasteSectionTitle: "4. Waste Area",
+	    recoveredSectionTitle: "5. Recovered Board Area",
+	    noteWaste: "Waste",
+	    notePutToArea: "Put in {area}",
+	    wasteAreaSuffix: "Waste Area",
+	    noteHeader: "Note",
+	    leftover: "Leftover",
+	    summaryArea: "Area",
+	    summaryType: "Type",
+	    summaryQty: "Qty",
 	    ripWidth: "Cut Width",
 	    cutWidth: "Cut Width",
 	    widthCut: "W",
@@ -162,8 +192,19 @@ const copy: Record<LocaleKey, Record<string, string>> = {
 	    size: "尺寸",
 	    pieces: "片数",
 	    recover: "RCV",
-	    t0SectionTitle: '拿 48" x 96"',
-	    t1SectionTitle: '拿 24" / 12"',
+	    t0SectionTitle: "2. T0 裁切区域",
+	    t1SectionTitle: "1. T1 裁切区域",
+	    recoverySectionTitle: "3. 废料再利用区",
+	    wasteSectionTitle: "4. 废料区域",
+	    recoveredSectionTitle: "5. 回收板材区域",
+	    noteWaste: "废料",
+	    notePutToArea: "放到 {area}",
+	    wasteAreaSuffix: "废料",
+	    noteHeader: "备注",
+	    leftover: "余料",
+	    summaryArea: "区域",
+	    summaryType: "类型",
+	    summaryQty: "数量",
 	    ripWidth: "裁切宽度",
 	    cutWidth: "裁切宽度",
 	    widthCut: "W",
@@ -205,8 +246,19 @@ const copy: Record<LocaleKey, Record<string, string>> = {
 	    size: "Tamano",
 	    pieces: "Piezas",
 	    recover: "RCV",
-	    t0SectionTitle: 'Tomar 48" x 96"',
-	    t1SectionTitle: 'Tomar 24" / 12"',
+	    t0SectionTitle: "2. Area de Corte T0",
+	    t1SectionTitle: "1. Area de Corte T1",
+	    recoverySectionTitle: "3. Zona de Reutilización de Desperdicio",
+	    wasteSectionTitle: "4. Area de Desperdicio",
+	    recoveredSectionTitle: "5. Area de Tableros Recuperados",
+	    noteWaste: "Desperdicio",
+	    notePutToArea: "Poner en {area}",
+	    wasteAreaSuffix: "Desperdicio",
+	    noteHeader: "Nota",
+	    leftover: "Sobrante",
+	    summaryArea: "Area",
+	    summaryType: "Tipo",
+	    summaryQty: "Cant.",
 	    ripWidth: "Cortar Ancho",
 	    cutWidth: "Cortar Ancho",
 	    widthCut: "W",
@@ -241,6 +293,148 @@ function parseTotalLength(boardSize: string): number {
 
 function numericKey(n: number): string {
   return Number.isFinite(n) ? n.toFixed(3) : "0.000";
+}
+
+function wasteCategoryLabel(key: string, locale: LocaleKey): string {
+  const labels: Record<LocaleKey, Record<string, string>> = {
+    en: {
+      under8: '~8" Area',
+      "8to12": '8"-12" Area',
+      "12to18": '12"-18" Area',
+      "18to24": '18"-24" Area',
+    },
+    zh: {
+      under8: '~8"区',
+      "8to12": '8"-12"区',
+      "12to18": '12"-18"区',
+      "18to24": '18"-24"区',
+    },
+    es: {
+      under8: 'Area ~8"',
+      "8to12": 'Area 8"-12"',
+      "12to18": 'Area 12"-18"',
+      "18to24": 'Area 18"-24"',
+    },
+  };
+  return labels[locale]?.[key] || labels.en[key] || key;
+}
+
+function wasteCategories(locale: LocaleKey) {
+  return WASTE_CATEGORY_DEFS.map((category) => ({
+    ...category,
+    label: wasteCategoryLabel(category.key, locale),
+  }));
+}
+
+function wasteCategoryForWidth(width: number, locale: LocaleKey) {
+  const categories = wasteCategories(locale);
+  return categories.find((category, index) => {
+    const isLast = index === categories.length - 1;
+    return width >= category.min && (isLast ? width <= category.max : width < category.max);
+  });
+}
+
+function wasteText(locale: LocaleKey): string {
+  return copy[locale]?.noteWaste || copy.en.noteWaste;
+}
+
+function residualNote(width: number, locale: LocaleKey, recovered = false): string | undefined {
+  if (width <= 0.5) return undefined;
+  if (recovered) return "RCV";
+  const category = wasteCategoryForWidth(width, locale);
+  if (!category) return undefined;
+  return (copy[locale]?.notePutToArea || copy.en.notePutToArea).replace("{area}", category.label);
+}
+
+function directWasteNote(width: number, locale: LocaleKey): string | undefined {
+  if (width <= 0.5) return undefined;
+  return wasteText(locale);
+}
+
+function leftoverRow(
+  key: string,
+  value: number,
+  pieces: number,
+  note: string | undefined,
+  locale: LocaleKey,
+  sizeLabel?: string
+): CutPlanInputRow[] {
+  if (!note || value <= 0.5) return [];
+  return [{
+    key,
+    rowNo: copy[locale]?.leftover || copy.en.leftover,
+    value,
+    sizeLabel,
+    pieces,
+    note,
+    isLeftover: true,
+  }];
+}
+
+function aggregateLeftoverRows(
+  leftovers: Array<{ key: string; value: number; pieces?: number; note?: string }>,
+  locale: LocaleKey
+): CutPlanInputRow[] {
+  const grouped = new Map<string, { value: number; pieces: number; note: string }>();
+  for (const leftover of leftovers) {
+    if (!leftover.note || leftover.value <= 0.5) continue;
+    const rounded = Math.round(leftover.value * 10) / 10;
+    const key = `${numericKey(rounded)}|||${leftover.note}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.pieces += leftover.pieces || 1;
+    } else {
+      grouped.set(key, { value: rounded, pieces: leftover.pieces || 1, note: leftover.note });
+    }
+  }
+  return Array.from(grouped.values()).map((leftover, index) => ({
+    key: `leftover-${index}-${numericKey(leftover.value)}-${leftover.note}`,
+    rowNo: copy[locale]?.leftover || copy.en.leftover,
+    value: leftover.value,
+    pieces: leftover.pieces,
+    note: leftover.note,
+    isLeftover: true,
+  }));
+}
+
+function lengthWasteNote(width: number, wasteLength: number, locale: LocaleKey): string | undefined {
+  if (wasteLength <= 0.5) return undefined;
+  return residualNote(width, locale);
+}
+
+function stripLengthWasteForPattern(pattern: CutPlanPattern): number {
+  const board = pattern.sampleBoard;
+  const usedLength = (board.parts || []).reduce((sum, part) => sum + (part.cut_length || part.Height || 0), 0);
+  const kerf = Math.max(0, (board.parts?.length || 0) - 1) * (board.saw_kerf || SAW_KERF_MM);
+  return (board.usable_length || parseTotalLength(board.board_size)) - usedLength - kerf;
+}
+
+function sourceWidthWasteNote(board: Board, targetWidth: number, locale: LocaleKey): string | undefined {
+  const sourceWidth = sourceWidthForBoard(board, targetWidth);
+  const wasteWidth = sourceWidth - targetWidth - (board.saw_kerf || SAW_KERF_MM);
+  return residualNote(wasteWidth, locale, !!board.rip_leftover_recovered);
+}
+
+function sourceWidthWasteSize(board: Board, targetWidth: number): number {
+  const sourceWidth = sourceWidthForBoard(board, targetWidth);
+  return sourceWidth - targetWidth - (board.saw_kerf || SAW_KERF_MM);
+}
+
+function sourceTakeLabelWithWidth(board: Board, targetWidth: number): string {
+  const sourceWidth = sourceWidthForBoard(board, targetWidth);
+  const sourceLength = parseTotalLength(board.board_size);
+  return `${fmt(sourceWidth)} x ${fmt(sourceLength)}`;
+}
+
+function recoveryTakeLabel(board: RecoveryCuttingBoard, locale: LocaleKey): string {
+  if (board.source === "waste") {
+    const category = wasteCategoryForWidth(board.width, locale);
+    const suffix = copy[locale]?.wasteAreaSuffix || copy.en.wasteAreaSuffix;
+    return category ? `${category.label} ${suffix}` : suffix;
+  }
+  if (Math.abs(board.width - 608.6) < 0.5) return '24" RCV';
+  if (Math.abs(board.width - 303.8) < 0.5) return '12" RCV';
+  return "RCV";
 }
 
 function t0WidthGroupsForSheet(sheet: CutPlanT0Sheet, boards: Board[]): WidthGroup[] {
@@ -312,12 +506,13 @@ function t0WidthGroupsForSheet(sheet: CutPlanT0Sheet, boards: Board[]): WidthGro
         pieces: 1,
         order: groupMap.size + index,
         boards: [],
+        note: "RCV",
       });
     });
 
   return Array.from(groupMap.values())
     .sort((a, b) => a.order - b.order)
-    .map((group, index) => ({ rowNo: index + 1, width: group.width, pieces: group.pieces, boards: uniqueBoards(group.boards) }));
+    .map((group, index) => ({ rowNo: index + 1, width: group.width, pieces: group.pieces, boards: uniqueBoards(group.boards), note: group.note }));
 }
 
 function isStackEfficiencyResult(cutResult?: CutResult | null) {
@@ -406,19 +601,31 @@ function groupBoardsByTargetWidth(boards: Board[]): WidthGroup[] {
     .map((group, index) => ({ rowNo: index + 1, width: group.width, pieces: group.pieces, boards: uniqueBoards(group.boards) }));
 }
 
-function rowsForCutLengths(pattern: CutPlanPattern, keyPrefix: string): CutPlanInputRow[] {
-  return pattern.cutRows.map((cutRow, index) => ({
+function rowsForCutLengths(pattern: CutPlanPattern, keyPrefix: string, stripWidth: number, locale: LocaleKey): CutPlanInputRow[] {
+  const finalNote = lengthWasteNote(stripWidth, stripLengthWasteForPattern(pattern), locale);
+  const rows = pattern.cutRows.map((cutRow, index) => ({
     key: `${keyPrefix}-${index}`,
     rowNo: index + 1,
     value: cutRow.cutLength,
     pieces: cutRow.pieces,
   }));
+  return [
+    ...rows,
+    ...leftoverRow(
+      `${keyPrefix}-leftover`,
+      stripLengthWasteForPattern(pattern),
+      1,
+      finalNote,
+      locale,
+      `${fmt(stripWidth)} x ${fmt(stripLengthWasteForPattern(pattern))}`
+    ),
+  ];
 }
 
 function stockBlockPriority(block: CutPlanBlock): number {
   const isStacked = block.stackQty > 1;
-  const is24 = block.take === '24"';
-  const is12 = block.take === '12"';
+  const is24 = block.take === '24"' || block.take.startsWith("608.6");
+  const is12 = block.take === '12"' || block.take.startsWith("303.8");
   if (isStacked && is24) return 0;
   if (isStacked && is12) return 1;
   if (!isStacked && is24) return 2;
@@ -436,6 +643,10 @@ function widthCutStackQty(groups: WidthGroup[]): number {
     return sourceGroups.size > 0 ? sourceGroups.size : group.boards.length;
   });
   return Math.max(1, ...counts);
+}
+
+function capStackQty(qty: number): number {
+  return Math.max(1, Math.min(4, qty || 1));
 }
 
 function countStockTakes(boards: Board[]): { twelve: number; twentyFour: number } {
@@ -458,6 +669,185 @@ function countRecoveredParts(cutResult: CutResult | null | undefined, t0Sheets: 
     const stack = sheet.t0_sheet_stack || 1;
     return sum + (sheet.recovered_strips?.length || 0) * stack;
   }, 0);
+}
+
+function rowsForLaneLengths(
+  lane: RecoveryCuttingBoard["lanes"][number],
+  board: RecoveryCuttingBoard,
+  keyPrefix: string,
+  locale: LocaleKey
+): CutPlanInputRow[] {
+  const cutMap = new Map<number, number>();
+  for (const part of lane.parts || []) {
+    const cutLength = part.cut_length || part.Height;
+    cutMap.set(cutLength, (cutMap.get(cutLength) || 0) + 1);
+  }
+  const rows = Array.from(cutMap.entries())
+    .map(([value, pieces], index) => ({
+      key: `${keyPrefix}-${index}`,
+      rowNo: index + 1,
+      value,
+      pieces,
+    }))
+    .sort((a, b) => a.value - b.value);
+  const usedLength = lane.used_length || rows.reduce((sum, row) => sum + row.value * row.pieces, 0);
+  const finalNote = board.length - usedLength > 0.5 ? directWasteNote(lane.width || board.width, locale) : undefined;
+  return [
+    ...rows.map((row, index) => ({ ...row, rowNo: index + 1 })),
+    ...leftoverRow(
+      `${keyPrefix}-leftover`,
+      board.length - usedLength,
+      1,
+      finalNote,
+      locale,
+      `${fmt(lane.width || board.width)} x ${fmt(board.length - usedLength)}`
+    ),
+  ];
+}
+
+function buildRecoveryBlocks(recoveryBoards: RecoveryCuttingBoard[], locale: LocaleKey): CutPlanBlock[] {
+  const grouped = new Map<string, RecoveryCuttingBoard[]>();
+  recoveryBoards
+    .filter((board) => board.status === "used" && board.lanes.length > 0)
+    .forEach((board) => {
+      const key = board.stack_group_id || board.id;
+      const list = grouped.get(key) || [];
+      list.push(board);
+      grouped.set(key, list);
+    });
+
+  return Array.from(grouped.entries()).map(([key, group], blockIdx) => {
+    const sample = group[0];
+    const stackQty = capStackQty(sample.stack_size || group.length || 1);
+    const laneGroups = Array.from(sample.lanes.reduce((map, lane) => {
+      const laneKey = numericKey(lane.width);
+      const existing = map.get(laneKey);
+      if (existing) {
+        existing.pieces += 1;
+      } else {
+        map.set(laneKey, { width: lane.width, pieces: 1 });
+      }
+      return map;
+    }, new Map<string, { width: number; pieces: number }>()).values());
+
+    const steps: CutPlanStep[] = [{
+      key: `${key}-width`,
+      stepNo: 1,
+      take: recoveryTakeLabel(sample, locale),
+      stackQty,
+      stackUnit: "条",
+      cutLabel: "W",
+      inputLabel: "W",
+      rows: laneGroups.flatMap((laneGroup, index) => [
+        {
+          key: `${key}-width-${index}`,
+          rowNo: index + 1,
+          value: laneGroup.width,
+          pieces: laneGroup.pieces,
+        },
+        ...leftoverRow(
+          `${key}-width-${index}-leftover`,
+          index === laneGroups.length - 1 ? sample.inline_waste_width || 0 : 0,
+          1,
+          index === laneGroups.length - 1 ? directWasteNote(sample.inline_waste_width || 0, locale) : undefined,
+          locale
+        ),
+      ]),
+    }];
+
+    sample.lanes.forEach((lane, laneIdx) => {
+      const rows = rowsForLaneLengths(lane, sample, `${key}-lane-${laneIdx}`, locale);
+      if (rows.length === 0) return;
+      steps.push({
+        key: `${key}-length-${laneIdx}`,
+        stepNo: steps.length + 1,
+        take: fmt(lane.width),
+        stackQty,
+        stackUnit: "条",
+        cutLabel: "L",
+        inputLabel: "L",
+        rows,
+      });
+    });
+
+    return {
+      key: `recovery-block-${blockIdx}-${key}`,
+      take: recoveryTakeLabel(sample, locale),
+      stackQty,
+      stackUnit: "条",
+      trim: 0,
+      steps,
+    };
+  });
+}
+
+function directWasteBlocksFromBoards(boards: Board[]): WasteBlock[] {
+  return boards
+    .filter((board) => String(board.source || "").toLowerCase() !== "recovery")
+    .flatMap((board) => {
+      const rows: WasteBlock[] = [];
+      const partsLen = (board.parts || []).reduce((sum, part) => sum + (part.cut_length || part.Height || 0), 0);
+      const kerfLen = Math.max(0, (board.parts?.length || 0) - 1) * (board.saw_kerf || SAW_KERF_MM);
+      const lengthWaste = (board.usable_length || parseTotalLength(board.board_size)) - partsLen - kerfLen;
+      if (lengthWaste > 0.5) {
+        rows.push({
+          id: `${board.board_id}-length`,
+          source_board_id: board.board_id,
+          kind: "length",
+          color: board.color,
+          width: targetWidthForBoard(board),
+          length: lengthWaste,
+        });
+      }
+      const stockWidth = board.t0_sheet_id ? 0 : sourceWidthForBoard(board, targetWidthForBoard(board));
+      const widthWaste = stockWidth > 0 ? stockWidth - targetWidthForBoard(board) - (board.saw_kerf || SAW_KERF_MM) : 0;
+      if (widthWaste > 0.5 && !board.rip_leftover_recovered) {
+        rows.push({
+          id: `${board.board_id}-width`,
+          source_board_id: board.board_id,
+          kind: "width",
+          color: board.color,
+          width: widthWaste,
+          length: T0_RAW_LENGTH_MM,
+        });
+      }
+      return rows;
+    });
+}
+
+function buildWasteSummaryRows(cutResult: CutResult | null | undefined, boards: Board[], locale: LocaleKey): SummaryRow[] {
+  const sourceBlocks = cutResult?.waste_blocks?.length ? cutResult.waste_blocks : directWasteBlocksFromBoards(boards);
+  const categories = wasteCategories(locale);
+  const counts = new Map(categories.map((category) => [category.key, 0]));
+  for (const waste of sourceBlocks) {
+    const category = wasteCategoryForWidth(waste.width, locale);
+    if (!category) continue;
+    counts.set(category.key, (counts.get(category.key) || 0) + 1);
+  }
+  return categories.map((category) => ({
+    key: category.key,
+    label: category.label,
+    count: counts.get(category.key) || 0,
+  }));
+}
+
+function buildRecoveredSummaryRows(cutResult: CutResult | null | undefined): SummaryRow[] {
+  const rows = new Map<string, SummaryRow>();
+  for (const item of cutResult?.recovered_inventory || []) {
+    const width = Math.round((item.width || 0) * 10) / 10;
+    if (Math.abs(width - 303.8) >= 0.5 && Math.abs(width - 608.6) >= 0.5) continue;
+    const length = Math.round((item.length || T0_RAW_LENGTH_MM) * 10) / 10;
+    const label = Math.abs(width - 303.8) < 0.5 ? '12" RCV' : '24" RCV';
+    const size = `${fmt(width)} x ${fmt(length)}`;
+    const key = `${label}-${size}`;
+    const existing = rows.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      rows.set(key, { key, label, size, count: 1 });
+    }
+  }
+  return Array.from(rows.values()).sort((a, b) => a.label.localeCompare(b.label) || (a.size || "").localeCompare(b.size || ""));
 }
 
 function buildCutSections(sectionBoards: Board[], mergeStandardPool = false): CutPlanSection[] {
@@ -548,7 +938,8 @@ export function CutPlanTable({
   const printRef = useRef<HTMLDivElement | null>(null);
   const { locale } = useLanguage();
   const { getColor } = useBoxColors();
-  const lc = copy[(locale as LocaleKey) || "en"] || copy.en;
+  const localeKey: LocaleKey = locale === "zh" || locale === "es" ? locale : "en";
+  const lc = copy[localeKey] || copy.en;
   const mergeStandardPool = isStackEfficiencyResult(cutResult);
   const cabinetCount = useMemo(() => {
     const breakdownCount = Object.keys(cutResult?.cabinet_breakdown || {}).length;
@@ -599,7 +990,7 @@ export function CutPlanTable({
         key: `raw-${sheetIdx}-width`,
         stepNo: 1,
         take: lc.rawSheets,
-        stackQty: sheet.t0_sheet_stack || 1,
+        stackQty: capStackQty(sheet.t0_sheet_stack || 1),
         stackUnit: lc.sheets,
         cutLabel: lc.widthCut,
         inputLabel: lc.cutWidth,
@@ -608,7 +999,7 @@ export function CutPlanTable({
           rowNo: group.rowNo,
           value: group.width,
           pieces: group.pieces,
-          note: group.boards.length === 0 ? "recover" : undefined,
+          note: group.note,
         })),
       }];
 
@@ -628,21 +1019,32 @@ export function CutPlanTable({
           boards: widthGroup.boards,
         }];
 
-        if (needsSecondWidthCut) {
+          if (needsSecondWidthCut) {
           steps.push({
             key: `raw-${sheetIdx}-width-${widthGroup.rowNo}-second-width`,
             stepNo: stepNo++,
             take: `width-${fmt(widthGroup.width)}`,
-            stackQty: widthCutStackQty(targetGroups),
+            stackQty: capStackQty(widthCutStackQty(targetGroups)),
             stackUnit: lc.strips,
             cutLabel: lc.widthCut,
             inputLabel: lc.cutWidth,
-            rows: targetGroups.map((targetGroup) => ({
-              key: `raw-${sheetIdx}-width-${widthGroup.rowNo}-target-${targetGroup.rowNo}`,
-              rowNo: targetGroup.rowNo,
-              value: targetGroup.width,
-              pieces: targetGroup.pieces,
-            })),
+            rows: [
+              ...targetGroups.map((targetGroup) => ({
+                key: `raw-${sheetIdx}-width-${widthGroup.rowNo}-target-${targetGroup.rowNo}`,
+                rowNo: targetGroup.rowNo,
+                value: targetGroup.width,
+                pieces: targetGroup.pieces,
+              })),
+              ...aggregateLeftoverRows(targetGroups.map((targetGroup) => {
+                const wasteWidth = widthGroup.width - targetGroup.width - SAW_KERF_MM;
+                return {
+                  key: `raw-${sheetIdx}-width-${widthGroup.rowNo}-target-${targetGroup.rowNo}-leftover`,
+                  value: wasteWidth,
+                  pieces: 1,
+                  note: residualNote(wasteWidth, localeKey),
+                };
+              }), localeKey),
+            ],
           });
         }
 
@@ -653,11 +1055,11 @@ export function CutPlanTable({
                 key: `raw-${sheetIdx}-length-${widthGroup.rowNo}-${targetGroup.rowNo}-${sectionIdx}-${patternIdx}`,
                 stepNo: stepNo++,
                 take: `width-${fmt(targetGroup.width)}`,
-                stackQty: pattern.boardCount,
+                stackQty: capStackQty(pattern.boardCount),
                 stackUnit: lc.strips,
                 cutLabel: lc.lengthCut,
                 inputLabel: lc.cutLength,
-                rows: rowsForCutLengths(pattern, `raw-${sheetIdx}-length-${widthGroup.rowNo}-${targetGroup.rowNo}-${sectionIdx}-${patternIdx}`),
+                rows: rowsForCutLengths(pattern, `raw-${sheetIdx}-length-${widthGroup.rowNo}-${targetGroup.rowNo}-${sectionIdx}-${patternIdx}`, targetGroup.width, localeKey),
               });
             });
           });
@@ -668,7 +1070,7 @@ export function CutPlanTable({
       rawBlocks.push({
         key: `raw-${sheet.sheet_id}-${sheetIdx}`,
         take: lc.rawSheets,
-        stackQty: sheet.t0_sheet_stack || 1,
+        stackQty: capStackQty(sheet.t0_sheet_stack || 1),
         stackUnit: lc.sheets,
         trim: sheetTrim,
         steps,
@@ -691,11 +1093,11 @@ export function CutPlanTable({
     buildCutSections(stockBoards, mergeStandardPool).forEach((section, sectionIdx) => {
       section.patterns.forEach((pattern, patternIdx) => {
         const targetWidth = section.boardWidth;
-        const take = sourceTakeLabel(pattern.sampleBoard, targetWidth);
+        const take = sourceTakeLabelWithWidth(pattern.sampleBoard, targetWidth);
         stockItems.push({
           key: `stock-${sectionIdx}-${patternIdx}`,
           take,
-          stackQty: pattern.boardCount,
+          stackQty: capStackQty(pattern.boardCount),
           trim: section.trimSetting,
           targetWidth,
           needsWidthRip: boardNeedsWidthRip(pattern.sampleBoard, targetWidth) || !!pattern.sampleBoard.stretcher_phase,
@@ -708,7 +1110,8 @@ export function CutPlanTable({
 
     const stockMap = new Map<string, typeof stockItems>();
     stockItems.forEach((item) => {
-      const key = `${item.take}|||${item.stackQty}|||${numericKey(item.trim)}|||${item.needsWidthRip ? "width" : "length"}`;
+      const widthKey = item.needsWidthRip ? numericKey(item.targetWidth) : "no-width-rip";
+      const key = `${item.take}|||${item.stackQty}|||${numericKey(item.trim)}|||${item.needsWidthRip ? "width" : "length"}|||${widthKey}`;
       const items = stockMap.get(key) || [];
       items.push(item);
       stockMap.set(key, items);
@@ -724,16 +1127,24 @@ export function CutPlanTable({
           key: `${key}-width`,
           stepNo: stepNo++,
           take: first.take,
-          stackQty: first.stackQty,
+          stackQty: capStackQty(first.stackQty),
           stackUnit: lc.strips,
           cutLabel: lc.widthCut,
           inputLabel: lc.cutWidth,
-          rows: items.map((item, index) => ({
-            key: `${item.key}-width`,
-            rowNo: index + 1,
-            value: item.targetWidth,
-            pieces: widthPiecesForBoards([item.pattern.sampleBoard]),
-          })),
+          rows: [
+            {
+              key: `${key}-width`,
+              rowNo: 1,
+              value: first.targetWidth,
+              pieces: Math.max(...items.map((item) => widthPiecesForBoards([item.pattern.sampleBoard]))),
+            },
+            ...aggregateLeftoverRows([{
+              key: `${key}-width-leftover`,
+              value: sourceWidthWasteSize(first.pattern.sampleBoard, first.targetWidth),
+              pieces: 1,
+              note: sourceWidthWasteNote(first.pattern.sampleBoard, first.targetWidth, localeKey),
+            }], localeKey),
+          ],
         });
       }
 
@@ -742,18 +1153,18 @@ export function CutPlanTable({
           key: `${item.key}-length`,
           stepNo: stepNo++,
           take: first.needsWidthRip ? `width-${fmt(item.targetWidth)}` : first.take,
-          stackQty: item.stackQty,
+          stackQty: capStackQty(item.stackQty),
           stackUnit: lc.strips,
           cutLabel: lc.lengthCut,
           inputLabel: lc.cutLength,
-          rows: rowsForCutLengths(item.pattern, `${item.key}-${item.sectionIdx}-${item.patternIdx}`),
+          rows: rowsForCutLengths(item.pattern, `${item.key}-${item.sectionIdx}-${item.patternIdx}`, item.targetWidth, localeKey),
         });
       });
 
       stockBlocks.push({
         key: `stock-block-${blockIdx}-${key}`,
         take: first.take,
-        stackQty: first.stackQty,
+        stackQty: capStackQty(first.stackQty),
         stackUnit: lc.strips,
         trim: first.trim,
         steps,
@@ -778,7 +1189,20 @@ export function CutPlanTable({
     });
 
     return { rawBlocks, stockBlocks };
-  }, [boards, cutResult?.summary?.config_trim_loss_mm, lc.cutLength, lc.cutWidth, lc.lengthCut, lc.rawSheets, lc.sheets, lc.strips, lc.widthCut, mergeStandardPool, t0Sheets]);
+	  }, [boards, cutResult?.summary?.config_trim_loss_mm, lc.cutLength, lc.cutWidth, lc.lengthCut, lc.rawSheets, lc.sheets, lc.strips, lc.widthCut, localeKey, mergeStandardPool, t0Sheets]);
+
+  const recoveryBlocks = useMemo(
+    () => buildRecoveryBlocks(cutResult?.recovery_cutting_boards || [], localeKey),
+    [cutResult?.recovery_cutting_boards, localeKey]
+  );
+  const wasteSummaryRows = useMemo(
+    () => buildWasteSummaryRows(cutResult, boards, localeKey),
+    [boards, cutResult, localeKey]
+  );
+  const recoveredSummaryRows = useMemo(
+    () => buildRecoveredSummaryRows(cutResult),
+    [cutResult]
+  );
 
   const selectedColor = boards[0]?.color || DEFAULT_BOX_COLOR;
 
@@ -936,9 +1360,9 @@ export function CutPlanTable({
             <th className="text-center py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.step}</th>
             <th className="text-center py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.row}</th>
             <th className="text-center py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.cut}</th>
-            <th className="text-right py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.size} (mm)</th>
-            <th className="text-center py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.pieces}</th>
-            <th className="text-left py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">Note</th>
+	            <th className="text-right py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.size} (mm)</th>
+	            <th className="text-center py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.pieces}</th>
+	            <th className="text-left py-2 px-1.5 font-semibold text-apple-gray whitespace-nowrap">{lc.noteHeader}</th>
           </tr>
 	        </thead>
 	        <tbody>
@@ -964,14 +1388,16 @@ export function CutPlanTable({
 	                      </>
 	                    )}
 	                    <td className="py-2 px-1.5 text-center text-apple-gray">{row.rowNo}</td>
-	                    {rowIdx === 0 && (
-	                      <td rowSpan={step.rows.length} className={`py-2 px-1.5 align-top text-center border-r border-border/20 ${step.cutLabel === lc.widthCut ? "font-bold" : "font-normal"}`}>{step.cutLabel}</td>
-	                    )}
-	                    <td className="py-2 px-1.5 text-right font-mono">{fmt(row.value)}</td>
+	                    <td className={`py-2 px-1.5 align-top text-center border-r border-border/20 ${rowIdx === 0 && step.cutLabel === lc.widthCut ? "font-bold" : "font-normal"}`}>
+	                      {rowIdx === 0 && !row.isLeftover ? step.cutLabel : ""}
+	                    </td>
+	                    <td className={`py-2 px-1.5 text-right font-mono ${row.isLeftover ? "text-slate-500" : ""}`}>{row.sizeLabel || fmt(row.value)}</td>
 	                    <td className="py-2 px-1.5 text-center">{row.pieces}</td>
 	                    <td className="py-2 px-1.5 text-left">
-	                      {row.note === "recover" && (
-	                        <span className="font-bold text-apple-green">{lc.recover}</span>
+	                      {row.note && (
+	                        <span className={`font-semibold ${row.note === "RCV" ? "text-apple-green" : row.note === wasteText(localeKey) ? "text-slate-700" : "text-amber-700"}`}>
+	                          {row.note === "RCV" ? lc.recover : row.note}
+	                        </span>
 	                      )}
 	                    </td>
 	                  </tr>
@@ -980,6 +1406,35 @@ export function CutPlanTable({
 	            </React.Fragment>
 	          ))}
 	        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderSummaryRows = (rows: SummaryRow[], columns: "waste" | "recovered") => (
+    <div className="overflow-x-auto">
+      <table className="w-full table-auto text-[12px]">
+        <thead>
+          <tr className="bg-black/[0.03] border-b border-border/40">
+            <th className="text-left py-2 px-3 font-semibold text-apple-gray whitespace-nowrap">
+              {columns === "waste" ? lc.summaryArea : lc.summaryType}
+            </th>
+            {columns === "recovered" && (
+              <th className="text-left py-2 px-3 font-semibold text-apple-gray whitespace-nowrap">{lc.size} (mm)</th>
+            )}
+            <th className="text-right py-2 px-3 font-semibold text-apple-gray whitespace-nowrap">{lc.summaryQty}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key} className="border-b border-border/20 last:border-0">
+              <td className="py-2 px-3 font-medium text-slate-800">{row.label}</td>
+              {columns === "recovered" && (
+                <td className="py-2 px-3 font-mono text-slate-700">{row.size || "-"}</td>
+              )}
+              <td className="py-2 px-3 text-right font-mono font-semibold text-slate-900">{row.count}</td>
+            </tr>
+          ))}
+        </tbody>
       </table>
     </div>
   );
@@ -1038,6 +1493,15 @@ export function CutPlanTable({
       </div>
 
       <div className="divide-y divide-border/40">
+        {planBlocks.stockBlocks.length > 0 && (
+          <section className="cut-plan-section">
+            <div className="px-4 py-3 bg-blue-50/50 border-b border-blue-100">
+              <h3 className="text-[16px] font-bold text-slate-900">{lc.t1SectionTitle}</h3>
+            </div>
+            {renderBlocks(planBlocks.stockBlocks)}
+          </section>
+        )}
+
         {planBlocks.rawBlocks.length > 0 && (
           <section className="cut-plan-section cut-plan-section-t0">
             <div className="px-4 py-3 bg-blue-50/50 border-b border-blue-100">
@@ -1047,12 +1511,28 @@ export function CutPlanTable({
           </section>
         )}
 
-        {planBlocks.stockBlocks.length > 0 && (
+        {recoveryBlocks.length > 0 && (
           <section className="cut-plan-section">
             <div className="px-4 py-3 bg-blue-50/50 border-b border-blue-100">
-              <h3 className="text-[16px] font-bold text-slate-900">{lc.t1SectionTitle}</h3>
+              <h3 className="text-[16px] font-bold text-slate-900">{lc.recoverySectionTitle}</h3>
             </div>
-            {renderBlocks(planBlocks.stockBlocks)}
+            {renderBlocks(recoveryBlocks)}
+          </section>
+        )}
+
+        <section className="cut-plan-section">
+          <div className="px-4 py-3 bg-blue-50/50 border-b border-blue-100">
+            <h3 className="text-[16px] font-bold text-slate-900">{lc.wasteSectionTitle}</h3>
+          </div>
+          {renderSummaryRows(wasteSummaryRows, "waste")}
+        </section>
+
+        {recoveredSummaryRows.length > 0 && (
+          <section className="cut-plan-section">
+            <div className="px-4 py-3 bg-blue-50/50 border-b border-blue-100">
+              <h3 className="text-[16px] font-bold text-slate-900">{lc.recoveredSectionTitle}</h3>
+            </div>
+            {renderSummaryRows(recoveredSummaryRows, "recovered")}
           </section>
         )}
       </div>
